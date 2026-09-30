@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.13"
+VERSION = "0.9.14"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -78,7 +78,7 @@ QMenu::right-arrow{width:8px;height:8px;margin-right:8px;}
 
 _COMPOSITOR = {'checked': 0.0, 'value': True}
 
-def compositor_running():
+def compositor_running(force=False):
     """True when a compositing manager runs (needed for translucent windows).
 
     Without one, X11 paints the transparent corners of rounded windows black.
@@ -86,7 +86,7 @@ def compositor_running():
     30 seconds. Wayland always composites.
     """
     now=time.monotonic()
-    if _COMPOSITOR['checked'] and now - _COMPOSITOR['checked'] < 30:
+    if not force and _COMPOSITOR['checked'] and now - _COMPOSITOR['checked'] < 30:
         return _COMPOSITOR['value']
     value=True
     if session_type() != 'wayland' and os.environ.get('DISPLAY'):
@@ -107,6 +107,83 @@ def compositor_running():
             value=True
     _COMPOSITOR['checked']=now; _COMPOSITOR['value']=value
     return value
+
+def ensure_compositor():
+    """Start picom when no compositor runs (e.g. Openbox) in an Eduka session.
+
+    Transparent Eduka windows need a compositor; without one X11 paints their
+    transparent parts black. xfwm4 and KWin composite themselves, so picom is
+    only started when nothing composites. xrender backend, no shadows, no
+    fading: light and stable, also in VirtualBox.
+    """
+    if not in_eduka_session() or session_type() == 'wayland':
+        return False
+    if compositor_running(force=True) or shutil.which('picom') is None:
+        return False
+    return safe_popen(['picom','-b','--backend','xrender','--config','/dev/null'])
+
+def wait_for_compositor(timeout=2.5):
+    """Before creating windows: start picom if needed and give the
+    compositor (picom, or xfwm4/KWin still starting) a moment to appear, so
+    the first window is already created transparent."""
+    if session_type() == 'wayland' or not os.environ.get('DISPLAY'):
+        return True
+    if compositor_running(force=True):
+        return True
+    ensure_compositor()
+    deadline=time.monotonic()+timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        if compositor_running(force=True):
+            return True
+    return False
+
+def watch_compositor(parent, before_restart=None, interval=4000, initial=None):
+    """Restart this Eduka program when a compositor starts or stops.
+
+    Whether a window may be transparent is fixed when it is created, so the
+    cleanest switch between the transparent and the opaque look is a fresh
+    start of the program (same PID, a fraction of a second).
+    """
+    from PyQt5.QtCore import QTimer
+    # `initial` must be the value the window was created with; reading it
+    # again here could already see a compositor that started meanwhile.
+    state={'value': compositor_running(force=True) if initial is None else bool(initial)}
+    def check():
+        now=compositor_running(force=True)
+        if now == state['value']:
+            return
+        if before_restart:
+            try: before_restart()
+            except Exception: pass
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception:
+            state['value']=now
+    timer=QTimer(parent); timer.timeout.connect(check); timer.start(interval)
+    return timer
+
+def effective_theme(value):
+    """Liquid Glass only when a compositor can show it; otherwise the
+    default theme, so the desktop never turns black."""
+    theme=normalize_theme_style(value)
+    if theme == THEME_LIQUID and not compositor_running():
+        return THEME_DEFAULT
+    return theme
+
+def liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
+    """Liquid Glass surface: clear glass with a bright specular band at the
+    top, a soft base and a light rim (after the Liquid Glass look of
+    github.com/ryohsuke1231/liquid-glass, rendered with Qt stylesheets)."""
+    k=max(0.4, min(1.6, float(alpha_scale)))
+    a=lambda v: max(0, min(255, int(v*k)))
+    return (f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,'
+            f'stop:0 rgba(255,255,255,{a(175)}),stop:0.07 rgba(255,255,255,{a(120)}),'
+            f'stop:0.45 rgba(240,248,252,{a(92)}),stop:1 rgba(226,240,246,{a(122)}));'
+            f'border:{rim}px solid rgba(255,255,255,{a(200)});border-bottom:{rim}px solid rgba(255,255,255,{a(110)});'
+            f'border-radius:{radius}px;')
+
+TOOLTIP_QSS = 'QToolTip{background:#10231e;color:#ffffff;border:0;padding:5px 8px;border-radius:6px;}'
 
 def round_menu(menu):
     """Give any QMenu (also Qt's built-in ones) smooth rounded corners.

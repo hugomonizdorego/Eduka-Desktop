@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+# Give the other login sessions (LXQt, Openbox, labwc, ...) back when
+# Eduka-Desktop is removed.
+if [ "$1" = remove ] || [ "$1" = purge ] || [ "$1" = abort-install ]; then
+    for entry in \
+        /usr/share/xsessions/lxqt.desktop \
+        /usr/share/xsessions/openbox.desktop \
+        /usr/share/xsessions/openbox-kde.desktop \
+        /usr/share/wayland-sessions/labwc.desktop \
+        /usr/share/wayland-sessions/lxqt-wayland.desktop; do
+        if [ "$(dpkg-divert --listpackage "$entry" 2>/dev/null || true)" = "edukasaun-desktop-menu" ]; then
+            dpkg-divert --package edukasaun-desktop-menu --remove --rename "$entry" >/dev/null 2>&1 || true
+        fi
+    done
+    rmdir --ignore-fail-on-non-empty /usr/share/edukasaun-desktop/hidden-sessions/xsessions \
+        /usr/share/edukasaun-desktop/hidden-sessions/wayland-sessions \
+        /usr/share/edukasaun-desktop/hidden-sessions 2>/dev/null || true
+fi
+exit 0

@@ -11,6 +11,59 @@ done
 for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do
     [ -e "$d" ] && rm -rf "$d" || true
 done
+# --- Login screen: only Eduka-Desktop -----------------------------------
+# Hide the other session entries (LXQt, Openbox, labwc, ...) from SDDM,
+# LightDM and other greeters with dpkg-divert: the files are moved, not
+# deleted, the programs stay installed (openbox/xfwm4 still run as the window
+# manager inside Eduka-Desktop), and removing this package restores them.
+hidden_dir=/usr/share/edukasaun-desktop/hidden-sessions
+for entry in \
+    /usr/share/xsessions/lxqt.desktop \
+    /usr/share/xsessions/openbox.desktop \
+    /usr/share/xsessions/openbox-kde.desktop \
+    /usr/share/wayland-sessions/labwc.desktop \
+    /usr/share/wayland-sessions/lxqt-wayland.desktop; do
+    kind=$(basename "$(dirname "$entry")")
+    target="$hidden_dir/$kind/$(basename "$entry")"
+    owner=$(dpkg-divert --listpackage "$entry" 2>/dev/null || true)
+    if [ "$owner" = "edukasaun-desktop-menu" ]; then
+        continue
+    fi
+    if [ -z "$owner" ]; then
+        mkdir -p "$hidden_dir/$kind"
+        dpkg-divert --package edukasaun-desktop-menu --add --rename --divert "$target" "$entry" >/dev/null 2>&1 || true
+    fi
+done
+# The Eduka-Desktop Wayland preview entry of 0.9.12/0.9.13 is no longer shipped.
+rm -f /usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop 2>/dev/null || true
+
+# SDDM autologin pointing to a now hidden session would fail: use Eduka-Desktop.
+for conf in /etc/sddm.conf /etc/sddm.conf.d/*.conf; do
+    [ -f "$conf" ] || continue
+    if grep -Eq '^[[:space:]]*Session=(lxqt|openbox|openbox-kde|labwc|lxqt-wayland)(\.desktop)?[[:space:]]*$' "$conf"; then
+        sed -i -E 's/^[[:space:]]*Session=(lxqt|openbox|openbox-kde|labwc|lxqt-wayland)(\.desktop)?[[:space:]]*$/Session=edukasaun-desktop.desktop/' "$conf"
+    fi
+done
+
+# --- LXQt: never ask for a window manager ---------------------------------
+# Fill a missing window_manager in /etc/skel (new and live users) and in
+# existing accounts. A window manager someone already chose is kept.
+if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+    . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+    eduka_ensure_window_manager /etc/skel/.config || true
+    for home in /home/*; do
+        [ -d "$home" ] || continue
+        user=$(stat -c %U "$home" 2>/dev/null || echo "")
+        [ -n "$user" ] && [ "$user" != "UNKNOWN" ] && [ "$user" != "root" ] || continue
+        had_dir=no; [ -d "$home/.config/lxqt" ] && had_dir=yes
+        eduka_ensure_window_manager "$home/.config" || true
+        if [ -f "$home/.config/lxqt/session.conf" ]; then
+            chown "$user": "$home/.config/lxqt/session.conf" 2>/dev/null || true
+            [ "$had_dir" = yes ] || chown "$user": "$home/.config" "$home/.config/lxqt" 2>/dev/null || true
+        fi
+    done
+fi
+
 # SDDM has no "default session" option; it preselects the session stored in
 # its state file. Preselect Eduka-Desktop (X11) when nothing is stored, when
 # the stored session was removed, or when it is the plain LXQt session.

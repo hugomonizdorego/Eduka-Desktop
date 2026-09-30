@@ -343,7 +343,11 @@ class EdukaMenu(QWidget):
         self.setWindowTitle('Edukasaun Desktop')
         self.setProperty('eduka_internal_role', 'Eduka-Desktop-Startmenu')
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        # Transparent only with a compositor; without one X11 paints the
+        # transparent frame black (the dark border around Eduka-Desktop).
+        self._composited = compositor_running(force=True)
+        if self._composited:
+            self.setAttribute(Qt.WA_TranslucentBackground)
         self.panel_cfg = read_panel_config()
         self.desktop_cfg = read_desktop_config()
         self.current_category = self.desktop_cfg.get('last_category','Edukasaun') or 'Edukasaun'
@@ -358,6 +362,8 @@ class EdukaMenu(QWidget):
             MENU_DAEMON_PID.write_text(str(os.getpid()))
             registry_update('menu', {'daemon_pid': os.getpid(), 'resident': True, 'apps_in_ram': len(self.apps), 'version': VERSION})
             self.cmd_timer = QTimer(self); self.cmd_timer.timeout.connect(self.check_command); self.cmd_timer.start(35)
+            self._compositor_watch = watch_compositor(self, initial=self._composited)
+            QTimer.singleShot(0, ensure_compositor)
         else:
             (RUNTIME_DIR/'menu.pid').write_text(str(os.getpid()))
             registry_update('menu', {'resident': False, 'pid': os.getpid(), 'version': VERSION})
@@ -370,7 +376,7 @@ class EdukaMenu(QWidget):
         return [(name, icon, needles) for name, icon, needles in CATEGORY_ORDER if name != 'Favorites']
 
     def build(self):
-        root=QVBoxLayout(self); root.setContentsMargins(8,8,8,8)
+        root=QVBoxLayout(self); m=8 if getattr(self, '_composited', True) else 0; root.setContentsMargins(m,m,m,m)
         self.bg=QFrame(); self.bg.setObjectName('menuBg'); root.addWidget(self.bg)
         self.apply_visual_settings(initial=True)
         main=QVBoxLayout(self.bg); main.setContentsMargins(18,14,18,14); main.setSpacing(12)
@@ -434,17 +440,18 @@ class EdukaMenu(QWidget):
     def apply_visual_settings(self, initial=False):
         dcfg = getattr(self, 'desktop_cfg', read_desktop_config())
         accessibility=bool(dcfg.get('visual_accessibility', False))
-        liquid=normalize_theme_style(dcfg.get('theme_style')) == THEME_LIQUID
+        composited=getattr(self, '_composited', True)
+        liquid=effective_theme(dcfg.get('theme_style')) == THEME_LIQUID and composited
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
-        if accessibility:
-            alpha=0.98
+        if accessibility or not composited:
+            alpha=1.0 if not composited else 0.98
         bg_alpha = int(alpha * 255)
+        radius = 22 if composited else 0
         if liquid and not accessibility:
-            glass_alpha=max(150, bg_alpha)
-            self.bg.setStyleSheet(f'''QFrame#menuBg{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{min(242,glass_alpha+46)}),stop:0.22 rgba(221,250,247,{glass_alpha}),stop:0.54 rgba(235,226,255,{max(130,glass_alpha-20)}),stop:0.78 rgba(205,241,255,{glass_alpha}),stop:1 rgba(255,255,255,{min(235,glass_alpha+32)}));border:2px solid rgba(255,255,255,225);border-bottom:2px solid rgba(111,151,180,150);border-radius:28px;}} QLabel{{color:#152b31;}}''')
+            self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
         else:
-            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,253,250,{bg_alpha});border:1px solid rgba(220,235,230,230);border-radius:22px;}} QLabel{{color:#1f2d2a;}}')
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,253,250,{bg_alpha});border:1px solid rgba(220,235,230,230);border-radius:{radius}px;}} QLabel{{color:#1f2d2a;}}')
         if hasattr(self, 'cats'):
             self.cats.setProperty('accessibilityMode', accessibility)
             self.cats.viewport().update()
@@ -455,18 +462,21 @@ class EdukaMenu(QWidget):
                 QLineEdit,QPushButton{background:white;color:#101817;border:2px solid #344d47;font-size:13px;}
                 QLabel#sectionTitle{color:#101817;font-size:16px;font-weight:900;}
             """ if accessibility else ''
-            liquid_qss = """
-                QFrame#contentCard{background:rgba(255,255,255,44);border:1px solid rgba(255,255,255,170);border-radius:22px;}
-                QFrame#sideCard{background:rgba(255,255,255,118);border:1px solid rgba(255,255,255,205);border-radius:22px;}
-                QListWidget#categoryList{background:rgba(248,252,255,150);border:1px solid rgba(255,255,255,220);border-radius:20px;}
-                QLineEdit{background:rgba(255,255,255,205);border:1px solid rgba(255,255,255,235);}
-                QPushButton{background:rgba(255,255,255,155);border:1px solid rgba(255,255,255,205);}
-            """ if liquid and not accessibility else ''
+            liquid_qss = (
+                'QFrame#contentCard{background:rgba(255,255,255,30);border:1px solid rgba(255,255,255,150);border-radius:22px;}'
+                'QFrame#sideCard{'+liquid_glass_surface(1.0, 22, 1)+'}'
+                'QListWidget#categoryList{'+liquid_glass_surface(1.1, 20, 1)+'}'
+                'QLineEdit{background:rgba(255,255,255,215);border:1px solid rgba(255,255,255,240);}'
+                'QPushButton{'+liquid_glass_surface(1.3, 12, 1)+'}'
+                'QPushButton:hover{background:rgba(255,255,255,230);}'
+            ) if liquid and not accessibility else ''
             self.setStyleSheet(self.base_qss + liquid_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
-        if (liquid and not accessibility) or (dcfg.get('enable_shadows', False) and not dcfg.get('low_resource_mode', True)):
+        # The drop shadow re-renders the whole window on every repaint; only
+        # when the user asked for shadows and a compositor can show them.
+        if composited and dcfg.get('enable_shadows', False) and not dcfg.get('low_resource_mode', True):
             if self.bg.graphicsEffect() is None:
-                sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(34 if liquid else 18); sh.setOffset(0,8 if liquid else 6); sh.setColor(QColor(37,61,83,65 if liquid else 40)); self.bg.setGraphicsEffect(sh)
+                sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(18); sh.setOffset(0,6); sh.setColor(QColor(37,61,83,40)); self.bg.setGraphicsEffect(sh)
         else:
             self.bg.setGraphicsEffect(None)
 
@@ -861,7 +871,8 @@ def start_daemon(start_visible=False):
     except OSError:
         send_menu_command('show' if start_visible else 'toggle')
         return 0
-    app=QApplication(sys.argv); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
+    if in_eduka_session(): wait_for_compositor()
+    app=QApplication(sys.argv); app.setStyleSheet(TOOLTIP_QSS); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
     ret=app.exec_()
     try: fcntl.flock(lock_file, fcntl.LOCK_UN)
     except Exception: pass

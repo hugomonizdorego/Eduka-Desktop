@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.13_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.14_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.13_all.deb
+   rm ./edukasaun-desktop-menu_0.9.14_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -40,29 +40,38 @@ command; the old version is replaced and user settings are kept.
 
 ## Login sessions
 
-| Name in SDDM / LightDM | File | Starts |
-|---|---|---|
-| Eduka-Desktop | `/usr/share/xsessions/edukasaun-desktop.desktop` | `eduka-desktop-session` → `startlxqt` (X11) |
-| Eduka-Desktop Wayland | `/usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop` | `eduka-desktop-session --wayland` → `startlxqtwayland` |
+Only **Eduka-Desktop** (`/usr/share/xsessions/edukasaun-desktop.desktop`,
+started by `eduka-desktop-session` → `startlxqt`) is listed by SDDM, LightDM
+and other greeters.
 
-- **SDDM** preselects the session stored in `/var/lib/sddm/state.conf`. The
-  package sets it to Eduka-Desktop when nothing is stored, the stored session
-  was removed, or it is the plain LXQt session.
-- **LightDM** uses `/usr/share/lightdm/lightdm.conf.d/60-edukasaun-desktop.conf`
-  (`user-session=edukasaun-desktop`); `/etc/lightdm/lightdm.conf` still wins.
+- The LXQt, Openbox and labwc session entries are hidden with `dpkg-divert`
+  into `/usr/share/edukasaun-desktop/hidden-sessions/`. The programs stay
+  installed (xfwm4 or Openbox still runs as the window manager). Removing the
+  package restores the entries. To show one again by hand:
+  `dpkg-divert --package edukasaun-desktop-menu --remove --rename /usr/share/xsessions/lxqt.desktop`
+- **SDDM** preselects the session in `/var/lib/sddm/state.conf`; the package
+  points it (and an autologin `Session=` for a hidden session) to Eduka-Desktop.
+- **LightDM** uses `/usr/share/lightdm/lightdm.conf.d/60-edukasaun-desktop.conf`.
 - `eduka-desktop-session` must **never** export `XDG_CONFIG_DIRS`: `startlxqt`
   only adds LXQt's default configuration when that variable is unset.
-- The Wayland entry appears only when `lxqt-wayland-session` is installed
-  (Suggests). Eduka components run through XWayland there.
-- Eduka-Panel stops lxqt-panel through lxqt-session only in Eduka-Desktop
-  sessions (`EDUKA_DESKTOP_SESSION`).
+
+## Window manager and transparency
+
+- LXQt asks for a window manager when `window_manager` is empty. The package
+  fills it in `/etc/skel/.config/lxqt/session.conf` and existing accounts
+  (preferring xfwm4, then KWin, then Openbox); the session launcher does the
+  same at login. A chosen window manager is never changed.
+- Transparency needs a compositor. xfwm4 and KWin have one built in; with
+  Openbox, Eduka-Panel starts `picom` (xrender, no shadows). Without any
+  compositor Eduka uses an opaque look instead of black areas, and Liquid
+  Glass falls back to Eduka-Default-Theme.
 
 ## Repairing an account used with 0.9.12
 
 0.9.12 started LXQt without its defaults. If an account still asks for a
 window manager or looks unthemed, run **Eduka-Menu Settings → Maintenance →
 Repair LXQt theme and session** (or `eduka-lxqt-repair`) and log in again.
-Accounts created after installing 0.9.13 are not affected.
+Accounts created after installing 0.9.14 are not affected.
 
 ## Release checklist
 

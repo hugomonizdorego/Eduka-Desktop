@@ -18,9 +18,9 @@ def popup_qss():
     else:
         t=max(0.50, min(1.0, float(cfg.get('transparency', 0.54))))
         a=int(255*max(0.80, min(0.97, t+0.36))); c=min(255, a+14)
-        if normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID:
-            box=(f'background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{a}),stop:0.45 rgba(226,248,246,{a}),'
-                 f'stop:1 rgba(232,226,255,{a}));border:2px solid rgba(255,255,255,225);')
+        if effective_theme(cfg.get('theme_style')) == THEME_LIQUID:
+            # Popups need more opacity than the panel to stay readable.
+            box=liquid_glass_surface(1.55, 18, 1).replace('border-radius:18px;','')
         else:
             box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(236,248,242,{a}));'
                  'border:1px solid rgba(255,255,255,220);')
@@ -587,7 +587,12 @@ class SoundPopup(PopupFrame):
 class EdukaPanel(QWidget):
     def __init__(self):
         super().__init__(); ensure_dirs(); icon_theme_setup(); self.setWindowTitle('Eduka-Panel')
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint); self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint); self.setAttribute(Qt.WA_ShowWithoutActivating)
+        # Transparent only with a compositor; otherwise X11 paints the
+        # transparent parts black. watch_compositor() restarts the panel when
+        # a compositor starts or stops.
+        self._composited=compositor_running(force=True)
+        if self._composited: self.setAttribute(Qt.WA_TranslucentBackground)
         try: self.setAttribute(Qt.WA_X11DoNotAcceptFocus, True)
         except (AttributeError, TypeError): pass
         self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
@@ -600,6 +605,9 @@ class EdukaPanel(QWidget):
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
         self.workarea_timer=QTimer(self); self.workarea_timer.timeout.connect(self.enforce_window_space); self.workarea_timer.start(1400)
         self.start_window_spy()
+        # Openbox has no compositor: start picom so transparency works.
+        QTimer.singleShot(0, ensure_compositor)
+        self._compositor_watch=watch_compositor(self, before_restart=self.stop_window_spy, initial=self._composited)
         # Eduka-Panel replaces lxqt-panel, but only in Eduka-Desktop sessions.
         QTimer.singleShot(2500, stop_lxqt_panel_in_eduka_session)
         QTimer.singleShot(9000, stop_lxqt_panel_in_eduka_session)
@@ -671,12 +679,12 @@ class EdukaPanel(QWidget):
         self.update_status_icons()
     def load_config(self):
         icon_theme_setup(force=True); cfg=read_panel_config(); self.current_cfg=cfg
-        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); liquid=normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID
+        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); liquid=effective_theme(cfg.get('theme_style')) == THEME_LIQUID and self._composited
         h=max(34, min(58, int(cfg.get('height',40)))); icon_size=max(18, min(42, int(cfg.get('icon_size',24))))
         width=max(45, min(100, int(cfg.get('width_percent',96)))); alpha=max(0.50, min(1.0, float(cfg.get('transparency',0.54))))
-        if high_contrast: alpha=0.98
+        if high_contrast or not self._composited: alpha=1.0
         screen=QApplication.primaryScreen().geometry(); w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2); y=screen.y()+screen.height()-h-5
-        self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3); bg_alpha=int(alpha*255)
+        self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3) if self._composited else 0; bg_alpha=int(alpha*255)
         self.bg.setStyleSheet(f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{min(255,bg_alpha+12)}),stop:0.55 rgba(236,248,242,{bg_alpha}),stop:1 rgba(217,237,230,{bg_alpha}));border:1px solid rgba(255,255,255,220);border-bottom:1px solid rgba(135,175,160,130);border-radius:{radius}px;}}
         QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(225,243,236,210));border:1px solid rgba(185,215,205,130);border-radius:{max(13,int(h/2.7))}px;padding:4px 12px;font-weight:700;color:#183c35;}} QPushButton#startButton:hover{{background:white;border:1px solid rgba(0,168,121,95);}}
         QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,200);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:#dff5ed;}} QPushButton#clockButton:hover{{background:rgba(255,255,255,200);}} QPushButton#clockButton:pressed{{background:#dff5ed;}}
@@ -688,12 +696,16 @@ class EdukaPanel(QWidget):
         if high_contrast:
             self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;} QFrame#trayGroup{background:white;border:2px solid #344d47;}''')
         elif liquid:
-            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{min(245,bg_alpha+55)}),stop:0.28 rgba(211,249,246,{max(145,bg_alpha)}),stop:0.62 rgba(230,218,255,{max(135,bg_alpha-10)}),stop:1 rgba(207,240,255,{max(145,bg_alpha)}));border:2px solid rgba(255,255,255,225);border-bottom:2px solid rgba(104,145,181,145);}} QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{{background:rgba(255,255,255,125);border:1px solid rgba(255,255,255,195);color:#142b31;}} QPushButton#startButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#taskButton:hover{{background:rgba(255,255,255,225);border:1px solid rgba(90,174,210,180);}}''')
-        if liquid and not high_contrast:
-            if self.bg.graphicsEffect() is None:
-                sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(28); sh.setOffset(0,6); sh.setColor(QColor(39,61,86,60)); self.bg.setGraphicsEffect(sh)
-        else:
-            self.bg.setGraphicsEffect(None)
+            glass=liquid_glass_surface(alpha/0.54, radius, 1)
+            pill=liquid_glass_surface(1.15, max(12,int(h/2.7)), 1)
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{{glass}}}
+            QPushButton#startButton,QPushButton#taskButton,QFrame#trayGroup{{{pill}color:#10262b;}}
+            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{background:transparent;border:0;color:#10262b;}}
+            QPushButton#startButton:hover,QPushButton#taskButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,215);border:1px solid rgba(255,255,255,240);}}
+            QPushButton#taskButton[activeTask="true"]{{background:rgba(255,255,255,200);border-bottom:3px solid #00a879;}}''')
+        # No QGraphicsDropShadowEffect: re-rendering the whole panel through an
+        # effect on every repaint made it sluggish.
+        self.bg.setGraphicsEffect(None)
         self.apply_blur_hint(liquid and not high_contrast)
         menu_icon=cfg.get('menu_icon',START_ICON)
         icon_h=max(16, min(int(cfg.get('menu_icon_size',26)), h-8))
@@ -1544,6 +1556,7 @@ if __name__ == '__main__':
     panel_lock=acquire_panel_lock()
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
-    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); icon_theme_setup(); panel=EdukaPanel()
+    if in_eduka_session(): wait_for_compositor()
+    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); app.setStyleSheet(TOOLTIP_QSS); icon_theme_setup(); panel=EdukaPanel()
     if not panel._fullscreen_hidden: panel.show()
     registry_update('panel', {'pid': os.getpid(), 'running': True}); sys.exit(app.exec_())

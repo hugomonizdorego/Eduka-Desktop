@@ -151,13 +151,10 @@ class Settings(QDialog):
         except Exception:
             pass
         cpu_threads=max(1, int(os.cpu_count() or 1))
-        compositor=False
-        for process_name in ('kwin_x11','kwin_wayland','picom','compton','xcompmgr','xfwm4','labwc','compiz','marco'):
-            try:
-                if subprocess.run(['pgrep','-x',process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-                    compositor=True; break
-            except Exception:
-                break
+        # A running compositor (xfwm4, KWin, picom, ...) or picom that
+        # Eduka-Panel can start. Without one, Liquid Glass falls back to
+        # Eduka-Default-Theme automatically instead of turning black.
+        compositor=compositor_running(force=True) or shutil.which('picom') is not None
         return memory_gib, cpu_threads, compositor, memory_gib >= 3.7 and cpu_threads >= 2
 
     def _leave_liquid(self):
@@ -174,13 +171,13 @@ class Settings(QDialog):
         if self._liquid_confirmed:
             return
         memory_gib, cpu_threads, compositor, capable=self.liquid_glass_capability()
-        detected=f'Detected memory: {memory_gib:.1f} GiB\nLogical CPU threads: {cpu_threads}\nCompatible compositor detected: {"Yes" if compositor else "No or unknown"}'
+        detected=f'Detected memory: {memory_gib:.1f} GiB\nLogical CPU threads: {cpu_threads}\nCompositor: {"running" if compositor_running(force=True) else ("picom will be started" if compositor else "none — Liquid Glass would fall back to Eduka-Default-Theme")}'
         requirement='Liquid Glass requires at least 4 GB RAM and a processor/graphics compositor capable of smooth transparency and blur. The theme uses more resources than Eduka-Default-Theme.'
         if not capable:
             QMessageBox.warning(self, 'Liquid Glass requirements', requirement+'\n\n'+detected+'\n\nLiquid Glass was not enabled to protect system stability.')
             self._leave_liquid()
             return
-        answer=QMessageBox.question(self, 'Enable Liquid Glass?', requirement+'\n\n'+detected+'\n\nIf compositor blur is unavailable, Eduka-Desktop will use a safe translucent Qt fallback. Continue?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        answer=QMessageBox.question(self, 'Enable Liquid Glass?', requirement+'\n\n'+detected+'\n\nWithout a compositor Eduka-Desktop keeps using Eduka-Default-Theme until one runs. Continue?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer == QMessageBox.Yes:
             self._liquid_confirmed=True
         else:

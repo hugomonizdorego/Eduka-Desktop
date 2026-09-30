@@ -1,17 +1,16 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.13
+Version: 0.9.14
 Section: x11
 Priority: optional
 Architecture: all
 Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
-Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, openbox, bluez, brightnessctl, dbus-bin
-Suggests: sddm | lightdm, slick-greeter, lxqt-wayland-session, labwc, qtwayland5
-Description: Edukasaun Desktop 0.9.13 - Stability and Session Repair
+Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin
+Suggests: sddm | lightdm
+Description: Edukasaun Desktop 0.9.14 - Transparency, Liquid Glass and Login Fix
  Edukasaun Desktop, Eduka-Menu, Eduka-Menu Settings, and Eduka-Panel.
- Fixes the 0.9.12 session launcher that hid LXQt's default configuration
- (window manager chooser, broken theme), makes Eduka-Desktop the SDDM and
- LightDM default session, restores the transparent theme from Eduka-Menu
- Settings, and adds a smarter, event-driven Eduka-Panel with redesigned
- Sound and Network popups and an Action Center that takes over the tray.
+ Restores the transparent theme by making sure a compositor runs (xfwm4,
+ KWin or picom) and by drawing a clean opaque look instead of black when none
+ does, stabilises Liquid Glass, stops LXQt from asking for a window manager
+ and leaves Eduka-Desktop as the only session on SDDM and LightDM.

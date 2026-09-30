@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Eduka-Desktop Wayland
-Comment=Edukasaun OS desktop on LXQt Wayland (preview)
-Exec=eduka-desktop-session --wayland
-TryExec=startlxqtwayland
-Icon=/usr/share/pixmaps/eduka-desktop.png
-DesktopNames=LXQt;Edukasaun;
-Keywords=Eduka;Edukasaun;LXQt;Wayland;

@@ -1,14 +1,13 @@
 #!/bin/sh
 # Start an Eduka-Desktop login session on top of LXQt.
 #   eduka-desktop-session            -> X11 (startlxqt)
-#   eduka-desktop-session --wayland  -> Wayland (startlxqtwayland)
-# Used by /usr/share/xsessions/edukasaun-desktop.desktop and
-# /usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop.
+#   eduka-desktop-session --wayland  -> Wayland (startlxqtwayland), not listed
+#                                        on the login screen; for testing only
+# Used by /usr/share/xsessions/edukasaun-desktop.desktop.
 #
 # IMPORTANT: do not export XDG_CONFIG_DIRS here. startlxqt only adds the
 # LXQt default configuration directory (/usr/share/lxqt: window manager,
-# theme, icons) when XDG_CONFIG_DIRS is unset. Setting it made 0.9.12 show
-# "Welcome to LXQt - choose your window manager" and lose the theme.
+# theme, icons) when XDG_CONFIG_DIRS is unset.
 
 mode=x11
 [ "${1:-}" = "--wayland" ] && mode=wayland
@@ -18,53 +17,18 @@ mode=x11
 export EDUKA_DESKTOP_SESSION="$mode"
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
-
-# Make sure LXQt never stops at the window manager chooser. Only fills a
-# missing value; a window manager the user picked is never changed.
-ensure_window_manager() {
-    conf="$config_home/lxqt/session.conf"
-    has_wm='^[[:space:]]*window_manager[[:space:]]*=[[:space:]]*[^[:space:]]'
-    if [ -f "$conf" ] && grep -Eq "$has_wm" "$conf"; then
-        return 0
-    fi
-    system_conf=""
-    for f in /etc/xdg/lxqt/session.conf /usr/share/lxqt/session.conf; do
-        if [ -f "$f" ]; then system_conf="$f"; break; fi
-    done
-    # No user file yet and the system default names a WM: LXQt copies it.
-    if [ ! -f "$conf" ] && [ -n "$system_conf" ] && grep -Eq "$has_wm" "$system_conf"; then
-        return 0
-    fi
-    wm=""
-    for candidate in openbox kwin_x11 xfwm4 marco fluxbox icewm; do
-        if command -v "$candidate" >/dev/null 2>&1; then wm="$candidate"; break; fi
-    done
-    [ -n "$wm" ] || return 0
-    mkdir -p "$config_home/lxqt" || return 0
-    if [ ! -f "$conf" ]; then
-        # Start from LXQt's own defaults so its other session settings stay.
-        if [ -n "$system_conf" ]; then cp "$system_conf" "$conf" 2>/dev/null || : ; fi
-        [ -f "$conf" ] || printf '[General]\n' > "$conf"
-    fi
-    # Drop an empty window_manager= line, then add the detected one.
-    sed -i '/^[[:space:]]*window_manager[[:space:]]*=[[:space:]]*$/d' "$conf" 2>/dev/null || :
-    if grep -q '^\[General\]' "$conf"; then
-        sed -i "/^\[General\]/a window_manager=$wm" "$conf" 2>/dev/null || :
-    else
-        tmp="$conf.eduka-tmp"
-        { printf '[General]\nwindow_manager=%s\n\n' "$wm"; cat "$conf"; } > "$tmp" && mv "$tmp" "$conf"
-    fi
-}
-
 if [ "$mode" = wayland ]; then
     export XDG_SESSION_TYPE=wayland
     if command -v startlxqtwayland >/dev/null 2>&1; then
         exec startlxqtwayland
     fi
-    echo "eduka-desktop-session: startlxqtwayland not found; install lxqt-wayland-session and labwc" >&2
+    echo "eduka-desktop-session: startlxqtwayland not found; install lxqt-wayland-session" >&2
     exit 1
 fi
 
-ensure_window_manager
+if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+    . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+    eduka_ensure_window_manager "${XDG_CONFIG_HOME:-$HOME/.config}" || :
+fi
+
 exec startlxqt
