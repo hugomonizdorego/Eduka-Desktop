@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.11_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.12_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.11_all.deb
+   rm ./edukasaun-desktop-menu_0.9.12_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -37,6 +37,27 @@ and the Eduka-Desktop daemon start from `/etc/xdg/autostart` after login.
 
 To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
+
+## Login sessions
+
+The package registers two sessions for LightDM (slick-greeter,
+lightdm-gtk-greeter) and other display managers:
+
+| Session | File | Starts |
+|---|---|---|
+| Eduka-Desktop (X11) | `/usr/share/xsessions/edukasaun-desktop.desktop` | `eduka-desktop-session` → `startlxqt` |
+| Eduka-Desktop (Wayland) | `/usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop` | `eduka-desktop-session --wayland` → `startlxqtwayland` |
+
+- X11 is the default LightDM session
+  (`/usr/share/lightdm/lightdm.conf.d/60-edukasaun-desktop.conf`); a
+  `user-session=` line in `/etc/lightdm/lightdm.conf` still wins.
+- The Wayland entry is only shown when `startlxqtwayland` exists
+  (`apt install lxqt-wayland-session labwc`), and the compositor is chosen in
+  LXQt Configuration Center → Session Settings → Wayland Settings.
+- In Wayland, Eduka-Panel and Eduka-Desktop run through XWayland; the taskbar
+  lists XWayland applications only. X11 is recommended for class computers.
+- Both sessions hide lxqt-panel via `/usr/share/edukasaun-desktop/xdg`
+  (prepended to `XDG_CONFIG_DIRS` only in Eduka sessions).
 
 ## Release checklist
 

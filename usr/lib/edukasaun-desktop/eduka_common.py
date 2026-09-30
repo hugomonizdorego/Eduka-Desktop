@@ -2,9 +2,10 @@
 import os, sys, json, glob, configparser, subprocess, shlex, time, re, html, shutil
 from pathlib import Path
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.11"
+VERSION = "0.9.12"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -33,6 +34,84 @@ ASSET_DIR = Path('/usr/share/edukasaun-desktop/assets')
 START_ICON = str(ASSET_DIR/'StartMenu.png')
 GENERIC_ICON = str(ASSET_DIR/'app-generic.png')
 
+# --- X11 / Wayland session handling -------------------------------------
+# Eduka-Panel and Eduka-Desktop manage windows through EWMH (wmctrl, xprop,
+# xdotool). On a Wayland session those only see XWayland, so the Eduka
+# components themselves run through XWayland. Applications they launch get
+# the user's original platform back through child_env().
+_ORIGINAL_QT_QPA = os.environ.get('QT_QPA_PLATFORM')
+
+def session_type():
+    """Return 'wayland' or 'x11' for the current login session."""
+    value=(os.environ.get('XDG_SESSION_TYPE') or '').strip().lower()
+    if value in ('x11', 'wayland'):
+        return value
+    return 'wayland' if os.environ.get('WAYLAND_DISPLAY') else 'x11'
+
+if session_type() == 'wayland' and os.environ.get('DISPLAY') and not os.environ.get('EDUKA_NATIVE_WAYLAND'):
+    os.environ['QT_QPA_PLATFORM']='xcb'
+
+def child_env():
+    """Environment for programs started by Eduka components."""
+    env=os.environ.copy()
+    if _ORIGINAL_QT_QPA is None:
+        env.pop('QT_QPA_PLATFORM', None)
+    else:
+        env['QT_QPA_PLATFORM']=_ORIGINAL_QT_QPA
+    return env
+
+# --- Rounded context menus -------------------------------------------------
+# A QMenu is a rectangular native window, so a border-radius in a stylesheet
+# alone leaves sharp corners. With a translucent, frameless, shadowless
+# window only the rounded stylesheet background is painted.
+ACCENT = '#00a879'
+MENU_QSS = """
+QMenu{background:#fbfefc;color:#1f2d2a;border:1px solid rgba(0,120,90,70);border-radius:14px;padding:6px 5px;}
+QMenu::item{background:transparent;padding:7px 28px 7px 10px;margin:1px 2px;border-radius:9px;color:#1f2d2a;}
+QMenu::item:selected{background:#00a879;color:#ffffff;}
+QMenu::item:disabled{color:#8a9b96;background:transparent;}
+QMenu::icon{padding-left:6px;}
+QMenu::separator{height:1px;background:#e1ece8;margin:5px 12px;}
+QMenu::indicator{width:14px;height:14px;padding-left:6px;}
+QMenu::right-arrow{width:8px;height:8px;margin-right:8px;}
+"""
+
+def round_menu(menu):
+    """Give any QMenu (also Qt's built-in ones) smooth rounded corners."""
+    menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+    menu.setAttribute(Qt.WA_TranslucentBackground, True)
+    menu.setStyleSheet(MENU_QSS)
+    return menu
+
+class RoundedMenu(QMenu):
+    """QMenu whose submenus are rounded as well."""
+    def __init__(self, *args):
+        super().__init__(*args)
+        round_menu(self)
+
+    def addMenu(self, *args):
+        if len(args) == 1 and isinstance(args[0], QMenu):
+            round_menu(args[0])
+            return super().addMenu(args[0])
+        if len(args) == 1:
+            icon, title = None, args[0]
+        else:
+            icon, title = args[0], args[1]
+        sub=RoundedMenu(title, self)
+        if icon is not None:
+            sub.setIcon(icon)
+        super().addMenu(sub)
+        return sub
+
+def rounded_text_context_menu(edit):
+    """Replace a QLineEdit's square Cut/Copy/Paste menu with a rounded one."""
+    edit.setContextMenuPolicy(Qt.CustomContextMenu)
+    def show(pos, e=edit):
+        menu=round_menu(e.createStandardContextMenu())
+        menu.exec_(e.mapToGlobal(pos))
+        menu.deleteLater()
+    edit.customContextMenuRequested.connect(show)
+
 DEFAULT_PANEL = {
     "height": 42,
     "width_percent": 96,
@@ -42,6 +121,7 @@ DEFAULT_PANEL = {
     "menu_label": "Edukasaun",
     "menu_icon": START_ICON,
     "menu_icon_size": 26,
+    "menu_icon_keep_aspect": True,
     "show_menu_text": True,
     "taskbar_style": "Icon and Text",
     "taskbar_icon_size": 22,
@@ -556,6 +636,25 @@ def get_icon(name, fallback='application-x-executable'):
     _ICON_OBJECT_CACHE[cache_key]=ic
     return ic
 
+def menu_button_icon_size(icon, height, keep_aspect=True):
+    """Size for the Eduka-Menu button image.
+
+    Theme icons are square. A custom picture keeps its proportions (up to 3:1,
+    e.g. a school logo) so it is not squeezed into a square.
+    """
+    from PyQt5.QtGui import QImageReader
+    height=max(12, int(height))
+    width=height
+    if keep_aspect and icon and os.path.isfile(str(icon)):
+        try:
+            real=QImageReader(str(icon)).size()
+            if real.isValid() and real.height() > 0:
+                ratio=max(0.5, min(3.0, real.width()/real.height()))
+                width=int(round(height*ratio))
+        except Exception:
+            pass
+    return QSize(width, height)
+
 def clean_exec(cmd):
     if not cmd: return ''
     for p in ['%f','%F','%u','%U','%i','%c','%k','%d','%D','%n','%N','%v','%m']:
@@ -565,10 +664,10 @@ def clean_exec(cmd):
 def safe_popen(cmd, shell=False):
     try:
         if shell:
-            subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
         else:
             if isinstance(cmd, str): cmd=shlex.split(cmd)
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
         return True
     except Exception:
         return False
@@ -576,7 +675,7 @@ def safe_popen(cmd, shell=False):
 def launch_app(cmd, app_name=''):
     cmd=clean_exec(cmd)
     if not cmd: return False
-    env=os.environ.copy()
+    env=child_env()
     # Safer defaults for old CPUs, VMs and 512MB targets. This helps WebGL/Electron
     # apps such as TurboWarp use software rendering when hardware acceleration is missing.
     env.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')

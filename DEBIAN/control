@@ -1,14 +1,17 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.11
+Version: 0.9.12
 Section: x11
 Priority: optional
 Architecture: all
 Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
-Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, qtwayland5, lxqt-session
-Description: Edukasaun Desktop 0.9.11 - Polish and Performance Patch
+Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, qtwayland5, lxqt-session, openbox, bluez, brightnessctl, lxqt-wayland-session, labwc
+Suggests: slick-greeter, lightdm
+Description: Edukasaun Desktop 0.9.12 - Action Center and Sessions Patch
  Edukasaun Desktop, Eduka-Menu, Eduka-Menu Settings, and Eduka-Panel.
- Lighter taskbar and menu polling for old hardware, search across all
- applications, keyboard shortcuts in Eduka-Desktop, a single Eduka-Panel per
- session, a cleaner scrollable Settings window and confirmed shutdown/restart.
+ Adds an Eduka-Panel Action Center (calendar, Wi-Fi, Bluetooth, airplane
+ mode, sound, brightness, battery), rounded context menus everywhere, a
+ colorful category and application palette that changes on every opening,
+ adjustable menu-button pictures, and Eduka-Desktop (X11) and Eduka-Desktop
+ (Wayland) login sessions for LightDM, slick-greeter and other greeters.

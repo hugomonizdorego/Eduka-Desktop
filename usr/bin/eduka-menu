@@ -33,20 +33,50 @@ CATEGORY_HIGHLIGHT_COLORS = [
     (42, 180, 220), (120, 190, 75), (240, 85, 85), (140, 110, 220),
     (230, 190, 45), (50, 160, 135),
 ]
-SESSION_HIGHLIGHT_COLORS = list(CATEGORY_HIGHLIGHT_COLORS)
-random.SystemRandom().shuffle(SESSION_HIGHLIGHT_COLORS)
-SESSION_COLOR_OFFSET = random.SystemRandom().randrange(len(SESSION_HIGHLIGHT_COLORS))
+_RNG = random.SystemRandom()
+PALETTE = {'colors': list(CATEGORY_HIGHLIGHT_COLORS), 'offset': 0}
 
-def app_highlight_color(app, selected_category='All'):
-    names=[name for name, _icon, _needles in CATEGORY_ORDER if name != 'Favorites']
+def reshuffle_palette():
+    """New color order for the next opening of Eduka-Desktop.
+
+    Called while the menu is hidden, so opening stays instant and every
+    opening shows a fresh set of category and application colors.
+    """
+    colors=list(CATEGORY_HIGHLIGHT_COLORS)
+    previous=PALETTE['colors'][0] if PALETTE['colors'] else None
+    _RNG.shuffle(colors)
+    if colors[0] == previous and len(colors) > 1:
+        colors.append(colors.pop(0))
+    PALETTE['colors']=colors
+    PALETTE['offset']=_RNG.randrange(len(colors))
+
+reshuffle_palette()
+
+def category_color(row):
+    colors=PALETTE['colors']
+    return colors[(row + PALETTE['offset']) % len(colors)]
+
+def app_highlight_color(app, selected_category='All', position=None):
+    """Color for one application tile.
+
+    position comes from the caller: column + row*3 in the Grid and the row in
+    the List. Horizontal neighbours then differ by 1 and vertical neighbours
+    by 3, so with 10 colors adjacent tiles never share a color.
+    """
+    colors=PALETTE['colors']
+    names=[name for name, _icon, _needles in CATEGORY_ORDER]
     try:
         category_index=names.index(selected_category)
     except ValueError:
         category_index=0
-    token='|'.join([selected_category, app.get('desktop_id',''), app.get('name',''), app.get('exec','')])
-    token_value=sum((pos + 1) * ord(char) for pos, char in enumerate(token))
-    index=(token_value + category_index * 3 + SESSION_COLOR_OFFSET) % len(SESSION_HIGHLIGHT_COLORS)
-    return SESSION_HIGHLIGHT_COLORS[index]
+    if position is None:
+        token='|'.join([app.get('desktop_id',''), app.get('name','')])
+        position=sum((pos + 1) * ord(char) for pos, char in enumerate(token))
+    return colors[(position + category_index + PALETTE['offset']) % len(colors)]
+
+def _mix(rgb, amount):
+    """Blend a color toward white; amount=1 keeps the color, 0 gives white."""
+    return tuple(255 - int((255 - value) * amount) for value in rgb)
 
 class CategoryDelegate(QStyledItemDelegate):
     """Lightweight custom painter for the category list.
@@ -54,12 +84,10 @@ class CategoryDelegate(QStyledItemDelegate):
     rainbow accent so text stays readable and the effect remains cheap for
     low-RAM computers.
     """
-    ACCENTS = [QColor(*rgb) for rgb in SESSION_HIGHLIGHT_COLORS]
-
     def paint(self, painter, option, index):
         painter.save()
         rect = option.rect.adjusted(4, 3, -4, -3)
-        accent = self.ACCENTS[index.row() % len(self.ACCENTS)]
+        accent = QColor(*category_color(index.row()))
         selected = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
         high_contrast = bool(option.widget.property('accessibilityMode')) if option.widget else False
@@ -71,8 +99,8 @@ class CategoryDelegate(QStyledItemDelegate):
             border = QColor(255, 255, 255, 90)
             text_color = QColor(18, 35, 31) if accent.lightness() > 145 else QColor(255, 255, 255)
         else:
-            bg = QColor(255, 255, 255, 252 if high_contrast else 160)
-            border = QColor(70, 93, 87, 220) if high_contrast else QColor(200, 226, 216, 150)
+            bg = QColor(255, 255, 255, 252 if high_contrast else 190)
+            border = QColor(70, 93, 87, 220) if high_contrast else QColor(accent.red(), accent.green(), accent.blue(), 70)
             text_color = QColor(31, 45, 42)
             if hover:
                 pale=QColor(255-int((255-accent.red())*0.34), 255-int((255-accent.green())*0.34), 255-int((255-accent.blue())*0.34))
@@ -88,8 +116,21 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.setPen(QPen(border, 1))
         painter.drawRoundedRect(rect, 12, 12)
 
+        icon_rect = QRect(rect.left() + 12, rect.top() + (rect.height() - 24) // 2, 24, 24)
+        if not selected and not high_contrast:
+            # Colored badge behind each category icon: the whole list shows
+            # the session palette, not only the selected row.
+            badge = icon_rect.adjusted(-5, -5, 5, 5)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 95 if hover else 60))
+            painter.drawRoundedRect(badge, 9, 9)
+        elif selected:
+            badge = icon_rect.adjusted(-5, -5, 5, 5)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 70))
+            painter.drawRoundedRect(badge, 9, 9)
+
         icon = index.data(Qt.DecorationRole)
-        icon_rect = QRect(rect.left() + 12, rect.top() + 8, 24, 24)
         if isinstance(icon, QIcon):
             icon.paint(painter, icon_rect, Qt.AlignCenter, QIcon.Normal, QIcon.On if selected else QIcon.Off)
 
@@ -97,7 +138,7 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.setPen(text_color)
         font = painter.font(); font.setBold(True); font.setPointSize(max(9, font.pointSize()))
         painter.setFont(font)
-        text_rect = QRect(icon_rect.right() + 12, rect.top(), rect.width() - 52, rect.height())
+        text_rect = QRect(icon_rect.right() + 14, rect.top(), rect.width() - 54, rect.height())
         painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
         painter.restore()
 
@@ -125,15 +166,21 @@ class AppButton(QToolButton):
         self.customContextMenuRequested.connect(self.ctx)
         self._apply_style()
 
+    def set_accent(self, accent):
+        self._accent=accent; self._apply_style()
+
     def _apply_style(self):
         r,g,b=self._accent
-        lr,lg,lb=(255-int((255-value)*0.34) for value in (r,g,b))
-        pr,pg,pb=(255-int((255-value)*0.48) for value in (r,g,b))
-        base_alpha=255 if self._high_contrast else 230
-        base_end=250 if self._high_contrast else 210
-        base_border='rgba(55,75,70,235)' if self._high_contrast else 'rgba(180,215,204,185)'
+        lr,lg,lb=_mix(self._accent, 0.34)
+        pr,pg,pb=_mix(self._accent, 0.48)
+        tr,tg,tb=_mix(self._accent, 0.16)
+        if self._high_contrast:
+            base=f'background:white;border:2px solid rgba(55,75,70,235);'
+        else:
+            base=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,235),stop:1 rgba({tr},{tg},{tb},225));'
+                  f'border:2px solid rgba({r},{g},{b},90);')
         self.setStyleSheet(f"""
-            QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{base_alpha}),stop:1 rgba(232,246,240,{base_end}));border:2px solid {base_border};border-radius:14px;padding:8px;color:#1f2d2a;font-weight:800;}}
+            QToolButton{{{base}border-radius:16px;padding:8px;color:#1f2d2a;font-weight:800;}}
             QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});color:#10231e;font-weight:900;}}
             QToolButton:pressed{{background:rgb({pr},{pg},{pb});border:2px solid rgb({r},{g},{b});color:#0b1d19;}}
         """)
@@ -163,7 +210,7 @@ class AppButton(QToolButton):
         QTimer.singleShot(35, lambda: (launch_app(self.app.get('exec',''), self.app.get('name','')), setattr(win, '_launching', False)))
 
     def ctx(self, pos):
-        m = QMenu(self); m.setStyleSheet(DARK_QSS)
+        m = RoundedMenu(self)
         m.addAction(get_icon('system-run'), 'Open', self.launch)
         if is_favorite(self.app):
             m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
@@ -203,16 +250,20 @@ class AppListItem(QFrame):
         star=QLabel('★' if is_favorite(app) else ''); star.setStyleSheet('color:#d49a00;font-size:18px;min-width:18px;'); star.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(star)
         self._apply_style()
 
+    def set_accent(self, accent):
+        self._accent=accent; self._apply_style()
+
     def _apply_style(self):
         r,g,b=self._accent
-        lr,lg,lb=(255-int((255-value)*0.34) for value in (r,g,b))
+        lr,lg,lb=_mix(self._accent, 0.34)
         base_alpha=255 if self._high_contrast else 236
-        border='rgba(55,75,70,235)' if self._high_contrast else 'rgba(178,207,198,205)'
+        border='rgba(55,75,70,235)' if self._high_contrast else f'rgba({r},{g},{b},80)'
+        stripe='#344d47' if self._high_contrast else f'rgb({r},{g},{b})'
         self.setStyleSheet(f"""
-            QFrame#appListItem{{border-radius:12px;background:rgba(255,255,255,{base_alpha});border:2px solid {border};}}
+            QFrame#appListItem{{border-radius:14px;background:rgba(255,255,255,{base_alpha});border:2px solid {border};border-left:6px solid {stripe};}}
             QFrame#appListItem QLabel#appName{{color:#10231e;font-weight:900;font-size:13px;}}
             QFrame#appListItem QLabel#appDetails{{color:#40534e;font-size:11px;font-weight:600;}}
-            QFrame#appListItem:hover,QFrame#appListItem:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});}}
+            QFrame#appListItem:hover,QFrame#appListItem:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});border-left:6px solid rgb({r},{g},{b});}}
             QFrame#appListItem:hover QLabel#appName,QFrame#appListItem:focus QLabel#appName{{color:#0b1d19;font-weight:900;}}
             QFrame#appListItem:hover QLabel#appDetails,QFrame#appListItem:focus QLabel#appDetails{{color:#29413a;}}
         """)
@@ -237,7 +288,7 @@ class AppListItem(QFrame):
         super().keyPressEvent(event)
 
     def ctx(self, pos):
-        m = QMenu(self); m.setStyleSheet(DARK_QSS)
+        m = RoundedMenu(self)
         m.addAction(get_icon('system-run'), 'Open', self._launch_once)
         if is_favorite(self.app):
             m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
@@ -320,6 +371,7 @@ class EdukaMenu(QWidget):
         self.search.setAccessibleName('Search applications')
         self.search.setAccessibleDescription('Type an application name or category')
         self.search.setMinimumWidth(330)
+        rounded_text_context_menu(self.search)
         self.refresh_timer=QTimer(self); self.refresh_timer.setSingleShot(True); self.refresh_timer.timeout.connect(self.refresh_apps)
         self.search.textChanged.connect(lambda: self.refresh_timer.start(90)); self.search.returnPressed.connect(self.launch_first_result); hdr.addWidget(self.search,1)
         self.grid_btn=QPushButton('▦ Grid'); self.list_btn=QPushButton('☷ List')
@@ -331,7 +383,7 @@ class EdukaMenu(QWidget):
         close=QPushButton('✕'); close.setToolTip('Close'); close.setAccessibleName('Close Eduka-Desktop'); close.clicked.connect(lambda: self.hide_menu(force=True)); close.setFixedWidth(42); close.setStyleSheet('QPushButton{background:#e95454;color:white;border-radius:14px;font-weight:900;} QPushButton:hover{background:#ff6b6b;}')
         hdr.addWidget(close); main.addLayout(hdr)
         body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
-        self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setAccessibleName('Application categories')
+        self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.cats.setAccessibleName('Application categories')
         self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True)
         self._orca_hover_item=None
         self.orca_hover_timer=QTimer(self); self.orca_hover_timer.setSingleShot(True); self.orca_hover_timer.timeout.connect(self._focus_hovered_category)
@@ -576,7 +628,7 @@ class EdukaMenu(QWidget):
 
     def desktop_context(self, pos):
         """Context menu for empty Eduka-Desktop launcher space."""
-        m=QMenu(self); m.setStyleSheet(DARK_QSS)
+        m=RoundedMenu(self)
         m.addAction(get_icon('view-app-grid'), 'Arrange Applications A-Z', lambda: (self.search.clear(), self.rebuild_categories(preserve=True), self.refresh_apps()))
         m.addAction(get_icon('view-grid'), 'Grid View', lambda: self.set_layout('Grid'))
         m.addAction(get_icon('view-list-details'), 'List View', lambda: self.set_layout('List'))
@@ -597,7 +649,7 @@ class EdukaMenu(QWidget):
             QMessageBox.warning(self, 'Add to Desktop', f"Could not add shortcut:\n{msg}")
 
     def favorite_context(self, app, button, pos):
-        m=QMenu(self); m.setStyleSheet(DARK_QSS)
+        m=RoundedMenu(self)
         m.addAction(get_icon('system-run'), 'Open', lambda a=app: (self.hide_menu(force=True), launch_app(a.get('exec',''), a.get('name',''))))
         m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda a=app: self.remove_favorite(a))
         if is_app_pinned(app):
@@ -649,14 +701,15 @@ class EdukaMenu(QWidget):
                 cols=max(3, min(7, width//cell_w))
                 grid.setSpacing(12); grid.setAlignment(Qt.AlignTop|Qt.AlignLeft)
             for i,app in enumerate(apps):
-                accent=app_highlight_color(app, category)
-                b=AppButton(app, accent); b.setIconSize(QSize(48,48)); b.setFixedSize(cell_w-10,112)
+                pos=(i % cols) + (i // cols) * 3
+                accent=app_highlight_color(app, category, pos)
+                b=AppButton(app, accent); b._color_pos=pos; b.setIconSize(QSize(48,48)); b.setFixedSize(cell_w-10,112)
                 b.set_accessibility_mode(high_contrast, orca_enabled)
                 grid.addWidget(b,i//cols,i%cols, Qt.AlignTop|Qt.AlignHCenter if large_grid else Qt.AlignTop|Qt.AlignLeft)
         else:
-            for app in apps:
-                accent=app_highlight_color(app, category)
-                item=AppListItem(app, accent); item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
+            for i,app in enumerate(apps):
+                accent=app_highlight_color(app, category, i)
+                item=AppListItem(app, accent); item._color_pos=i; item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
         self.stack_layout.addStretch(); self.refresh_side()
 
     def ensure_apps_loaded(self):
@@ -699,6 +752,7 @@ class EdukaMenu(QWidget):
         self._last_toggle_time=now
         registry_update('menu', {'visible': False, 'hide_time': now, 'internal_name': 'Eduka-Desktop', 'version': VERSION})
         self.hide()
+        QTimer.singleShot(0, self.recolor)
         if self.search.text():
             # Start the next opening from the full category view.
             self.search.blockSignals(True); self.search.clear(); self.search.blockSignals(False)
@@ -737,6 +791,17 @@ class EdukaMenu(QWidget):
                 self.apps=load_apps(force=True); self.rebuild_categories(preserve=True); self.refresh_apps()
             else: self.toggle_menu()
         except Exception: pass
+
+    def recolor(self):
+        """Apply a new palette to the hidden menu (no rebuild needed)."""
+        if self.isVisible():
+            return
+        reshuffle_palette()
+        self.cats.viewport().update()
+        category='All' if self.search.text().strip() else self.current_category
+        tiles=[w for w in self.content.findChildren(QWidget) if isinstance(w, (AppButton, AppListItem)) and w.parent() is self.content]
+        for w in tiles:
+            w.set_accent(app_highlight_color(w.app, category, getattr(w, '_color_pos', 0)))
 
     def launch_first_result(self):
         """Enter in the search box opens the first matching application."""

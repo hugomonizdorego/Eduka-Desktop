@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=LXQt Panel
+Comment=Hidden in Eduka-Desktop sessions: Eduka-Panel replaces lxqt-panel.
+Exec=lxqt-panel
+Hidden=true

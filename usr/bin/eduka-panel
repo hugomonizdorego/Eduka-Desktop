@@ -9,13 +9,293 @@ from eduka_common import *
 
 class PopupFrame(QFrame):
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint); self.setAttribute(Qt.WA_TranslucentBackground)
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint); self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_DeleteOnClose)
         self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(6,6,6,6); lay.addWidget(self.box)
         self.v=QVBoxLayout(self.box); self.v.setContentsMargins(16,14,16,14); self.v.setSpacing(10)
         self.setStyleSheet('QFrame#popupBox{background:rgba(250,253,250,250);border:1px solid rgba(0,168,121,80);border-radius:16px;} QLabel{color:#1f2d2a;font-size:13px;} QPushButton{border:1px solid rgba(0,168,121,70);border-radius:10px;padding:8px;background:#eef7f3;color:#1f2d2a;font-weight:700;} QPushButton:hover{background:white;border:1px solid #00a879;} QSlider::groove:horizontal{height:7px;border-radius:3px;background:#dfeee9;} QSlider::handle:horizontal{width:18px;margin:-6px 0;border-radius:9px;background:#00a879;}')
+        self._fade=None
         # Popup shadows disabled in low resource mode to avoid sluggish LXQt/QEMU sessions.
         if read_panel_config().get('enable_shadows', False) and not read_panel_config().get('low_resource_mode', True):
             sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(18); sh.setOffset(0,6); sh.setColor(QColor(0,0,0,45)); self.box.setGraphicsEffect(sh)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # A short fade makes popups feel smooth; without a compositor Qt
+        # simply shows the popup at full opacity.
+        self.setWindowOpacity(0.0)
+        self._fade=QPropertyAnimation(self, b'windowOpacity', self); self._fade.setDuration(130)
+        self._fade.setStartValue(0.0); self._fade.setEndValue(1.0); self._fade.setEasingCurve(QEasingCurve.OutCubic); self._fade.start()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.close(); return
+        super().keyPressEvent(e)
+
+
+def _run_text(cmd, timeout=1.5):
+    """Run a status command; None when missing, failing or too slow."""
+    if shutil.which(cmd[0]) is None:
+        return None
+    try:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=timeout).stdout
+    except Exception:
+        return None
+
+def battery_info():
+    for b in sorted(Path('/sys/class/power_supply').glob('BAT*')):
+        try: return {'capacity':int((b/'capacity').read_text().strip()),'status':(b/'status').read_text().strip()}
+        except Exception: pass
+    return None
+
+def backlight_device():
+    for d in sorted(Path('/sys/class/backlight').glob('*')):
+        if (d/'brightness').exists() and (d/'max_brightness').exists():
+            return d
+    return None
+
+def read_brightness():
+    d=backlight_device()
+    if d is None:
+        return None
+    try:
+        cur=int((d/'brightness').read_text().strip()); mx=int((d/'max_brightness').read_text().strip())
+        return int(round(cur*100/mx)) if mx > 0 else None
+    except Exception:
+        return None
+
+def collect_status():
+    """Gather tray/Action Center state. Runs in a worker thread."""
+    st={}
+    out=_run_text(['nmcli','-t','-f','TYPE,STATE,CONNECTION','device'])
+    st['nm']=out is not None
+    net='offline'; conn=''; wifi_hw=False
+    for line in (out or '').splitlines():
+        parts=line.split(':', 2)
+        if len(parts) < 3: continue
+        kind, state, name = parts
+        if kind == 'wifi': wifi_hw=True
+        if state == 'connected':
+            if kind == 'wifi': net='wifi'; conn=name
+            elif kind == 'ethernet' and net != 'wifi': net='ethernet'; conn=name
+    st.update(net=net, connection=conn, wifi_hw=wifi_hw)
+    radio=_run_text(['nmcli','-t','radio','all'])
+    fields=(radio or '').strip().split(':')
+    st['wifi_on']=(fields[1] == 'enabled') if len(fields) >= 2 else None
+    st['airplane']=bool(len(fields) >= 4 and fields[1] == 'disabled' and fields[3] == 'disabled')
+    bt_dir=Path('/sys/class/bluetooth')
+    st['bt_hw']=bt_dir.exists() and any(bt_dir.iterdir())
+    st['bt_on']=None
+    if st['bt_hw']:
+        o=_run_text(['bluetoothctl','show'])
+        if o is not None: st['bt_on']='Powered: yes' in o
+    o=_run_text(['pactl','get-sink-volume','@DEFAULT_SINK@']); m=re.search(r'(\d+)%', o or '')
+    st['volume']=int(m.group(1)) if m else None
+    o=_run_text(['pactl','get-sink-mute','@DEFAULT_SINK@']); st['muted']='yes' in (o or '').lower()
+    o=_run_text(['lpstat','-p']); st['printers']=bool((o or '').strip())
+    o=_run_text(['setxkbmap','-query']); m=re.search(r'^layout:\s*([^\s,]+)', o or '', re.M)
+    st['layout']=(m.group(1) if m else 'en')[:3].upper()
+    st['brightness']=read_brightness()
+    st['battery']=battery_info()
+    return st
+
+
+class StatusWorker(QThread):
+    """Keeps nmcli/pactl/bluetoothctl off the GUI thread so the panel never stutters."""
+    ready=pyqtSignal(dict)
+    def run(self):
+        try: self.ready.emit(collect_status())
+        except Exception: pass
+
+
+AC_QSS = """
+QLabel#acTime{font-size:30px;font-weight:800;color:#10231e;}
+QLabel#acDate{font-size:13px;color:#536a64;font-weight:600;}
+QToolButton#acTile{background:#eef6f2;border:1px solid rgba(0,120,90,45);border-radius:14px;padding:6px 4px;color:#1f2d2a;font-size:11px;font-weight:700;}
+QToolButton#acTile:hover{background:#ffffff;border:1px solid #00a879;}
+QToolButton#acTile[on="true"]{background:#00a879;color:#ffffff;border:1px solid #00946b;}
+QToolButton#acTile[on="true"]:hover{background:#00b683;}
+QToolButton#acTile:disabled{background:#f3f6f5;color:#9aa9a5;border:1px solid rgba(0,0,0,18);}
+QFrame#acCard{background:#ffffff;border:1px solid rgba(0,120,90,35);border-radius:14px;}
+QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}
+QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}
+QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}
+QSlider::sub-page:horizontal:disabled{background:#c9d6d2;}
+QSlider::handle:horizontal:disabled{border:2px solid #b8c6c2;}
+QPushButton#acFooter{background:#eef6f2;border:1px solid rgba(0,120,90,45);border-radius:11px;padding:7px 6px;font-size:12px;font-weight:700;}
+QPushButton#acFooter:hover{background:#ffffff;border:1px solid #00a879;}
+QCalendarWidget QWidget{background:#ffffff;alternate-background-color:#ffffff;}
+QCalendarWidget QWidget#qt_calendar_navigationbar{background:#ffffff;border-top-left-radius:10px;border-top-right-radius:10px;}
+QCalendarWidget QToolButton{background:transparent;color:#1f2d2a;border:0;border-radius:8px;padding:4px 8px;font-weight:800;}
+QCalendarWidget QToolButton:hover{background:#e3f3ed;}
+QCalendarWidget QToolButton::menu-indicator{image:none;}
+QCalendarWidget QSpinBox{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:6px;}
+QCalendarWidget QAbstractItemView{background:#ffffff;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;outline:0;border:0;}
+QCalendarWidget QAbstractItemView:disabled{color:#a7b5b1;}
+"""
+
+
+class ActionCenter(PopupFrame):
+    """Clock popup: time, quick toggles, sliders, battery and calendar."""
+    TILES=[
+        ('wifi','Wi-Fi','network-wireless'),
+        ('bluetooth','Bluetooth','bluetooth'),
+        ('airplane','Airplane','airplane-mode'),
+        ('mute','Mute','audio-volume-muted'),
+        ('lock','Lock','system-lock-screen'),
+        ('settings','Settings','preferences-system'),
+    ]
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel=panel
+        self.setAccessibleName('Action Center')
+        self.box.setFixedWidth(372)
+        self.setStyleSheet(self.styleSheet()+AC_QSS)
+        self.v.setSpacing(10)
+        head=QVBoxLayout(); head.setSpacing(0)
+        self.time_label=QLabel(); self.time_label.setObjectName('acTime')
+        self.date_label=QLabel(); self.date_label.setObjectName('acDate')
+        head.addWidget(self.time_label); head.addWidget(self.date_label); self.v.addLayout(head)
+
+        grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
+        for i,(key,label,icon) in enumerate(self.TILES):
+            t=QToolButton(); t.setObjectName('acTile'); t.setText(label); t.setIcon(get_icon(icon,'preferences-system'))
+            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,64)
+            t.setAccessibleName(label); t.setProperty('on', False); t.setCursor(Qt.PointingHandCursor)
+            t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
+            t.setContextMenuPolicy(Qt.CustomContextMenu); t.customContextMenuRequested.connect(lambda _pos,k=key: self.tile_settings(k))
+            grid.addWidget(t, i//3, i%3); self.tiles[key]=t
+        self.v.addLayout(grid)
+
+        card=QFrame(); card.setObjectName('acCard'); cl=QGridLayout(card); cl.setContentsMargins(12,10,12,10); cl.setHorizontalSpacing(10); cl.setVerticalSpacing(8)
+        self.vol_icon=QLabel(); self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume'); self.vol_value=QLabel('')
+        self.bri_icon=QLabel(); self.bri_icon.setPixmap(get_icon('display-brightness','video-display').pixmap(20,20))
+        self.bri_slider=QSlider(Qt.Horizontal); self.bri_slider.setRange(5,100); self.bri_slider.setAccessibleName('Screen brightness'); self.bri_value=QLabel('')
+        for w in (self.vol_value, self.bri_value): w.setFixedWidth(40); w.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
+        cl.addWidget(self.vol_icon,0,0); cl.addWidget(self.vol_slider,0,1); cl.addWidget(self.vol_value,0,2)
+        cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
+        self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,3)
+        self.v.addWidget(card)
+        self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
+        self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
+        self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self._vol_timer.start(70)))
+        self.bri_slider.valueChanged.connect(lambda v: (self.bri_value.setText(f'{v}%'), self._bri_timer.start(90)))
+
+        self.calendar=QCalendarWidget(); self.calendar.setGridVisible(False); self.calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.calendar.setSelectedDate(QDate.currentDate()); self.calendar.setFixedHeight(215)
+        weekend=QTextCharFormat(); weekend.setForeground(QColor('#c0533a'))
+        for day in (Qt.Saturday, Qt.Sunday): self.calendar.setWeekdayTextFormat(day, weekend)
+        header=QTextCharFormat(); header.setForeground(QColor('#536a64'))
+        self.calendar.setHeaderTextFormat(header)
+        cal_card=QFrame(); cal_card.setObjectName('acCard'); cal_l=QVBoxLayout(cal_card); cal_l.setContentsMargins(6,6,6,6); cal_l.addWidget(self.calendar)
+        self.v.addWidget(cal_card)
+        for menu in self.calendar.findChildren(QMenu):
+            round_menu(menu)
+
+        foot=QHBoxLayout(); foot.setSpacing(8)
+        for label, icon, handler in [('Network','preferences-system-network',lambda: self.launch('nm-connection-editor')),
+                                     ('Sound','audio-volume-high',lambda: self.launch('pavucontrol-qt')),
+                                     ('Power','system-shutdown',self.power_menu)]:
+            b=QPushButton(get_icon(icon,'preferences-system'), ' '+label); b.setObjectName('acFooter'); b.clicked.connect(handler); foot.addWidget(b)
+            if label == 'Power': self.power_button=b
+        self.v.addLayout(foot)
+        self.update_time()
+        self.refresh(panel.last_status or {})
+
+    def update_time(self):
+        now=QDateTime.currentDateTime()
+        self.time_label.setText(now.toString('HH:mm'))
+        self.date_label.setText(QLocale().toString(now.date(), QLocale.LongFormat))
+
+    def set_tile(self, key, on, enabled=True, tip=''):
+        t=self.tiles[key]
+        if bool(t.property('on')) != bool(on):
+            t.setProperty('on', bool(on)); t.style().unpolish(t); t.style().polish(t)
+        t.setEnabled(enabled)
+        t.setToolTip(tip or t.text())
+        if key in ('wifi','bluetooth','airplane','mute'):
+            t.setAccessibleDescription('On' if on else 'Off')
+
+    def refresh(self, st):
+        wifi_on=st.get('wifi_on')
+        if st.get('net') == 'wifi': wifi_tip=f"Connected to {st.get('connection')}"
+        elif st.get('net') == 'ethernet': wifi_tip='Ethernet connected'
+        else: wifi_tip='Not connected'
+        self.set_tile('wifi', bool(wifi_on), wifi_on is not None, wifi_tip+' — right-click for network settings')
+        self.tiles['wifi'].setText(st.get('connection')[:14] if st.get('net') == 'wifi' and st.get('connection') else 'Wi-Fi')
+        bt_on=st.get('bt_on')
+        self.set_tile('bluetooth', bool(bt_on), bool(st.get('bt_hw')) and bt_on is not None, 'Bluetooth — right-click for devices' if st.get('bt_hw') else 'No Bluetooth adapter found')
+        self.set_tile('airplane', bool(st.get('airplane')), wifi_on is not None, 'Turn all wireless radios off')
+        self.set_tile('mute', bool(st.get('muted')), st.get('volume') is not None, 'Mute sound — right-click for sound settings')
+        self.set_tile('lock', False, True, 'Lock the screen')
+        self.set_tile('settings', False, True, 'Eduka-Menu Settings — right-click for LXQt Settings')
+        vol=st.get('volume')
+        self.vol_slider.blockSignals(True); self.vol_slider.setEnabled(vol is not None); self.vol_slider.setValue(int(vol or 0)); self.vol_slider.blockSignals(False)
+        self.vol_value.setText(f'{vol}%' if vol is not None else '—')
+        self.vol_icon.setPixmap(get_icon('audio-volume-muted' if st.get('muted') else 'audio-volume-high','audio-volume-medium').pixmap(20,20))
+        bri=st.get('brightness')
+        self.bri_slider.blockSignals(True); self.bri_slider.setEnabled(bri is not None); self.bri_slider.setValue(int(bri or 100)); self.bri_slider.blockSignals(False)
+        self.bri_value.setText(f'{bri}%' if bri is not None else '—')
+        self.bri_slider.setToolTip('Screen brightness' if bri is not None else 'This display does not report a backlight')
+        bat=st.get('battery')
+        self.battery_label.setText(f"Battery {bat['capacity']}% • {bat['status']}" if bat else 'Power: AC (no battery)')
+
+    def launch(self, cmd):
+        self.close(); launch_app(cmd)
+
+    def tile_clicked(self, key):
+        st=self.panel.last_status or {}
+        if key == 'wifi':
+            if not shutil.which('nmcli'):
+                self.launch('nm-connection-editor'); return
+            safe_popen(['nmcli','radio','wifi','off' if st.get('wifi_on') else 'on'])
+        elif key == 'bluetooth':
+            safe_popen(['bluetoothctl','power','off' if st.get('bt_on') else 'on'])
+        elif key == 'airplane':
+            if st.get('airplane'):
+                safe_popen(['nmcli','radio','all','on'])
+            else:
+                safe_popen(['nmcli','radio','all','off'])
+                if st.get('bt_on'): safe_popen(['bluetoothctl','power','off'])
+        elif key == 'mute':
+            safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle'])
+        elif key == 'lock':
+            self.close(); session_action('lock'); return
+        elif key == 'settings':
+            self.launch('eduka-menu-settings'); return
+        # Optimistic feedback, then confirm with a fresh status read.
+        t=self.tiles[key]; self.set_tile(key, not bool(t.property('on')), t.isEnabled(), t.toolTip())
+        QTimer.singleShot(700, self.panel.update_status_icons)
+
+    def tile_settings(self, key):
+        cmd={'wifi':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','mute':'pavucontrol-qt','settings':'lxqt-config','lock':'lxqt-config-screensaver'}.get(key)
+        if cmd: self.launch(cmd)
+
+    def apply_volume(self):
+        value=self.vol_slider.value()
+        self.panel.last_status['volume']=value
+        safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{value}%'])
+        QTimer.singleShot(400, self.panel.update_status_icons)
+
+    def apply_brightness(self):
+        value=self.bri_slider.value()
+        if shutil.which('brightnessctl'):
+            safe_popen(['brightnessctl','-q','set',f'{value}%'])
+        elif shutil.which('xbacklight'):
+            safe_popen(['xbacklight','-set',str(value)])
+
+    def power_menu(self):
+        m=RoundedMenu(self)
+        m.addAction(get_icon('system-lock-screen'),'Lock Screen', lambda: (self.close(), session_action('lock')))
+        m.addAction(get_icon('system-log-out'),'Logout…', lambda: (self.close(), session_action('logout')))
+        m.addSeparator()
+        m.addAction(get_icon('system-reboot'),'Restart…', lambda: (self.close(), session_action('restart')))
+        m.addAction(get_icon('system-shutdown'),'Shutdown…', lambda: (self.close(), session_action('shutdown')))
+        m.exec_(self.power_button.mapToGlobal(QPoint(0,-m.sizeHint().height()-4)))
+
+    def hideEvent(self, e):
+        self.panel._action_center_closed_at=time.monotonic()
+        super().hideEvent(e)
+
 
 class EdukaPanel(QWidget):
     def __init__(self):
@@ -24,6 +304,8 @@ class EdukaPanel(QWidget):
         try: self.setAttribute(Qt.WA_X11DoNotAcceptFocus, True)
         except (AttributeError, TypeError): pass
         self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
+        self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
+        self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
@@ -52,9 +334,15 @@ class EdukaPanel(QWidget):
         self.eus=QPushButton(); self.eus.setObjectName('updateButton'); self.eus.setVisible(False); self.eus.clicked.connect(self.open_eus); self.eus.setContextMenuPolicy(Qt.CustomContextMenu); self.eus.customContextMenuRequested.connect(self.eus_context)
         self.notif=QPushButton(); self.notif.setObjectName('trayButton'); self.notif.setIcon(get_icon('preferences-system-notifications')); self.notif.clicked.connect(self.notification_popup); self.notif.setContextMenuPolicy(Qt.CustomContextMenu); self.notif.customContextMenuRequested.connect(self.notification_context)
         self.lang=QLabel('EN'); self.lang.setObjectName('langLabel'); self.lang.setContextMenuPolicy(Qt.CustomContextMenu); self.lang.customContextMenuRequested.connect(self.language_context)
-        self.clock=QPushButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.calendar_popup); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
+        self.clock=QPushButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.toggle_action_center); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
         for button,name in [(self.net,'Network'),(self.bt,'Bluetooth'),(self.printer,'Printers'),(self.battery,'Battery'),(self.vol,'Volume'),(self.eus,'Eduka Update System'),(self.notif,'Notifications'),(self.clock,'Clock and calendar')]: button.setAccessibleName(name)
-        for w in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang,self.clock]: self.layout.addWidget(w)
+        # Status icons and the clock sit together in one rounded tray group.
+        self.tray=QFrame(); self.tray.setObjectName('trayGroup'); self.tray.setContextMenuPolicy(Qt.CustomContextMenu); self.tray.customContextMenuRequested.connect(self.panel_context)
+        tray_layout=QHBoxLayout(self.tray); tray_layout.setContentsMargins(6,0,4,0); tray_layout.setSpacing(2)
+        for w in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang,self.clock]: tray_layout.addWidget(w)
+        self.clock.setToolTip('Action Center — calendar, Wi-Fi, Bluetooth, sound and brightness')
+        self.clock.setAccessibleName('Clock. Opens Action Center')
+        self.layout.addWidget(self.tray)
     def setup_screen_tracking(self):
         """Re-layout when the resolution changes or a projector is connected."""
         self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.load_config)
@@ -95,12 +383,13 @@ class EdukaPanel(QWidget):
         self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3); bg_alpha=int(alpha*255)
         self.bg.setStyleSheet(f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{min(255,bg_alpha+12)}),stop:0.55 rgba(236,248,242,{bg_alpha}),stop:1 rgba(217,237,230,{bg_alpha}));border:1px solid rgba(255,255,255,220);border-bottom:1px solid rgba(135,175,160,130);border-radius:{radius}px;}}
         QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(225,243,236,210));border:1px solid rgba(185,215,205,130);border-radius:{max(13,int(h/2.7))}px;padding:4px 12px;font-weight:700;color:#183c35;}} QPushButton#startButton:hover{{background:white;border:1px solid rgba(0,168,121,95);}}
-        QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,160);}}
-        QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);}}
+        QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,200);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:#dff5ed;}} QPushButton#clockButton:hover{{background:rgba(255,255,255,200);}} QPushButton#clockButton:pressed{{background:#dff5ed;}}
+        QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);border-bottom:3px solid #00a879;}}
+        QFrame#trayGroup{{background:rgba(255,255,255,{min(200, bg_alpha+30)});border:1px solid rgba(255,255,255,210);border-radius:{max(12,int(h/2.6))}px;}}
         QPushButton#batteryButton{{background:rgba(0,168,121,45);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
         QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{11 if h < 46 else 12}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
         if high_contrast:
-            self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;}''')
+            self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;} QFrame#trayGroup{background:white;border:2px solid #344d47;}''')
         elif liquid:
             self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{min(245,bg_alpha+55)}),stop:0.28 rgba(211,249,246,{max(145,bg_alpha)}),stop:0.62 rgba(230,218,255,{max(135,bg_alpha-10)}),stop:1 rgba(207,240,255,{max(145,bg_alpha)}));border:2px solid rgba(255,255,255,225);border-bottom:2px solid rgba(104,145,181,145);}} QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{{background:rgba(255,255,255,125);border:1px solid rgba(255,255,255,195);color:#142b31;}} QPushButton#startButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#taskButton:hover{{background:rgba(255,255,255,225);border:1px solid rgba(90,174,210,180);}}''')
         if liquid and not high_contrast:
@@ -109,7 +398,9 @@ class EdukaPanel(QWidget):
         else:
             self.bg.setGraphicsEffect(None)
         self.apply_blur_hint(liquid and not high_contrast)
-        self.start.setIcon(get_icon(cfg.get('menu_icon',START_ICON),'start-here')); self.start.setIconSize(QSize(int(cfg.get('menu_icon_size',26)),int(cfg.get('menu_icon_size',26))))
+        menu_icon=cfg.get('menu_icon',START_ICON)
+        icon_h=max(16, min(int(cfg.get('menu_icon_size',26)), h-8))
+        self.start.setIcon(get_icon(menu_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
         self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) else '')
         for b in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif]: b.setIconSize(QSize(icon_size,icon_size))
         for b in self.buttons.values(): b.setIconSize(QSize(int(cfg.get('taskbar_icon_size',22)), int(cfg.get('taskbar_icon_size',22))))
@@ -244,8 +535,7 @@ class EdukaPanel(QWidget):
             cmd = 'toggle'
         registry_update('panel', {'last_menu_click': time.time(), 'menu_command': cmd})
     def _context_menu_style(self, menu):
-        menu.setStyleSheet('QMenu{background:#ffffff;color:#1f2d2a;border:1px solid rgba(0,168,121,90);border-radius:12px;padding:6px;} QMenu::item{padding:8px 22px;border-radius:8px;} QMenu::item:selected{background:#00a879;color:white;} QMenu::separator{height:1px;background:#dbe8e3;margin:6px 8px;}')
-        return menu
+        return round_menu(menu)
 
     def _app_for_executable(self, executable):
         executable=os.path.basename(str(executable or '')).casefold()
@@ -257,7 +547,7 @@ class EdukaPanel(QWidget):
 
     def launcher_context(self, kind, button, pos):
         """Context menu for the permanent File Manager and Terminal launchers."""
-        m=self._context_menu_style(QMenu(self))
+        m=self._context_menu_style(RoundedMenu(self))
         if kind == 'files':
             executable='pcmanfm-qt'
             m.addAction(get_icon('system-file-manager'), 'Open File Manager', lambda: launch_app(executable))
@@ -285,7 +575,7 @@ class EdukaPanel(QWidget):
         safe_popen('pkill -x eduka-panel; sleep 0.2; eduka-panel', shell=True)
 
     def panel_context(self, pos):
-        m=self._context_menu_style(QMenu(self))
+        m=self._context_menu_style(RoundedMenu(self))
         m.addAction(get_icon('start-here'), 'Open Edukasaun Desktop', self.toggle_menu)
         m.addAction(get_icon('preferences-system'), 'Eduka-Menu Settings', lambda: launch_app('eduka-menu-settings'))
         m.addSeparator()
@@ -304,7 +594,6 @@ class EdukaPanel(QWidget):
         leave.addAction(get_icon('system-log-out'), 'Logout', lambda: launch_app('eduka-session-action logout'))
         leave.addAction(get_icon('system-reboot'), 'Restart', lambda: launch_app('eduka-session-action restart'))
         leave.addAction(get_icon('system-shutdown'), 'Shutdown', lambda: launch_app('eduka-session-action shutdown'))
-        self._context_menu_style(style_menu); self._context_menu_style(leave)
         if isinstance(pos, QPoint):
             gp = self.sender().mapToGlobal(pos) if hasattr(self.sender(), 'mapToGlobal') else self.mapToGlobal(pos)
         else:
@@ -313,7 +602,13 @@ class EdukaPanel(QWidget):
 
     def start_context(self,pos):
         self.panel_context(pos)
-    def update_clock(self): self.clock.setText(QDateTime.currentDateTime().toString('HH:mm:ss\ndd/MM/yyyy'))
+    def update_clock(self):
+        now=QDateTime.currentDateTime()
+        text=now.toString('HH:mm\ndd/MM/yyyy')
+        if self.clock.text() != text:
+            self.clock.setText(text)
+        if self.action_center is not None and self.action_center.isVisible():
+            self.action_center.update_time()
     def _window_type_is_desktop(self, wid):
         return '_NET_WM_WINDOW_TYPE_DESKTOP' in self._window_property_text(wid, '_NET_WM_WINDOW_TYPE')
 
@@ -471,7 +766,7 @@ class EdukaPanel(QWidget):
             wid, desktop_id, wmclass, host, title = self.normalize_window_id(parts[0]), parts[1], parts[2], parts[3], parts[4]
             if not self._window_is_task(wid, desktop_id, wmclass, title):
                 continue
-            app=find_app_for_window(title, wmclass)
+            app=self.match_app(title, wmclass)
             key=pin_app_key(app) if app else ''
             if key: active_pin_keys.add(key)
             windows.append((wid,title,wmclass,app,key))
@@ -500,7 +795,7 @@ class EdukaPanel(QWidget):
             app=app_by_pin_key(key)
             if not app: continue
             if key not in self.pinned_buttons:
-                btn=QPushButton(); btn.setObjectName('taskButton'); btn.setToolTip('Pinned: '+app.get('name','Application'))
+                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.setToolTip('Pinned: '+app.get('name','Application'))
                 btn.setAccessibleName('Pinned application '+app.get('name','Application'))
                 btn.clicked.connect(lambda _,a=app: launch_app(a.get('exec',''), a.get('name','')))
                 btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -523,7 +818,7 @@ class EdukaPanel(QWidget):
         for wid,title,wmclass,app,key in windows:
             name=(app['name'] if app else title)[:28]
             if wid not in self.buttons:
-                btn=QPushButton(); btn.setObjectName('taskButton'); btn.setToolTip(title); btn.clicked.connect(lambda _,w=wid: self.activate_or_minimize(w))
+                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.setToolTip(title); btn.clicked.connect(lambda _,w=wid: self.activate_or_minimize(w))
                 btn.setContextMenuPolicy(Qt.CustomContextMenu)
                 btn.customContextMenuRequested.connect(lambda pos,w=wid,b=btn: self.task_context(w,b,pos))
                 btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -552,9 +847,14 @@ class EdukaPanel(QWidget):
                 self._ewmh_cache.pop(wid, None)
         # Keep every pinned/minimized/active application at the left edge in a
         # stable order. Deleted Qt widgets can otherwise leave temporary gaps.
-        for index, button in enumerate(desired_buttons):
-            self.task_layout.insertWidget(index, button)
-        self.task_layout.activate()
+        order=[b._eduka_token for b in desired_buttons]
+        if order != self._task_order:
+            # Re-inserting every button each refresh caused a relayout (and
+            # a visible flicker) every 0.9 s; only do it when order changed.
+            for index, button in enumerate(desired_buttons):
+                self.task_layout.insertWidget(index, button)
+            self.task_layout.activate()
+            self._task_order=order
         for wid, button in self.buttons.items():
             if wid in current:
                 self.set_window_icon_geometry(wid, button)
@@ -565,9 +865,19 @@ class EdukaPanel(QWidget):
             self._last_checked_active_wid=active_wid
             QTimer.singleShot(120, self.enforce_window_space)
 
+    def match_app(self, title, wmclass):
+        """find_app_for_window() with a cache keyed by window class and title."""
+        stamp=len(read_app_registry_fast())
+        if stamp != self._app_match_stamp or len(self._app_match_cache) > 400:
+            self._app_match_cache={}; self._app_match_stamp=stamp
+        key=(wmclass, title)
+        if key not in self._app_match_cache:
+            self._app_match_cache[key]=find_app_for_window(title, wmclass)
+        return self._app_match_cache[key]
+
     def pinned_context(self, key, button, pos):
         app=app_by_pin_key(key)
-        m=self._context_menu_style(QMenu(self))
+        m=self._context_menu_style(RoundedMenu(self))
         if app:
             m.addAction(get_icon('system-run'),'Launch', lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
             if is_favorite(app):
@@ -627,7 +937,7 @@ class EdukaPanel(QWidget):
 
     def task_context(self, wid, button, pos):
         app=getattr(button, '_eduka_app', None)
-        m=self._context_menu_style(QMenu(self))
+        m=self._context_menu_style(RoundedMenu(self))
         states=self.window_states(wid)
         allowed=self.window_allowed_actions(wid)
         if app:
@@ -673,38 +983,38 @@ class EdukaPanel(QWidget):
             menu.exec_(QCursor.pos())
 
     def network_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('network-wireless'), 'Show Networks', self.network_popup)
         m.addAction(get_icon('preferences-system-network'), 'Network Settings', lambda: launch_app('nm-connection-editor'))
         m.addAction(get_icon('view-refresh'), 'Refresh Network Status', self.update_status_icons)
         self._show_context(m, self.net, pos)
 
     def bluetooth_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('bluetooth'), 'Bluetooth Devices', self.bluetooth_popup)
         m.addAction(get_icon('preferences-system-bluetooth'), 'Open Bluetooth Manager', lambda: launch_app('blueman-manager'))
         self._show_context(m, self.bt, pos)
 
     def printer_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('printer'), 'Printers', lambda: launch_app('system-config-printer'))
         m.addAction(get_icon('view-refresh'), 'Refresh Printer Status', self.update_status_icons)
         self._show_context(m, self.printer, pos)
 
     def battery_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('battery'), 'Battery Information', self.battery_popup)
         m.addAction(get_icon('preferences-system-power-management'), 'Power Settings', lambda: launch_app('lxqt-config-powermanagement'))
         self._show_context(m, self.battery, pos)
 
     def volume_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('audio-volume-high'), 'Volume Control', lambda: launch_app('pavucontrol-qt'))
         m.addAction(get_icon('audio-volume-muted'), 'Mute / Unmute', lambda: (safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle']), self.update_status_icons()))
         self._show_context(m, self.vol, pos)
 
     def notification_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('preferences-system-notifications'), 'Notifications', self.notification_popup)
         m.addAction(get_icon('preferences-system'), 'Notification Settings', lambda: launch_app('lxqt-config-notificationd'))
         self._show_context(m, self.notif, pos)
@@ -713,7 +1023,7 @@ class EdukaPanel(QWidget):
         launch_app('/usr/local/bin/eduka-update-system --ui', 'Eduka Update System')
 
     def eus_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'), 'Open Eduka Update System', self.open_eus)
         count=max(0, int(self.eus_status.get('count',0) or 0))
         status=m.addAction(f'{count} update{"s" if count != 1 else ""} available')
@@ -747,91 +1057,97 @@ class EdukaPanel(QWidget):
         self.eus.setText(f' {count} Updates' if self.hearing_accessibility else '')
 
     def language_context(self, pos):
-        m=QMenu(self)
+        m=RoundedMenu(self)
         m.addAction(get_icon('preferences-desktop-locale'), 'Language Settings', lambda: launch_app('lxqt-config-locale'))
         m.addAction(get_icon('input-keyboard'), 'Keyboard Settings', lambda: launch_app('lxqt-config-input'))
         self._show_context(m, self.lang, pos)
 
     def clock_context(self, pos):
-        m=QMenu(self)
-        m.addAction(get_icon('office-calendar'), 'Calendar', self.calendar_popup)
+        m=RoundedMenu(self)
+        m.addAction(get_icon('office-calendar'), 'Action Center', self.toggle_action_center)
         m.addAction(get_icon('preferences-system-time'), 'Date and Time Settings', lambda: launch_app('lxqt-admin-time'))
         self._show_context(m, self.clock, pos)
 
-    def update_keyboard_layout(self):
-        """Show the active X11 keyboard layout instead of a fixed 'EN'."""
-        layout=''
-        if shutil.which('setxkbmap'):
-            try:
-                out=subprocess.check_output(['setxkbmap','-query'], text=True, stderr=subprocess.DEVNULL, timeout=1)
-                m=re.search(r'^layout:\s*([^\s,]+)', out, re.M)
-                layout=m.group(1) if m else ''
-            except Exception:
-                layout=''
-        text=(layout or 'en')[:3].upper()
-        if self.lang.text() != text:
-            self.lang.setText(text)
-        self.lang.setToolTip(f'Keyboard layout: {text}')
-        self.lang.setAccessibleName(f'Keyboard layout {text}')
-
     def update_status_icons(self):
+        """Refresh tray state in a worker thread (nmcli/pactl can be slow)."""
         self.update_eus_status()
-        self.update_keyboard_layout()
-        nicon='network-offline'; tip='Offline'
-        try:
-            out=subprocess.check_output(['nmcli','-t','-f','TYPE,STATE,CONNECTION','device'], text=True, stderr=subprocess.DEVNULL)
-            if any(l.startswith('wifi:connected') for l in out.splitlines()): nicon='network-wireless'; tip='Wi-Fi connected'
-            elif any(l.startswith('ethernet:connected') for l in out.splitlines()): nicon='network-wired'; tip='Ethernet connected'
-        except Exception: pass
-        self.net.setIcon(get_icon(nicon,'network-transmit-receive')); self.net.setToolTip(tip); self.net.setAccessibleName('Network: '+tip); self.net.setText(' '+tip.replace(' connected','') if self.hearing_accessibility else '')
-        info=self.battery_info(); self.battery.setVisible(info is not None)
+        if self._status_worker is not None:
+            self._status_again=True
+            return
+        worker=StatusWorker(self); worker.ready.connect(self.apply_status); worker.finished.connect(self._status_finished)
+        self._status_worker=worker; worker.start()
+
+    def _status_finished(self):
+        if self._status_worker is not None:
+            self._status_worker.deleteLater(); self._status_worker=None
+        if self._status_again:
+            self._status_again=False; QTimer.singleShot(0, self.update_status_icons)
+
+    def apply_status(self, st):
+        self.last_status=st
+        text=st.get('layout','EN')
+        if self.lang.text() != text: self.lang.setText(text)
+        self.lang.setToolTip(f'Keyboard layout: {text}'); self.lang.setAccessibleName(f'Keyboard layout {text}')
+        net=st.get('net','offline')
+        nicon={'wifi':'network-wireless','ethernet':'network-wired'}.get(net,'network-offline')
+        tip={'wifi':'Wi-Fi connected'+(f": {st.get('connection')}" if st.get('connection') else ''),'ethernet':'Ethernet connected'}.get(net,'Offline')
+        self.net.setIcon(get_icon(nicon,'network-transmit-receive')); self.net.setToolTip(tip); self.net.setAccessibleName('Network: '+tip); self.net.setText(' '+tip.split(':')[0].replace(' connected','') if self.hearing_accessibility else '')
+        info=st.get('battery'); self.battery.setVisible(info is not None)
         if info:
-            cap=info['capacity']; status=info['status'].lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery')); self.battery.setText(f' {cap}%')
-        bt_exists=Path('/sys/class/bluetooth').exists() and any(Path('/sys/class/bluetooth').iterdir()); self.bt.setVisible(bt_exists); self.bt.setIcon(get_icon('bluetooth','preferences-system-bluetooth'))
-        has_pr=False
-        try: has_pr=bool(subprocess.check_output(['lpstat','-p'], text=True, stderr=subprocess.DEVNULL).strip())
-        except Exception: pass
-        self.printer.setVisible(has_pr); self.printer.setIcon(get_icon('printer','printer'))
-        muted=False; vol=''
-        try:
-            out=subprocess.check_output('pactl get-sink-mute @DEFAULT_SINK@; pactl get-sink-volume @DEFAULT_SINK@', shell=True, text=True, stderr=subprocess.DEVNULL)
-            muted='yes' in out.splitlines()[0].lower(); m=re.search(r'(\d+)%', out); vol=m.group(1) if m else ''
-        except Exception: pass
-        volume_status=('Muted' if muted else 'Volume')+(f': {vol}%' if vol else '')
+            status=str(info['status']).lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery')); self.battery.setText(f" {info['capacity']}%")
+            self.battery.setToolTip(f"Battery {info['capacity']}% • {info['status']}")
+        self.bt.setVisible(bool(st.get('bt_hw'))); self.bt.setIcon(get_icon('bluetooth','preferences-system-bluetooth'))
+        self.bt.setToolTip('Bluetooth on' if st.get('bt_on') else 'Bluetooth off')
+        self.printer.setVisible(bool(st.get('printers'))); self.printer.setIcon(get_icon('printer','printer'))
+        muted=bool(st.get('muted')); vol=st.get('volume')
+        volume_status=('Muted' if muted else 'Volume')+(f': {vol}%' if vol is not None else '')
         self.vol.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high','audio-volume-medium')); self.vol.setToolTip(volume_status); self.vol.setAccessibleName(volume_status); self.vol.setText(' '+volume_status if self.hearing_accessibility else '')
         self.notif.setText(' Alerts' if self.hearing_accessibility else ''); self.notif.setToolTip('Notifications and visual alerts'); self.notif.setAccessibleName('Notifications and visual alerts')
+        if self.action_center is not None and self.action_center.isVisible():
+            self.action_center.refresh(st)
+
+    def toggle_action_center(self):
+        if self.action_center is not None and self.action_center.isVisible():
+            self.action_center.close(); return
+        # Clicking the clock while the popup is open first closes the popup
+        # (Qt.Popup); do not reopen it from that same click.
+        if time.monotonic() - self._action_center_closed_at < 0.3:
+            return
+        ac=ActionCenter(self); self.action_center=ac
+        ac.destroyed.connect(lambda *_: setattr(self, 'action_center', None))
+        ac.adjustSize()
+        screen=QApplication.primaryScreen().availableGeometry()
+        x=min(self.x()+self.width()-ac.width(), screen.right()-ac.width()-4); x=max(screen.x()+4, x)
+        y=self.y()-ac.height()-8
+        ac.move(x, y); ac.show(); ac.activateWindow()
+        self.update_status_icons()
+
     def wheelEvent(self,e):
         if self.vol.underMouse(): self.change_volume(5 if e.angleDelta().y()>0 else -5)
     def change_volume(self,delta):
         # Stay within 0-100 % so scrolling over the icon cannot distort speakers.
-        current=50
-        try:
-            out=subprocess.check_output(['pactl','get-sink-volume','@DEFAULT_SINK@'], text=True, stderr=subprocess.DEVNULL, timeout=1)
-            m=re.search(r'(\d+)%', out); current=int(m.group(1)) if m else current
-        except Exception:
-            pass
+        current=self.last_status.get('volume')
+        current=50 if current is None else int(current)
         target=max(0, min(100, current+delta))
-        safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(120, self.update_status_icons)
+        self.last_status['volume']=target
+        self.vol.setToolTip(f'Volume: {target}%')
+        safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(250, self.update_status_icons)
     def show_popup_above(self,popup,anchor):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
     def volume_popup(self):
         p=PopupFrame(self); p.resize(270,125); p.v.addWidget(QLabel('<b>Sound</b>')); slider=QSlider(Qt.Horizontal); slider.setRange(0,100)
-        try: out=subprocess.check_output('pactl get-sink-volume @DEFAULT_SINK@',shell=True,text=True); m=re.search(r'(\d+)%',out); slider.setValue(int(m.group(1)) if m else 50)
-        except Exception: slider.setValue(50)
+        vol=self.last_status.get('volume'); slider.setValue(50 if vol is None else int(vol))
         slider.valueChanged.connect(lambda v: safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{v}%'])); p.v.addWidget(slider)
         row=QHBoxLayout(); row.addWidget(QPushButton('Mute')); row.addWidget(QPushButton('Sound Settings')); row.itemAt(0).widget().clicked.connect(lambda: (safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle']), self.update_status_icons())); row.itemAt(1).widget().clicked.connect(lambda: launch_app('pavucontrol-qt')); p.v.addLayout(row); self.show_popup_above(p,self.vol)
     def notification_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Notifications</b>')); p.v.addWidget(QLabel('No new notifications')); self.show_popup_above(p,self.notif)
     def battery_info(self):
-        for b in Path('/sys/class/power_supply').glob('BAT*'):
-            try: return {'capacity':(b/'capacity').read_text().strip(),'status':(b/'status').read_text().strip()}
-            except Exception: pass
-        return None
+        return battery_info()
     def battery_popup(self): info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>')); p.v.addWidget(QLabel(f"{info['capacity']}% • {info['status']}" if info else 'No battery detected')); self.show_popup_above(p,self.battery)
     def bluetooth_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Bluetooth</b>')); p.v.addWidget(QLabel('Use Bluetooth manager to pair devices.')); b=QPushButton('Open Bluetooth'); b.clicked.connect(lambda: launch_app('blueman-manager')); p.v.addWidget(b); self.show_popup_above(p,self.bt)
     def network_popup(self):
         p=PopupFrame(self); p.resize(310,230); p.v.addWidget(QLabel('<b>Network</b>'))
         try:
-            out=subprocess.check_output(['nmcli','-t','-f','SSID,SIGNAL,SECURITY','device','wifi','list'], text=True, stderr=subprocess.DEVNULL); rows=[]
+            out=subprocess.check_output(['nmcli','-t','-f','SSID,SIGNAL,SECURITY','device','wifi','list','--rescan','no'], text=True, stderr=subprocess.DEVNULL, timeout=2); rows=[]
             for r in out.splitlines():
                 parts=r.split(':');
                 if parts and parts[0] and parts[0] not in rows: rows.append(parts[0])
@@ -843,7 +1159,7 @@ class EdukaPanel(QWidget):
     def connect_wifi(self, ssid):
         if not safe_popen(['nmcli','device','wifi','connect',ssid]): launch_app('nm-connection-editor')
     def calendar_popup(self):
-        p=PopupFrame(self); cal=QCalendarWidget(); cal.setGridVisible(True); cal.setSelectedDate(QDate.currentDate()); cal.setStyleSheet('QCalendarWidget{background:#ffffff;color:#1f2d2a;border:0;} QCalendarWidget QWidget{background:#ffffff;color:#1f2d2a;} QCalendarWidget QToolButton{background:#eef7f3;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:8px;padding:5px;} QCalendarWidget QToolButton:hover{background:white;} QCalendarWidget QMenu{background:white;color:#1f2d2a;} QCalendarWidget QSpinBox{background:white;color:#1f2d2a;} QAbstractItemView{background:white;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;alternate-background-color:#f5fbf8;} QAbstractItemView:disabled{color:#879792;background:#ffffff;}'); p.v.addWidget(cal); self.show_popup_above(p,self.clock)
+        self.toggle_action_center()
 
 PANEL_LOCK = RUNTIME_DIR/'panel.lock'
 

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Start an Eduka-Desktop login session on top of LXQt.
+#   eduka-desktop-session            -> X11 (startlxqt)
+#   eduka-desktop-session --wayland  -> Wayland (startlxqtwayland)
+# Used by /usr/share/xsessions/edukasaun-desktop.desktop and
+# /usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop.
+
+mode=x11
+[ "${1:-}" = "--wayland" ] && mode=wayland
+
+export EDUKA_DESKTOP_SESSION="$mode"
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+# Display managers set this from DesktopNames; keep LXQt first so every
+# OnlyShowIn=LXQt autostart entry and LXQt module still starts.
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-LXQt:Edukasaun}"
+
+# Session-scoped XDG overrides. Only this session sees them; a plain LXQt
+# session is unchanged. They hide lxqt-panel because Eduka-Panel replaces it.
+EDUKA_XDG=/usr/share/edukasaun-desktop/xdg
+case ":${XDG_CONFIG_DIRS:-}:" in
+    *":$EDUKA_XDG:"*) ;;
+    *) export XDG_CONFIG_DIRS="$EDUKA_XDG:${XDG_CONFIG_DIRS:-/etc/xdg}" ;;
+esac
+
+if [ "$mode" = wayland ]; then
+    export XDG_SESSION_TYPE=wayland
+    if command -v startlxqtwayland >/dev/null 2>&1; then
+        exec startlxqtwayland
+    fi
+    echo "eduka-desktop-session: startlxqtwayland not found; install lxqt-wayland-session and labwc" >&2
+    exit 1
+fi
+
+exec startlxqt

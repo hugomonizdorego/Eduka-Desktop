@@ -38,6 +38,11 @@ QLabel#statusLabel[error="true"]{color:#b3261e;}
 QLabel#fieldHint{color:#536a64;font-size:11px;}
 QScrollArea#pageScroll{background:transparent;border:0;}
 QScrollArea#pageScroll>QWidget>QWidget{background:transparent;}
+QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}
+QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}
+QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}
+QComboBox QAbstractItemView{background:white;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;border:1px solid #dbe8e3;outline:0;padding:4px;}
+QToolTip{background:#10231e;color:white;border:0;padding:5px 8px;border-radius:6px;}
 QScrollBar:vertical{background:transparent;width:10px;margin:2px;}
 QScrollBar::handle:vertical{background:rgba(0,168,121,110);border-radius:4px;min-height:30px;}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}
@@ -66,6 +71,9 @@ class Settings(QDialog):
         self._initial_orca_enabled=bool(self.desktop.get('orca_enabled', False))
         self._liquid_confirmed=normalize_theme_style(self.desktop.get('theme_style')) == THEME_LIQUID
         self.build()
+        self.panel_height.valueChanged.connect(self.update_preview)
+        for edit in self.findChildren(QLineEdit):
+            rounded_text_context_menu(edit)
         self.load_values()
         self.setStyleSheet(SETTINGS_QSS)
         self.status_timer=QTimer(self); self.status_timer.setSingleShot(True); self.status_timer.timeout.connect(lambda: self.status.setText(''))
@@ -201,13 +209,25 @@ class Settings(QDialog):
     def page_icon_name(self):
         p=Page('Icon & Name', 'Customize the Eduka-Menu button shown on Eduka-Panel.')
         f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
-        self.preview=QPushButton(); self.preview.setFocusPolicy(Qt.NoFocus); self.preview.setStyleSheet('background:#eaf7f1;color:#102c27;border-radius:13px;padding:9px;font-weight:900;border:1px solid #cfe8df;'); f.addRow('Preview:', self.preview)
+        # Preview is drawn on a strip with the real panel height, so the icon
+        # appears exactly as large as it will on Eduka-Panel.
+        self.preview_strip=QFrame(); self.preview_strip.setObjectName('previewStrip')
+        strip=QHBoxLayout(self.preview_strip); strip.setContentsMargins(10,4,10,4)
+        self.preview=QPushButton(); self.preview.setObjectName('previewButton'); self.preview.setFocusPolicy(Qt.NoFocus)
+        strip.addWidget(self.preview); strip.addStretch(); self.preview_strip.setMinimumWidth(120); self.preview_strip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.preview_info=QLabel(''); self.preview_info.setObjectName('fieldHint'); self.preview_info.setWordWrap(True); self.preview_info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); self.preview_info.setMinimumHeight(30)
+        pv=QVBoxLayout(); pv.setSpacing(4); pv.addWidget(self.preview_strip); pv.addWidget(self.preview_info)
+        f.addRow('Preview:', pv)
         self.label=QLineEdit(); self.label.setMaxLength(24); self.label.setPlaceholderText('Edukasaun'); f.addRow('Button name:', self.label)
-        self.icon=QLineEdit(); self.icon.setPlaceholderText(START_ICON); browse=QPushButton('Browse…'); browse.clicked.connect(self.browse_icon); default_icon=QPushButton('Default'); default_icon.setToolTip('Use the Edukasaun start icon'); default_icon.clicked.connect(lambda: self.icon.setText(START_ICON))
+        self.icon=QLineEdit(); self.icon.setPlaceholderText(START_ICON); self.icon.setMinimumWidth(120); browse=QPushButton('Browse…'); browse.clicked.connect(self.browse_icon); default_icon=QPushButton('Default'); default_icon.setToolTip('Use the Edukasaun start icon'); default_icon.clicked.connect(lambda: self.icon.setText(START_ICON))
         row=QHBoxLayout(); row.addWidget(self.icon,1); row.addWidget(browse); row.addWidget(default_icon); f.addRow('Button icon:', row)
         self.show_text=QCheckBox('Show text beside icon'); f.addRow('', self.show_text)
-        self.icon_size=QSpinBox(); self.icon_size.setRange(18,48); self.icon_size.setSuffix(' px'); f.addRow('Button icon size:', self.icon_size)
-        for signal in (self.label.textChanged, self.icon.textChanged, self.show_text.toggled, self.icon_size.valueChanged):
+        self.icon_size=QSpinBox(); self.icon_size.setRange(16,64); self.icon_size.setSuffix(' px'); self.icon_size.setFixedWidth(96)
+        self.icon_slider=QSlider(Qt.Horizontal); self.icon_slider.setRange(16,64); self.icon_slider.setAccessibleName('Button icon size')
+        self.icon_slider.valueChanged.connect(self.icon_size.setValue); self.icon_size.valueChanged.connect(self.icon_slider.setValue)
+        size_row=QHBoxLayout(); size_row.addWidget(self.icon_slider,1); size_row.addWidget(self.icon_size); f.addRow('Button icon size:', size_row)
+        self.keep_aspect=QCheckBox('Keep picture proportions'); self.keep_aspect.setToolTip('Wide pictures such as a school logo keep their shape instead of being squeezed into a square'); f.addRow('', self.keep_aspect)
+        for signal in (self.label.textChanged, self.icon.textChanged, self.show_text.toggled, self.icon_size.valueChanged, self.keep_aspect.toggled):
             signal.connect(self.update_preview)
         p.v.addLayout(f); p.v.addStretch(); return p
 
@@ -258,10 +278,29 @@ class Settings(QDialog):
         self.status_timer.start(6000)
 
     def update_preview(self, *_):
+        if not hasattr(self, 'panel_height'):
+            return
         label=self.label.text().strip() or 'Edukasaun'
+        icon=self.icon.text().strip() or START_ICON
+        panel_h=self.panel_height.value()
+        usable=panel_h-8
+        requested=self.icon_size.value()
+        shown=max(16, min(requested, usable))
+        size=menu_button_icon_size(icon, shown, self.keep_aspect.isChecked())
         self.preview.setText((' '+label) if self.show_text.isChecked() else '')
-        self.preview.setIcon(get_icon(self.icon.text().strip() or START_ICON, 'start-here'))
-        size=self.icon_size.value(); self.preview.setIconSize(QSize(size, size))
+        self.preview.setIcon(get_icon(icon, 'start-here')); self.preview.setIconSize(size)
+        self.preview_strip.setFixedHeight(panel_h)
+        radius=max(12, int(panel_h/2.3)); btn_radius=max(10, int(panel_h/2.7))
+        self.preview_strip.setStyleSheet(f'QFrame#previewStrip{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #d9ede6);border:1px solid #cfe3dc;border-radius:{radius}px;}}'
+                                         f'QPushButton#previewButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #e1f3ec);border:1px solid #b9d7cd;border-radius:{btn_radius}px;padding:2px 12px;font-weight:700;color:#183c35;}}')
+        info=f'Shown at {size.width()}×{size.height()} px on a {panel_h} px panel.'
+        if requested > usable:
+            info+=f' Larger than {usable} px needs a taller panel (Behavior → Panel height).'
+        if os.path.isfile(icon):
+            real=QImageReader(icon).size()
+            if real.isValid():
+                info=f'Picture {real.width()}×{real.height()} px. '+info
+        self.preview_info.setText(info)
 
     def load_values(self):
         """Fill every control from the saved configuration."""
@@ -285,6 +324,7 @@ class Settings(QDialog):
         self.icon.setText(panel.get('menu_icon',START_ICON)); self.icon.setCursorPosition(0)
         self.show_text.setChecked(bool(panel.get('show_menu_text',True)))
         self.icon_size.setValue(int(panel.get('menu_icon_size',26)))
+        self.keep_aspect.setChecked(bool(panel.get('menu_icon_keep_aspect',True)))
         self.layout_default.setCurrentText(desktop.get('layout','Grid'))
         self.width.setValue(int(desktop.get('width_percent',98)))
         self.height.setValue(int(desktop.get('height_percent',92)))
@@ -313,7 +353,7 @@ class Settings(QDialog):
         self.show(); self.raise_(); self.activateWindow()
 
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':'Bottom','theme_style':self.theme.currentText()}
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':'Bottom','theme_style':self.theme.currentText()}
         desktop={'layout':self.layout_default.currentText(),'last_category':self.default_section.currentText(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked()}
         menu={'mode':'Eduka-Desktop','language':'system' if self.follow_lang.isChecked() else 'en'}
         return panel, desktop, menu
