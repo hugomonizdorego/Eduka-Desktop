@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+import sys, shutil
+from pathlib import Path
+sys.path.insert(0,'/usr/lib/edukasaun-desktop')
+from eduka_common import BASE_CONFIG, save_panel_config, save_menu_config, save_desktop_config, DEFAULT_PANEL, DEFAULT_MENU, DEFAULT_DESKTOP
+if BASE_CONFIG.exists(): shutil.rmtree(BASE_CONFIG)
+save_panel_config(DEFAULT_PANEL); save_menu_config(DEFAULT_MENU); save_desktop_config(DEFAULT_DESKTOP)
+print('Eduka settings reset. Start eduka-panel again.')

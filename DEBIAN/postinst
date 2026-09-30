@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+chmod +x /usr/bin/eduka-* /usr/bin/edukasaun-* 2>/dev/null || true
+mkdir -p /etc/xdg/autostart
+# Rebuild application caches while preserving the user's panel/menu choices.
+# The 0.9.6 transparency migration is applied once by eduka_common.py.
+for home in /root /home/*; do
+    [ -d "$home" ] || continue
+    rm -rf "$home/.cache/eduka-desktop" "$home/.cache/edukasaun-desktop" 2>/dev/null || true
+done
+for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do
+    [ -e "$d" ] && rm -rf "$d" || true
+done
+pkill -f "eduka-menu --daemon" 2>/dev/null || true
+pkill -x eduka-panel 2>/dev/null || true
+# Do not force-start the GUI in an image-builder/chroot. It autostarts after desktop login.
+if [ -n "$DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    eduka-app-cache --warm >/dev/null 2>&1 || true
+    env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-menu --daemon >/dev/null 2>&1 &
+    env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-panel >/dev/null 2>&1 &
+fi
+exit 0

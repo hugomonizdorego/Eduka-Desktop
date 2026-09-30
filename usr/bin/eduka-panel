@@ -1,0 +1,789 @@
+#!/usr/bin/env python3
+import sys, os, subprocess, re, time, shutil, json
+from pathlib import Path
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import *
+
+class PopupFrame(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint); self.setAttribute(Qt.WA_TranslucentBackground)
+        self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(6,6,6,6); lay.addWidget(self.box)
+        self.v=QVBoxLayout(self.box); self.v.setContentsMargins(16,14,16,14); self.v.setSpacing(10)
+        self.setStyleSheet('QFrame#popupBox{background:rgba(250,253,250,250);border:1px solid rgba(0,168,121,80);border-radius:16px;} QLabel{color:#1f2d2a;font-size:13px;} QPushButton{border:1px solid rgba(0,168,121,70);border-radius:10px;padding:8px;background:#eef7f3;color:#1f2d2a;font-weight:700;} QPushButton:hover{background:white;border:1px solid #00a879;} QSlider::groove:horizontal{height:7px;border-radius:3px;background:#dfeee9;} QSlider::handle:horizontal{width:18px;margin:-6px 0;border-radius:9px;background:#00a879;}')
+        # Popup shadows disabled in low resource mode to avoid sluggish LXQt/QEMU sessions.
+        if read_panel_config().get('enable_shadows', False) and not read_panel_config().get('low_resource_mode', True):
+            sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(18); sh.setOffset(0,6); sh.setColor(QColor(0,0,0,45)); self.box.setGraphicsEffect(sh)
+
+class EdukaPanel(QWidget):
+    def __init__(self):
+        super().__init__(); ensure_dirs(); icon_theme_setup(); self.setWindowTitle('Eduka-Panel')
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint); self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_ShowWithoutActivating)
+        try: self.setAttribute(Qt.WA_X11DoNotAcceptFocus, True)
+        except (AttributeError, TypeError): pass
+        self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}
+        self.build_ui(); self.load_config(); self.setup_watcher()
+        self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
+        self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
+        self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
+        self.workarea_timer=QTimer(self); self.workarea_timer.timeout.connect(self.enforce_window_space); self.workarea_timer.start(1400)
+        QTimer.singleShot(500, lambda: safe_popen(['eduka-app-cache','--warm']))
+        QTimer.singleShot(900, lambda: safe_popen(['eduka-menu','--daemon']))
+    def build_ui(self):
+        outer=QVBoxLayout(self); outer.setContentsMargins(0,0,0,0); self.bg=QFrame(); self.bg.setObjectName('panelBg'); outer.addWidget(self.bg)
+        # Panel shadow is optional. Default OFF for 512MB/old CPU target.
+        self.bg.setGraphicsEffect(None)
+        self.layout=QHBoxLayout(self.bg); self.layout.setContentsMargins(10,4,10,4); self.layout.setSpacing(7)
+        self.bg.setContextMenuPolicy(Qt.CustomContextMenu); self.bg.customContextMenuRequested.connect(self.panel_context)
+        self.start=QPushButton(); self.start.setObjectName('startButton'); self.start.setAccessibleName('Edukasaun application menu'); self.start.clicked.connect(self.toggle_menu); self.start.setContextMenuPolicy(Qt.CustomContextMenu); self.start.customContextMenuRequested.connect(self.start_context); self.layout.addWidget(self.start)
+        for kind, name, icon, cmd in [('files','File Manager','system-file-manager','pcmanfm-qt'),('terminal','Terminal','utilities-terminal','qterminal')]:
+            b=QPushButton(); b.setToolTip(name); b.setAccessibleName(name); b.setObjectName('launcherButton'); b.setIcon(get_icon(icon)); b.clicked.connect(lambda _,c=cmd: launch_app(c))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(lambda pos,k=kind,w=b: self.launcher_context(k,w,pos))
+            self.quick_launchers[kind]=b; self.layout.addWidget(b)
+        self.task_area=QWidget(); self.task_area.setObjectName('taskArea'); self.task_area.setStyleSheet('QWidget#taskArea{background:transparent;}'); self.task_area.setMinimumWidth(80); self.task_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.task_area.setContextMenuPolicy(Qt.CustomContextMenu); self.task_area.customContextMenuRequested.connect(self.panel_context); self.task_layout=QHBoxLayout(self.task_area); self.task_layout.setContentsMargins(0,0,0,0); self.task_layout.setSpacing(6); self.task_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter); self.layout.addWidget(self.task_area,1)
+        self.net=QPushButton(); self.net.setObjectName('trayButton'); self.net.clicked.connect(self.network_popup); self.net.setContextMenuPolicy(Qt.CustomContextMenu); self.net.customContextMenuRequested.connect(self.network_context)
+        self.bt=QPushButton(); self.bt.setObjectName('trayButton'); self.bt.clicked.connect(self.bluetooth_popup); self.bt.setContextMenuPolicy(Qt.CustomContextMenu); self.bt.customContextMenuRequested.connect(self.bluetooth_context)
+        self.printer=QPushButton(); self.printer.setObjectName('trayButton'); self.printer.clicked.connect(lambda: launch_app('system-config-printer')); self.printer.setContextMenuPolicy(Qt.CustomContextMenu); self.printer.customContextMenuRequested.connect(self.printer_context)
+        self.battery=QPushButton(); self.battery.setObjectName('batteryButton'); self.battery.clicked.connect(self.battery_popup); self.battery.setContextMenuPolicy(Qt.CustomContextMenu); self.battery.customContextMenuRequested.connect(self.battery_context)
+        self.vol=QPushButton(); self.vol.setObjectName('trayButton'); self.vol.clicked.connect(self.volume_popup); self.vol.setContextMenuPolicy(Qt.CustomContextMenu); self.vol.customContextMenuRequested.connect(self.volume_context)
+        self.eus=QPushButton(); self.eus.setObjectName('updateButton'); self.eus.setVisible(False); self.eus.clicked.connect(self.open_eus); self.eus.setContextMenuPolicy(Qt.CustomContextMenu); self.eus.customContextMenuRequested.connect(self.eus_context)
+        self.notif=QPushButton(); self.notif.setObjectName('trayButton'); self.notif.setIcon(get_icon('preferences-system-notifications')); self.notif.clicked.connect(self.notification_popup); self.notif.setContextMenuPolicy(Qt.CustomContextMenu); self.notif.customContextMenuRequested.connect(self.notification_context)
+        self.lang=QLabel('EN'); self.lang.setObjectName('langLabel'); self.lang.setContextMenuPolicy(Qt.CustomContextMenu); self.lang.customContextMenuRequested.connect(self.language_context)
+        self.clock=QPushButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.calendar_popup); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
+        for button,name in [(self.net,'Network'),(self.bt,'Bluetooth'),(self.printer,'Printers'),(self.battery,'Battery'),(self.vol,'Volume'),(self.eus,'Eduka Update System'),(self.notif,'Notifications'),(self.clock,'Clock and calendar')]: button.setAccessibleName(name)
+        for w in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang,self.clock]: self.layout.addWidget(w)
+    def setup_watcher(self):
+        self.watcher=QFileSystemWatcher(self)
+        watch_paths=[str(panel_config_path()), str(RUNTIME_DIR/'reload')]
+        watch_paths += [str(p) for p in lxqt_appearance_files()]
+        for pth in watch_paths:
+            try:
+                Path(pth).parent.mkdir(parents=True, exist_ok=True)
+                if not Path(pth).exists() and ('eduka-desktop' in pth or '.config' in pth):
+                    Path(pth).touch(exist_ok=True)
+                if Path(pth).exists() and pth not in self.watcher.files():
+                    self.watcher.addPath(pth)
+            except Exception:
+                pass
+        self.watcher.fileChanged.connect(lambda p: QTimer.singleShot(120,self.reload_from_watcher))
+
+    def reload_from_watcher(self):
+        icon_theme_setup(force=True)
+        self.load_config()
+        self.update_tasks()
+        self.update_status_icons()
+    def load_config(self):
+        icon_theme_setup(force=True); cfg=read_panel_config(); self.current_cfg=cfg
+        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); liquid=normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID
+        h=max(34, min(58, int(cfg.get('height',40)))); icon_size=max(18, min(42, int(cfg.get('icon_size',24))))
+        width=max(45, min(100, int(cfg.get('width_percent',96)))); alpha=max(0.50, min(1.0, float(cfg.get('transparency',0.54))))
+        if high_contrast: alpha=0.98
+        screen=QApplication.primaryScreen().geometry(); w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2); y=screen.y()+screen.height()-h-5
+        self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3); bg_alpha=int(alpha*255)
+        self.bg.setStyleSheet(f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{min(255,bg_alpha+12)}),stop:0.55 rgba(236,248,242,{bg_alpha}),stop:1 rgba(217,237,230,{bg_alpha}));border:1px solid rgba(255,255,255,220);border-bottom:1px solid rgba(135,175,160,130);border-radius:{radius}px;}}
+        QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(225,243,236,210));border:1px solid rgba(185,215,205,130);border-radius:{max(13,int(h/2.7))}px;padding:4px 12px;font-weight:700;color:#183c35;}} QPushButton#startButton:hover{{background:white;border:1px solid rgba(0,168,121,95);}}
+        QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,160);}}
+        QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);}}
+        QPushButton#batteryButton{{background:rgba(0,168,121,45);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
+        QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:4px 8px;color:#183c35;font-weight:700;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
+        if high_contrast:
+            self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;}''')
+        elif liquid:
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{min(245,bg_alpha+55)}),stop:0.28 rgba(211,249,246,{max(145,bg_alpha)}),stop:0.62 rgba(230,218,255,{max(135,bg_alpha-10)}),stop:1 rgba(207,240,255,{max(145,bg_alpha)}));border:2px solid rgba(255,255,255,225);border-bottom:2px solid rgba(104,145,181,145);}} QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{{background:rgba(255,255,255,125);border:1px solid rgba(255,255,255,195);color:#142b31;}} QPushButton#startButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#taskButton:hover{{background:rgba(255,255,255,225);border:1px solid rgba(90,174,210,180);}}''')
+        if liquid and not high_contrast:
+            if self.bg.graphicsEffect() is None:
+                sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(28); sh.setOffset(0,6); sh.setColor(QColor(39,61,86,60)); self.bg.setGraphicsEffect(sh)
+        else:
+            self.bg.setGraphicsEffect(None)
+        self.apply_blur_hint(liquid and not high_contrast)
+        self.start.setIcon(get_icon(cfg.get('menu_icon',START_ICON),'start-here')); self.start.setIconSize(QSize(int(cfg.get('menu_icon_size',26)),int(cfg.get('menu_icon_size',26))))
+        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) else '')
+        for b in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif]: b.setIconSize(QSize(icon_size,icon_size))
+        for b in self.buttons.values(): b.setIconSize(QSize(int(cfg.get('taskbar_icon_size',22)), int(cfg.get('taskbar_icon_size',22))))
+        blocking_wid, reason=self.active_panel_blocker()
+        if blocking_wid:
+            self.hide_for_active_window(blocking_wid, reason)
+        else:
+            self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''
+            self.show(); self.raise_(); QTimer.singleShot(80, lambda hh=h: self.reserve_screen_space(hh))
+        QTimer.singleShot(220, self.enforce_window_space)
+
+    def reserve_screen_space(self, h):
+        """Reserve the bottom workarea like a normal LXQt panel."""
+        if self._fullscreen_hidden or shutil.which('xprop') is None:
+            return
+        try:
+            wid = str(int(self.winId()))
+            screen=QApplication.primaryScreen().geometry()
+            bottom = max(1, int(screen.y()+screen.height()-self.y()))
+            left = int(screen.x()); right = int(screen.x()+screen.width()-1)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_WINDOW_TYPE','32a','-set','_NET_WM_WINDOW_TYPE','_NET_WM_WINDOW_TYPE_DOCK'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_DESKTOP','32c','-set','_NET_WM_DESKTOP','4294967295'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STATE','32a','-set','_NET_WM_STATE','_NET_WM_STATE_STICKY,_NET_WM_STATE_ABOVE,_NET_WM_STATE_SKIP_TASKBAR,_NET_WM_STATE_SKIP_PAGER'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # EWMH order: left,right,top,bottom,left_start_y,left_end_y,right_start_y,right_end_y,top_start_x,top_end_x,bottom_start_x,bottom_end_x
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT_PARTIAL','32c','-set','_NET_WM_STRUT_PARTIAL', f'0,0,0,{bottom},0,0,0,0,0,0,{left},{right}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT','32c','-set','_NET_WM_STRUT', f'0,0,0,{bottom}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['wmctrl','-r','Eduka-Panel','-b','add,above,sticky,skip_taskbar,skip_pager'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def clear_screen_space(self):
+        """Release panel struts before hiding behind a covering application."""
+        if shutil.which('xprop') is None:
+            return
+        try:
+            wid=str(int(self.winId()))
+            subprocess.run(['xprop','-id',wid,'-f','_NET_WM_STRUT_PARTIAL','32c','-set','_NET_WM_STRUT_PARTIAL','0,0,0,0,0,0,0,0,0,0,0,0'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)
+            subprocess.run(['xprop','-id',wid,'-f','_NET_WM_STRUT','32c','-set','_NET_WM_STRUT','0,0,0,0'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)
+        except Exception:
+            pass
+
+    def apply_blur_hint(self, enabled):
+        if shutil.which('xprop') is None:
+            return
+        try:
+            wid=str(int(self.winId()))
+            if enabled:
+                safe_popen(['xprop','-id',wid,'-f','_KDE_NET_WM_BLUR_BEHIND_REGION','32c','-set','_KDE_NET_WM_BLUR_BEHIND_REGION','0'])
+            else:
+                safe_popen(['xprop','-id',wid,'-remove','_KDE_NET_WM_BLUR_BEHIND_REGION'])
+        except Exception:
+            pass
+
+    def active_panel_blocker(self):
+        """Find an active app that must cover the panel.
+
+        Fullscreen applications hide the panel on every display size. On small
+        screens, a maximized/borderless application also hides it only when its
+        real geometry overlaps the panel, which avoids shrinking the app.
+        """
+        wid=self.active_window_id()
+        if not wid or wid == self.normalize_window_id(hex(int(self.winId()))):
+            return '', ''
+        states=self.window_states(wid)
+        if '_NET_WM_STATE_FULLSCREEN' in states:
+            return wid, 'fullscreen'
+        if shutil.which('wmctrl') is None:
+            return '', ''
+        try:
+            screen=QApplication.primaryScreen().geometry()
+            for line in subprocess.check_output(['wmctrl','-lGx'], text=True, stderr=subprocess.DEVNULL).splitlines():
+                parts=line.split(None,8)
+                if len(parts)<9 or self.normalize_window_id(parts[0]) != wid:
+                    continue
+                _window, desk, x, y, width, height, wmclass, _host, title=parts
+                if not self._window_is_task(wid, desk, wmclass, title):
+                    return '', ''
+                x=int(x); y=int(y); width=int(width); height=int(height)
+                fills_screen=(x <= screen.x()+2 and y <= screen.y()+2 and width >= int(screen.width()*0.98) and height >= int(screen.height()*0.98))
+                if fills_screen:
+                    return wid, 'borderless-fullscreen'
+                small_screen=screen.width() <= 1440 or screen.height() <= 900
+                overlaps_panel=(x < self.x()+self.width() and x+width > self.x() and y+height > self.y()-2)
+                maximized={'_NET_WM_STATE_MAXIMIZED_VERT','_NET_WM_STATE_MAXIMIZED_HORZ'}.issubset(states)
+                visually_maximized=width >= int(screen.width()*0.90) and height >= int(screen.height()*0.78)
+                if small_screen and overlaps_panel and (maximized or visually_maximized):
+                    return wid, 'small-screen-overlap'
+        except Exception:
+            pass
+        return '', ''
+
+    def active_fullscreen_window(self):
+        wid, reason=self.active_panel_blocker()
+        return wid if reason in ('fullscreen','borderless-fullscreen') else ''
+
+    def hide_for_active_window(self, wid, reason):
+        self._fullscreen_hidden=True; self._fullscreen_wid=self.normalize_window_id(wid); self._hidden_reason=reason
+        self.clear_screen_space(); self.hide()
+        registry_update('panel', {'hidden_for_window': True, 'hidden_reason': reason, 'covering_window': self._fullscreen_wid, 'version': VERSION})
+
+    def restore_after_covering_window(self):
+        self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''
+        self.show(); self.raise_()
+        self.reserve_screen_space(max(34, min(58, int(self.current_cfg.get('height',42)))))
+        registry_update('panel', {'hidden_for_window': False, 'version': VERSION})
+
+    def task_button_metrics(self, count):
+        available=max(120, self.width() - 420)
+        count=max(1, int(count or 1))
+        min_w=int(self.current_cfg.get('taskbar_min_button_width',46))
+        max_w=int(self.current_cfg.get('taskbar_max_button_width',175))
+        width=max(min_w, min(max_w, int(available / count) - 8))
+        compact = width < 92 or count >= 7
+        return width, compact
+
+    def enforce_window_space(self):
+        """Force-repair panel stacking without changing application geometry."""
+        blocking_wid, reason=self.active_panel_blocker()
+        if blocking_wid:
+            if not self._fullscreen_hidden or self._fullscreen_wid != blocking_wid or self._hidden_reason != reason:
+                self.hide_for_active_window(blocking_wid, reason)
+            return
+        if self._fullscreen_hidden:
+            self.restore_after_covering_window()
+    def toggle_menu(self):
+        # 0.9.7: direct in-process command with the resident menu daemon for normal response time.
+        if not menu_daemon_alive():
+            safe_popen(['eduka-menu','--daemon','--show'])
+            cmd = 'daemon-show'
+        else:
+            send_menu_command('toggle')
+            cmd = 'toggle'
+        registry_update('panel', {'last_menu_click': time.time(), 'menu_command': cmd})
+    def _context_menu_style(self, menu):
+        menu.setStyleSheet('QMenu{background:#ffffff;color:#1f2d2a;border:1px solid rgba(0,168,121,90);border-radius:12px;padding:6px;} QMenu::item{padding:8px 22px;border-radius:8px;} QMenu::item:selected{background:#00a879;color:white;} QMenu::separator{height:1px;background:#dbe8e3;margin:6px 8px;}')
+        return menu
+
+    def _app_for_executable(self, executable):
+        executable=os.path.basename(str(executable or '')).casefold()
+        for app in read_app_registry_fast() or load_apps(force=False):
+            app_exec=os.path.basename((app.get('exec','').split() or [''])[0]).casefold()
+            if app_exec == executable:
+                return app
+        return None
+
+    def launcher_context(self, kind, button, pos):
+        """Context menu for the permanent File Manager and Terminal launchers."""
+        m=self._context_menu_style(QMenu(self))
+        if kind == 'files':
+            executable='pcmanfm-qt'
+            m.addAction(get_icon('system-file-manager'), 'Open File Manager', lambda: launch_app(executable))
+            m.addAction(get_icon('user-home'), 'Open Home Folder', lambda: safe_popen([executable, str(Path.home())]))
+            m.addAction(get_icon('user-desktop'), 'Open Desktop Folder', lambda: safe_popen([executable, str(desktop_folder())]))
+        else:
+            executable='qterminal'
+            m.addAction(get_icon('utilities-terminal'), 'Open Terminal', lambda: launch_app(executable))
+            m.addAction(get_icon('window-new'), 'Open New Terminal Window', lambda: launch_app(executable))
+            m.addAction(get_icon('user-home'), 'Open Terminal in Home', lambda: safe_popen([executable, '--workdir', str(Path.home())]))
+        app=self._app_for_executable(executable)
+        if app:
+            m.addSeparator()
+            if is_favorite(app):
+                m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda a=app: unfavorite_app(a))
+            else:
+                m.addAction(get_icon('emblem-favorite'), 'Add to Favorites', lambda a=app: favorite_app(a))
+            if is_app_pinned(app):
+                m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda a=app: (unpin_app(a), self.update_tasks()))
+            else:
+                m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda a=app: (pin_app(a), self.update_tasks()))
+        self._show_context(m, button, pos)
+
+    def restart_panel(self):
+        safe_popen('pkill -x eduka-panel; sleep 0.2; eduka-panel', shell=True)
+
+    def panel_context(self, pos):
+        m=self._context_menu_style(QMenu(self))
+        m.addAction(get_icon('start-here'), 'Open Edukasaun Desktop', self.toggle_menu)
+        m.addAction(get_icon('preferences-system'), 'Eduka-Menu Settings', lambda: launch_app('eduka-menu-settings'))
+        m.addSeparator()
+        m.addAction(get_icon('view-refresh'), 'Reload Panel', lambda: (self.load_config(), self.update_tasks(), self.update_status_icons()))
+        m.addAction(get_icon('view-refresh'), 'Rebuild App Cache', lambda: safe_popen(['eduka-app-cache','--warm']))
+        m.addAction(get_icon('system-reboot'), 'Restart Eduka-Panel', self.restart_panel)
+        m.addSeparator()
+        style_menu=m.addMenu(get_icon('view-list-icons'), 'Taskbar Style')
+        for label in ['Icon and Text', 'Icon only', 'Text only']:
+            act=style_menu.addAction(label)
+            act.setCheckable(True); act.setChecked(self.current_cfg.get('taskbar_style','Icon and Text') == label)
+            act.triggered.connect(lambda checked=False, v=label: (save_panel_config({'taskbar_style': v}), self.load_config(), self.update_tasks()))
+        m.addSeparator()
+        m.addAction(get_icon('system-lock-screen'), 'Lock Screen', lambda: launch_app('eduka-session-action lock'))
+        leave=m.addMenu(get_icon('system-log-out'), 'Leave')
+        leave.addAction(get_icon('system-log-out'), 'Logout', lambda: launch_app('eduka-session-action logout'))
+        leave.addAction(get_icon('system-reboot'), 'Restart', lambda: launch_app('eduka-session-action restart'))
+        leave.addAction(get_icon('system-shutdown'), 'Shutdown', lambda: launch_app('eduka-session-action shutdown'))
+        self._context_menu_style(style_menu); self._context_menu_style(leave)
+        if isinstance(pos, QPoint):
+            gp = self.sender().mapToGlobal(pos) if hasattr(self.sender(), 'mapToGlobal') else self.mapToGlobal(pos)
+        else:
+            gp = QCursor.pos()
+        m.exec_(gp)
+
+    def start_context(self,pos):
+        self.panel_context(pos)
+    def update_clock(self): self.clock.setText(QDateTime.currentDateTime().toString('HH:mm:ss\ndd/MM/yyyy'))
+    def _window_type_is_desktop(self, wid):
+        return '_NET_WM_WINDOW_TYPE_DESKTOP' in self._window_property_text(wid, '_NET_WM_WINDOW_TYPE')
+
+    def _window_property_text(self, wid, *properties):
+        if not wid or shutil.which('xprop') is None:
+            return ''
+        try:
+            return subprocess.check_output(
+                ['xprop','-id',wid,*(properties or ('_NET_WM_STATE',))],
+                text=True, stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            return ''
+
+    def window_states(self, wid):
+        out=self._window_property_text(wid, '_NET_WM_STATE')
+        return set(re.findall(r'_NET_WM_STATE_[A-Z_]+', out))
+
+    def window_allowed_actions(self, wid):
+        out=self._window_property_text(wid, '_NET_WM_ALLOWED_ACTIONS')
+        return set(re.findall(r'_NET_WM_ACTION_[A-Z_]+', out))
+
+    def normalize_window_id(self, wid):
+        """Return one canonical X11 window id, ignoring wmctrl zero padding."""
+        value=str(wid or '').strip().lower()
+        if not value:
+            return ''
+        try:
+            numeric=int(value, 16 if value.startswith('0x') else 10)
+            return hex(numeric).lower() if numeric else ''
+        except (TypeError, ValueError):
+            return value
+
+    def _window_is_task(self, wid, desktop_id, wmclass, title):
+        tclean = (title or '').strip().casefold()
+        cclean = (wmclass or '').strip().casefold()
+        dclean = (desktop_id or '').strip().casefold()
+        low = (tclean+' '+cclean+' '+dclean).casefold()
+        norm_title = re.sub(r'[^a-z0-9]+', ' ', tclean).strip()
+        if not tclean and not cclean:
+            return False
+        # True desktop/background windows are filtered by EWMH type instead of
+        # hiding every window named "Desktop". This lets PCManFM-Qt file-manager
+        # windows opened inside the Desktop folder appear in the taskbar.
+        ewmh=self._window_property_text(wid, '_NET_WM_WINDOW_TYPE', '_NET_WM_STATE')
+        if '_NET_WM_WINDOW_TYPE_DESKTOP' in ewmh or '_NET_WM_STATE_SKIP_TASKBAR' in ewmh:
+            return False
+        non_task_types=(
+            '_NET_WM_WINDOW_TYPE_DOCK', '_NET_WM_WINDOW_TYPE_SPLASH',
+            '_NET_WM_WINDOW_TYPE_TOOLTIP', '_NET_WM_WINDOW_TYPE_NOTIFICATION',
+            '_NET_WM_WINDOW_TYPE_POPUP_MENU', '_NET_WM_WINDOW_TYPE_DROPDOWN_MENU',
+        )
+        if any(window_type in ewmh for window_type in non_task_types):
+            return False
+        settings_task=any(x in low for x in ['eduka-menu-settings','eduka menu settings'])
+        helper_words=['eduka-panel','eduka-menu','eduka-desktop','edukasaun desktop','lxqt-panel','eduka-about','qterminal dropdown','screen locker','xscreensaver','desktop manager','desktop icons']
+        if not settings_task and any(x in low for x in helper_words):
+            return False
+        if dclean == '-1' and any(x in low for x in ['desktop','panel','background']):
+            return False
+        # Filter only obvious background/desktop shell windows.
+        if norm_title in {'desktop background','desktop folder background','workspace'}:
+            return False
+        if tclean in {'panel','workspace'} or cclean in {'desktop','panel','workspace','desktop.desktop'}:
+            return False
+        return True
+
+    def active_window_id(self):
+        try:
+            out=subprocess.check_output(['xprop','-root','_NET_ACTIVE_WINDOW'], text=True, stderr=subprocess.DEVNULL)
+            m=re.search(r'window id #\s*(0x[0-9a-fA-F]+)', out)
+            if m:
+                return self.normalize_window_id(m.group(1))
+        except Exception:
+            pass
+        try:
+            out=subprocess.check_output(['xdotool','getactivewindow'], text=True, stderr=subprocess.DEVNULL).strip()
+            if out:
+                return self.normalize_window_id(out)
+        except Exception:
+            pass
+        return ''
+
+    def activate_or_minimize(self, wid):
+        wid=self.normalize_window_id(wid)
+        states=self.window_states(wid)
+        if '_NET_WM_STATE_HIDDEN' in states:
+            self.restore_window(wid)
+            return
+        aw=self.active_window_id()
+        panel_wid=self.normalize_window_id(hex(int(self.winId())))
+        # Some WMs briefly report the clicked panel as active before the slot
+        # runs. Use the last real application focus so a second task click can
+        # still minimize the window as expected.
+        if not aw or aw == panel_wid:
+            aw=self._last_active_wid
+        if aw and wid == self.normalize_window_id(aw):
+            self.minimize_window(wid)
+        else:
+            self.restore_window(wid)
+
+    def restore_window(self, wid):
+        """Restore and activate a minimized window through the window manager."""
+        wid=self.normalize_window_id(wid)
+        self._last_active_wid=wid
+        safe_popen(['wmctrl','-ia',wid])
+        if shutil.which('xdotool'):
+            QTimer.singleShot(80, lambda w=wid: safe_popen(['xdotool','windowactivate','--sync',w]))
+        QTimer.singleShot(140, self.update_tasks)
+
+    def set_window_icon_geometry(self, wid, button):
+        """Tell the WM where a minimized window belongs on the left taskbar."""
+        if shutil.which('xprop') is None or not button.isVisible():
+            return
+        try:
+            point=button.mapToGlobal(QPoint(0,0))
+            geometry=f'{point.x()}, {point.y()}, {button.width()}, {button.height()}'
+            if self.icon_geometry_cache.get(wid) == geometry:
+                return
+            self.icon_geometry_cache[wid]=geometry
+            safe_popen(['xprop','-id',wid,'-f','_NET_WM_ICON_GEOMETRY','32c','-set','_NET_WM_ICON_GEOMETRY',geometry])
+        except Exception:
+            pass
+
+
+    def update_tasks(self):
+        """Refresh pinned launchers and real active application windows.
+        0.9.7: pinned apps are merged with active windows. This prevents the
+        visual bug where pinning an open app looked like many copies were opened.
+        """
+        icon_theme_setup()
+        try:
+            out=subprocess.check_output(['wmctrl','-lx'], text=True, stderr=subprocess.DEVNULL).splitlines()
+        except Exception:
+            out=[]
+        windows=[]; active_pin_keys=set(); current=[]
+        for line in out:
+            parts=line.split(None,4)
+            if len(parts)<5: continue
+            wid, desktop_id, wmclass, host, title = self.normalize_window_id(parts[0]), parts[1], parts[2], parts[3], parts[4]
+            if not self._window_is_task(wid, desktop_id, wmclass, title):
+                continue
+            app=find_app_for_window(title, wmclass)
+            key=pin_app_key(app) if app else ''
+            if key: active_pin_keys.add(key)
+            windows.append((wid,title,wmclass,app,key))
+            current.append(wid)
+
+        # 1) Pinned launchers that are not already active.
+        pinned_keys=read_pinned_apps()
+        visible_pins=[]
+        for k in pinned_keys:
+            if k in active_pin_keys:
+                continue
+            app_for_pin=app_by_pin_key(k)
+            if app_for_pin and is_desktop_shell_app(app_for_pin):
+                continue
+            visible_pins.append(k)
+        total_task_items = len(visible_pins) + len(windows)
+        task_w, compact_tasks = self.task_button_metrics(total_task_items)
+        desired_buttons=[]
+        active_wid=self.active_window_id()
+        if active_wid and active_wid != self.normalize_window_id(hex(int(self.winId()))):
+            self._last_active_wid=active_wid
+        for key in list(self.pinned_buttons.keys()):
+            if key not in visible_pins:
+                self.pinned_buttons.pop(key).deleteLater()
+        for key in visible_pins:
+            app=app_by_pin_key(key)
+            if not app: continue
+            if key not in self.pinned_buttons:
+                btn=QPushButton(); btn.setObjectName('taskButton'); btn.setToolTip('Pinned: '+app.get('name','Application'))
+                btn.setAccessibleName('Pinned application '+app.get('name','Application'))
+                btn.clicked.connect(lambda _,a=app: launch_app(a.get('exec',''), a.get('name','')))
+                btn.setContextMenuPolicy(Qt.CustomContextMenu)
+                btn.customContextMenuRequested.connect(lambda pos,k=key,b=btn: self.pinned_context(k,b,pos))
+                btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                self.pinned_buttons[key]=btn; self.task_layout.addWidget(btn)
+            btn=self.pinned_buttons[key]
+            btn.setAccessibleName('Pinned application '+app.get('name','Application'))
+            style=self.current_cfg.get('taskbar_style','Icon and Text')
+            btn.setFixedWidth(task_w); btn.setMaximumWidth(task_w); btn.setMinimumWidth(task_w); btn.setFixedHeight(max(26, self.height()-10))
+            btn.setIcon(QIcon() if style=='Text only' else get_icon(app.get('icon'), 'application-x-executable'))
+            btn.setIconSize(QSize(int(self.current_cfg.get('taskbar_icon_size',22)), int(self.current_cfg.get('taskbar_icon_size',22))))
+            show_pin_text = style == 'Text only' or (style == 'Icon and Text' and not compact_tasks)
+            btn.setText((' '+app.get('name','Application')[:20]) if show_pin_text else '')
+            btn.setProperty('activeTask', False)
+            btn.setVisible(True)
+            desired_buttons.append(btn)
+
+        # 2) Real open windows.
+        for wid,title,wmclass,app,key in windows:
+            name=(app['name'] if app else title)[:28]
+            if wid not in self.buttons:
+                btn=QPushButton(); btn.setObjectName('taskButton'); btn.setToolTip(title); btn.clicked.connect(lambda _,w=wid: self.activate_or_minimize(w))
+                btn.setContextMenuPolicy(Qt.CustomContextMenu)
+                btn.customContextMenuRequested.connect(lambda pos,w=wid,b=btn: self.task_context(w,b,pos))
+                btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                self.buttons[wid]=btn; self.task_layout.addWidget(btn)
+            btn=self.buttons[wid]
+            btn._eduka_app = app
+            btn.setToolTip(title)
+            btn.setAccessibleName(name+' application window')
+            style=self.current_cfg.get('taskbar_style','Icon and Text')
+            btn.setFixedWidth(task_w); btn.setMaximumWidth(task_w); btn.setMinimumWidth(task_w); btn.setFixedHeight(max(26, self.height()-10))
+            btn.setIcon(QIcon() if style=='Text only' else get_icon(app.get('icon') if app else None, 'application-x-executable'))
+            btn.setIconSize(QSize(int(self.current_cfg.get('taskbar_icon_size',22)), int(self.current_cfg.get('taskbar_icon_size',22))))
+            btn.setText((' '+name) if style!='Icon only' and not compact_tasks else '')
+            is_active = bool(active_wid and self.normalize_window_id(wid) == self.normalize_window_id(active_wid))
+            if bool(btn.property('activeTask')) != is_active:
+                btn.setProperty('activeTask', is_active)
+                btn.style().unpolish(btn); btn.style().polish(btn)
+            btn.setVisible(True)
+            desired_buttons.append(btn)
+        for wid in list(self.buttons.keys()):
+            if wid not in current:
+                self.buttons.pop(wid).deleteLater()
+                self.icon_geometry_cache.pop(wid, None)
+        # Keep every pinned/minimized/active application at the left edge in a
+        # stable order. Deleted Qt widgets can otherwise leave temporary gaps.
+        for index, button in enumerate(desired_buttons):
+            self.task_layout.insertWidget(index, button)
+        self.task_layout.activate()
+        for wid, button in self.buttons.items():
+            if wid in current:
+                self.set_window_icon_geometry(wid, button)
+        registry_update('panel', {'task_count': len(current), 'tasks': current, 'pinned_count': len(read_pinned_apps()), 'visible_pinned_count': len(visible_pins), 'icon_theme': QIcon.themeName(), 'panel_locked_width': self.width(), 'version': VERSION})
+        QTimer.singleShot(120, self.enforce_window_space)
+
+    def pinned_context(self, key, button, pos):
+        app=app_by_pin_key(key)
+        m=self._context_menu_style(QMenu(self))
+        if app:
+            m.addAction(get_icon('system-run'),'Launch', lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+            m.addAction(get_icon('emblem-favorite'),'Add to Favorites', lambda a=app: favorite_app(a))
+        m.addAction(get_icon('list-remove'),'Unpin from Taskbar', lambda: (unpin_app(key), self.update_tasks()))
+        m.exec_(button.mapToGlobal(pos))
+
+    def minimize_window(self, wid):
+        wid=self.normalize_window_id(wid)
+        if shutil.which('xdotool'):
+            safe_popen(['xdotool','windowminimize',wid])
+        else:
+            safe_popen(['wmctrl','-ir',wid,'-b','add,hidden'])
+        if self._last_active_wid == wid:
+            self._last_active_wid=''
+        QTimer.singleShot(160, self.update_tasks)
+
+    def close_window(self, wid):
+        btn = self.buttons.pop(wid, None)
+        if btn:
+            btn.setEnabled(False); btn.hide(); QTimer.singleShot(1200, btn.deleteLater)
+        # Robust close for LXQt/Openbox: first ask the WM nicely, then xdotool,
+        # then refresh. This makes right-click Close feel like a normal OS taskbar.
+        safe_popen(['wmctrl','-ic',wid])
+        QTimer.singleShot(180, lambda w=wid: safe_popen(['xdotool','windowclose',w]) if shutil.which('xdotool') else None)
+        def fallback_pid_close(w=wid):
+            if not shutil.which('xprop'):
+                return
+            try:
+                out=subprocess.check_output(['xprop','-id',w,'_NET_WM_PID'], text=True, stderr=subprocess.DEVNULL)
+                m=re.search(r'=\s*(\d+)', out)
+                if m:
+                    safe_popen(['kill','-TERM',m.group(1)])
+            except Exception:
+                pass
+        QTimer.singleShot(900, fallback_pid_close)
+        QTimer.singleShot(1100, self.update_tasks)
+
+    def force_close_window(self, wid):
+        btn = self.buttons.pop(wid, None)
+        if btn:
+            btn.setEnabled(False); btn.hide(); QTimer.singleShot(500, btn.deleteLater)
+        if shutil.which('xprop'):
+            try:
+                out=subprocess.check_output(['xprop','-id',wid,'_NET_WM_PID'], text=True, stderr=subprocess.DEVNULL)
+                m=re.search(r'=\s*(\d+)', out)
+                if m:
+                    safe_popen(['kill','-KILL',m.group(1)])
+                    QTimer.singleShot(250, self.update_tasks)
+                    return
+            except Exception:
+                pass
+        self.close_window(wid)
+
+    def task_context(self, wid, button, pos):
+        app=getattr(button, '_eduka_app', None)
+        m=self._context_menu_style(QMenu(self))
+        states=self.window_states(wid)
+        allowed=self.window_allowed_actions(wid)
+        if app:
+            app_blob=' '.join([app.get('name',''), app.get('desktop_id',''), app.get('exec','')]).casefold()
+            if 'pcmanfm' in app_blob:
+                open_label='Open New File Manager Window'
+            elif 'qterminal' in app_blob:
+                open_label='Open New Terminal Window'
+            else:
+                open_label='Open New Window'
+            m.addAction(get_icon('window-new'), open_label, lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+            m.addSeparator()
+        activate_label='Restore / Activate' if '_NET_WM_STATE_HIDDEN' in states else 'Activate'
+        m.addAction(get_icon('go-up'),activate_label, lambda w=wid: self.restore_window(w))
+        minimize=m.addAction(get_icon('go-down'),'Minimize', lambda w=wid: self.minimize_window(w))
+        maximized={'_NET_WM_STATE_MAXIMIZED_VERT','_NET_WM_STATE_MAXIMIZED_HORZ'}.issubset(states)
+        maximize=m.addAction(get_icon('view-fullscreen'),'Restore' if maximized else 'Maximize', lambda w=wid: safe_popen(['wmctrl','-ir',w,'-b','toggle,maximized_vert,maximized_horz']))
+        if allowed:
+            minimize.setEnabled('_NET_WM_ACTION_MINIMIZE' in allowed)
+            maximize.setEnabled('_NET_WM_ACTION_MAXIMIZE_VERT' in allowed or '_NET_WM_ACTION_MAXIMIZE_HORZ' in allowed)
+        if app:
+            m.addSeparator()
+            if is_favorite(app):
+                m.addAction(get_icon('list-remove'),'Remove from Favorites', lambda a=app: unfavorite_app(a))
+            else:
+                m.addAction(get_icon('emblem-favorite'),'Add to Favorites', lambda a=app: favorite_app(a))
+            if is_app_pinned(app):
+                m.addAction(get_icon('list-remove'),'Unpin from Taskbar', lambda a=app: (unpin_app(a), self.update_tasks()))
+            else:
+                m.addAction(get_icon('list-add'),'Pin to Taskbar', lambda a=app: (pin_app(a), self.update_tasks()))
+        m.addSeparator()
+        close=m.addAction(get_icon('window-close'),'Close', lambda w=wid: self.close_window(w))
+        if allowed:
+            close.setEnabled('_NET_WM_ACTION_CLOSE' in allowed)
+        m.addAction(get_icon('process-stop'),'Force Close', lambda w=wid: self.force_close_window(w))
+        m.exec_(button.mapToGlobal(pos))
+
+    def _show_context(self, menu, widget, pos):
+        self._context_menu_style(menu)
+        try:
+            menu.exec_(widget.mapToGlobal(pos))
+        except Exception:
+            menu.exec_(QCursor.pos())
+
+    def network_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('network-wireless'), 'Show Networks', self.network_popup)
+        m.addAction(get_icon('preferences-system-network'), 'Network Settings', lambda: launch_app('nm-connection-editor'))
+        m.addAction(get_icon('view-refresh'), 'Refresh Network Status', self.update_status_icons)
+        self._show_context(m, self.net, pos)
+
+    def bluetooth_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('bluetooth'), 'Bluetooth Devices', self.bluetooth_popup)
+        m.addAction(get_icon('preferences-system-bluetooth'), 'Open Bluetooth Manager', lambda: launch_app('blueman-manager'))
+        self._show_context(m, self.bt, pos)
+
+    def printer_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('printer'), 'Printers', lambda: launch_app('system-config-printer'))
+        m.addAction(get_icon('view-refresh'), 'Refresh Printer Status', self.update_status_icons)
+        self._show_context(m, self.printer, pos)
+
+    def battery_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('battery'), 'Battery Information', self.battery_popup)
+        m.addAction(get_icon('preferences-system-power-management'), 'Power Settings', lambda: launch_app('lxqt-config-powermanagement'))
+        self._show_context(m, self.battery, pos)
+
+    def volume_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('audio-volume-high'), 'Volume Control', lambda: launch_app('pavucontrol-qt'))
+        m.addAction(get_icon('audio-volume-muted'), 'Mute / Unmute', lambda: (safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle']), self.update_status_icons()))
+        self._show_context(m, self.vol, pos)
+
+    def notification_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('preferences-system-notifications'), 'Notifications', self.notification_popup)
+        m.addAction(get_icon('preferences-system'), 'Notification Settings', lambda: launch_app('lxqt-config-notificationd'))
+        self._show_context(m, self.notif, pos)
+
+    def open_eus(self):
+        launch_app('/usr/local/bin/eduka-update-system --ui', 'Eduka Update System')
+
+    def eus_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'), 'Open Eduka Update System', self.open_eus)
+        count=max(0, int(self.eus_status.get('count',0) or 0))
+        status=m.addAction(f'{count} update{"s" if count != 1 else ""} available')
+        status.setEnabled(False)
+        self._show_context(m, self.eus, pos)
+
+    def update_eus_status(self):
+        """Consume the stable EUS v1 panel protocol without owning EUS state."""
+        data={}
+        try:
+            if EUS_PANEL_STATUS_PATH.is_file() and EUS_PANEL_STATUS_PATH.stat().st_size <= 65536:
+                candidate=json.loads(EUS_PANEL_STATUS_PATH.read_text(encoding='utf-8'))
+                if isinstance(candidate, dict) and int(candidate.get('version',0)) == 1:
+                    data=candidate
+        except Exception:
+            data={}
+        state=str(data.get('state','hidden')).strip().casefold()
+        try: count=max(0, int(data.get('count',0) or 0))
+        except (TypeError, ValueError): count=0
+        visible=state == 'available' and count > 0
+        self.eus_status=data if visible else {}
+        self.eus.setVisible(visible)
+        if not visible:
+            self.eus.setText('')
+            return
+        icon_path=EUS_ICON_DIR/'eus-update-available.png'
+        self.eus.setIcon(get_icon(str(icon_path),'system-software-update'))
+        message=str(data.get('message','')).strip() or f'{count} update{"s" if count != 1 else ""} available'
+        self.eus.setToolTip(message+' — Click to open Eduka Update System')
+        self.eus.setAccessibleName(f'Eduka Update System: {count} update{"s" if count != 1 else ""} available')
+        self.eus.setText(f' {count} Updates' if self.hearing_accessibility else '')
+
+    def language_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('preferences-desktop-locale'), 'Language Settings', lambda: launch_app('lxqt-config-locale'))
+        m.addAction(get_icon('input-keyboard'), 'Keyboard Settings', lambda: launch_app('lxqt-config-input'))
+        self._show_context(m, self.lang, pos)
+
+    def clock_context(self, pos):
+        m=QMenu(self)
+        m.addAction(get_icon('office-calendar'), 'Calendar', self.calendar_popup)
+        m.addAction(get_icon('preferences-system-time'), 'Date and Time Settings', lambda: launch_app('lxqt-admin-time'))
+        self._show_context(m, self.clock, pos)
+
+    def update_status_icons(self):
+        self.update_eus_status()
+        nicon='network-offline'; tip='Offline'
+        try:
+            out=subprocess.check_output(['nmcli','-t','-f','TYPE,STATE,CONNECTION','device'], text=True, stderr=subprocess.DEVNULL)
+            if any(l.startswith('wifi:connected') for l in out.splitlines()): nicon='network-wireless'; tip='Wi-Fi connected'
+            elif any(l.startswith('ethernet:connected') for l in out.splitlines()): nicon='network-wired'; tip='Ethernet connected'
+        except Exception: pass
+        self.net.setIcon(get_icon(nicon,'network-transmit-receive')); self.net.setToolTip(tip); self.net.setAccessibleName('Network: '+tip); self.net.setText(' '+tip.replace(' connected','') if self.hearing_accessibility else '')
+        info=self.battery_info(); self.battery.setVisible(info is not None)
+        if info:
+            cap=info['capacity']; status=info['status'].lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery')); self.battery.setText(f' {cap}%')
+        bt_exists=Path('/sys/class/bluetooth').exists() and any(Path('/sys/class/bluetooth').iterdir()); self.bt.setVisible(bt_exists); self.bt.setIcon(get_icon('bluetooth','preferences-system-bluetooth'))
+        has_pr=False
+        try: has_pr=bool(subprocess.check_output(['lpstat','-p'], text=True, stderr=subprocess.DEVNULL).strip())
+        except Exception: pass
+        self.printer.setVisible(has_pr); self.printer.setIcon(get_icon('printer','printer'))
+        muted=False; vol=''
+        try:
+            out=subprocess.check_output('pactl get-sink-mute @DEFAULT_SINK@; pactl get-sink-volume @DEFAULT_SINK@', shell=True, text=True, stderr=subprocess.DEVNULL)
+            muted='yes' in out.splitlines()[0].lower(); m=re.search(r'(\d+)%', out); vol=m.group(1) if m else ''
+        except Exception: pass
+        volume_status=('Muted' if muted else 'Volume')+(f': {vol}%' if vol else '')
+        self.vol.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high','audio-volume-medium')); self.vol.setToolTip(volume_status); self.vol.setAccessibleName(volume_status); self.vol.setText(' '+volume_status if self.hearing_accessibility else '')
+        self.notif.setText(' Alerts' if self.hearing_accessibility else ''); self.notif.setToolTip('Notifications and visual alerts'); self.notif.setAccessibleName('Notifications and visual alerts')
+    def wheelEvent(self,e):
+        if self.vol.underMouse(): self.change_volume(5 if e.angleDelta().y()>0 else -5)
+    def change_volume(self,delta): safe_popen(f"pactl set-sink-volume @DEFAULT_SINK@ {'+' if delta>0 else '-'}{abs(delta)}%", shell=True); self.update_status_icons()
+    def show_popup_above(self,popup,anchor):
+        popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
+    def volume_popup(self):
+        p=PopupFrame(self); p.resize(270,125); p.v.addWidget(QLabel('<b>Sound</b>')); slider=QSlider(Qt.Horizontal); slider.setRange(0,100)
+        try: out=subprocess.check_output('pactl get-sink-volume @DEFAULT_SINK@',shell=True,text=True); m=re.search(r'(\d+)%',out); slider.setValue(int(m.group(1)) if m else 50)
+        except Exception: slider.setValue(50)
+        slider.valueChanged.connect(lambda v: safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{v}%'])); p.v.addWidget(slider)
+        row=QHBoxLayout(); row.addWidget(QPushButton('Mute')); row.addWidget(QPushButton('Sound Settings')); row.itemAt(0).widget().clicked.connect(lambda: (safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle']), self.update_status_icons())); row.itemAt(1).widget().clicked.connect(lambda: launch_app('pavucontrol-qt')); p.v.addLayout(row); self.show_popup_above(p,self.vol)
+    def notification_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Notifications</b>')); p.v.addWidget(QLabel('No new notifications')); self.show_popup_above(p,self.notif)
+    def battery_info(self):
+        for b in Path('/sys/class/power_supply').glob('BAT*'):
+            try: return {'capacity':(b/'capacity').read_text().strip(),'status':(b/'status').read_text().strip()}
+            except Exception: pass
+        return None
+    def battery_popup(self): info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>')); p.v.addWidget(QLabel(f"{info['capacity']}% • {info['status']}" if info else 'No battery detected')); self.show_popup_above(p,self.battery)
+    def bluetooth_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Bluetooth</b>')); p.v.addWidget(QLabel('Use Bluetooth manager to pair devices.')); b=QPushButton('Open Bluetooth'); b.clicked.connect(lambda: launch_app('blueman-manager')); p.v.addWidget(b); self.show_popup_above(p,self.bt)
+    def network_popup(self):
+        p=PopupFrame(self); p.resize(310,230); p.v.addWidget(QLabel('<b>Network</b>'))
+        try:
+            out=subprocess.check_output(['nmcli','-t','-f','SSID,SIGNAL,SECURITY','device','wifi','list'], text=True, stderr=subprocess.DEVNULL); rows=[]
+            for r in out.splitlines():
+                parts=r.split(':');
+                if parts and parts[0] and parts[0] not in rows: rows.append(parts[0])
+            if not rows: p.v.addWidget(QLabel('No Wi-Fi networks found'))
+            for ssid in rows[:7]:
+                btn=QPushButton(ssid); btn.clicked.connect(lambda _,s=ssid: self.connect_wifi(s)); p.v.addWidget(btn)
+        except Exception: p.v.addWidget(QLabel('NetworkManager not available'))
+        self.show_popup_above(p,self.net)
+    def connect_wifi(self, ssid):
+        if not safe_popen(['nmcli','device','wifi','connect',ssid]): launch_app('nm-connection-editor')
+    def calendar_popup(self):
+        p=PopupFrame(self); cal=QCalendarWidget(); cal.setGridVisible(True); cal.setSelectedDate(QDate.currentDate()); cal.setStyleSheet('QCalendarWidget{background:#ffffff;color:#1f2d2a;border:0;} QCalendarWidget QWidget{background:#ffffff;color:#1f2d2a;} QCalendarWidget QToolButton{background:#eef7f3;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:8px;padding:5px;} QCalendarWidget QToolButton:hover{background:white;} QCalendarWidget QMenu{background:white;color:#1f2d2a;} QCalendarWidget QSpinBox{background:white;color:#1f2d2a;} QAbstractItemView{background:white;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;alternate-background-color:#f5fbf8;} QAbstractItemView:disabled{color:#879792;background:#ffffff;}'); p.v.addWidget(cal); self.show_popup_above(p,self.clock)
+
+if __name__ == '__main__':
+    app=QApplication(sys.argv); icon_theme_setup(); panel=EdukaPanel()
+    if not panel._fullscreen_hidden: panel.show()
+    registry_update('panel', {'pid': os.getpid(), 'running': True}); sys.exit(app.exec_())

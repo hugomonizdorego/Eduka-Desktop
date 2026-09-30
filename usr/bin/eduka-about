@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Reliable Qt About dialog for every Edukasaun Desktop component."""
+import sys
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QFrame, QHBoxLayout,
+    QLabel, QTextBrowser, QVBoxLayout,
+)
+
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup
+
+
+class AboutDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('About Edukasaun Desktop')
+        self.setWindowIcon(get_icon(START_ICON, 'help-about'))
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setModal(True)
+        self.resize(610, 500)
+        self.setMinimumSize(560, 440)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 16)
+        root.setSpacing(12)
+
+        header = QFrame()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(4, 2, 4, 2)
+        logo = QLabel()
+        logo.setPixmap(get_icon(START_ICON, 'start-here').pixmap(58, 58))
+        header_layout.addWidget(logo)
+        title = QLabel(
+            f"<b style='font-size:22px'>Edukasaun Desktop</b><br>"
+            f"<span style='font-size:15px;color:#008b68'>Suite Version {VERSION}</span>"
+        )
+        header_layout.addWidget(title, 1)
+        root.addWidget(header)
+
+        details = QTextBrowser()
+        details.setOpenExternalLinks(True)
+        details.setHtml(f"""
+        <h3>About Edukasaun Desktop Suite</h3>
+        <p><b>Visible system name:</b> Edukasaun Desktop<br>
+        <b>Internal launcher engine:</b> Eduka-Desktop<br>
+        <b>Release target:</b> Final Version 1.1 — November 2026</p>
+
+        <table cellspacing='4' cellpadding='5' width='100%'>
+          <tr><td><b>Eduka-Desktop</b></td><td>{VERSION}</td><td>Start menu and application launcher</td></tr>
+          <tr><td><b>Eduka-Panel</b></td><td>{VERSION}</td><td>Panel, taskbar and status controls</td></tr>
+          <tr><td><b>Eduka-Menu</b></td><td>{VERSION}</td><td>Launcher button and toggle bridge</td></tr>
+          <tr><td><b>Eduka-Menu-Settings</b></td><td>{VERSION}</td><td>Configuration center</td></tr>
+        </table>
+
+        <h3>Version {VERSION}</h3>
+        <ul>
+          <li>Grid/List applications and categories receive randomized soft-glow colors for each desktop session.</li>
+          <li>Opaque pastel hover rendering removes the black cursor-hover glitch.</li>
+          <li>Appearance offers Eduka-Default-Theme and an optional Liquid Glass theme for capable hardware.</li>
+          <li>Eduka-Menu Settings is a single, minimizable taskbar window instead of opening duplicate dialogs.</li>
+          <li>Eduka-Panel reads the Eduka Update System v1 status and shows its update-available icon.</li>
+          <li>Fullscreen and overlapping maximized applications on small screens take priority over Eduka-Panel.</li>
+          <li>Panel transparency remains 0.54 and desktop transparency remains 0.51.</li>
+          <li>The stable taskbar toggle and adaptive large-monitor Grid behavior are preserved.</li>
+        </ul>
+
+        <p><b>Developer:</b> Hugo Moniz do Rego<br>
+        <b>Organizations:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>
+        """)
+        root.addWidget(details, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self.setStyleSheet("""
+        QDialog{background:#f5fbf8;color:#1f2d2a;}
+        QFrame{background:transparent;border:0;}
+        QLabel{color:#1f2d2a;}
+        QTextBrowser{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:14px;padding:12px;}
+        QPushButton{background:#00a879;color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}
+        QPushButton:hover{background:#008f68;}
+        """)
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName('Eduka-About')
+    icon_theme_setup(force=True)
+    dialog = AboutDialog()
+    return dialog.exec_()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

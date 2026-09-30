@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Eduka Panel
+Exec=env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-panel
+OnlyShowIn=LXQt;LXDE;
+X-LXQt-NeedProcess=true

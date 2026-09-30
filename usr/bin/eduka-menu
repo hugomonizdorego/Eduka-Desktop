@@ -1,0 +1,764 @@
+#!/usr/bin/env python3
+import sys, os, time, json, fcntl, random
+from pathlib import Path
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import *
+
+DARK_QSS = """
+QMenu{background:#ffffff;color:#1f2d2a;border:1px solid rgba(0,168,121,80);border-radius:12px;padding:6px;}
+QMenu::item{padding:8px 18px;border-radius:8px;}
+QMenu::item:selected{background:#00a879;color:white;}
+QLineEdit{background:rgba(238,245,242,235);border:1px solid #dbe8e3;border-radius:18px;padding:10px 16px;font-size:14px;color:#1f2d2a;selection-background-color:#00a879;}
+QLineEdit:focus{border:1px solid #00a879;background:white;}
+QPushButton{background:rgba(238,245,242,220);border:0;border-radius:12px;padding:8px 13px;color:#1f2d2a;font-weight:700;}
+QPushButton:hover{background:white;border:1px solid rgba(0,168,121,85);}
+QPushButton:pressed{background:#dff5ed;}
+QToolButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(232,246,240,210));border:1px solid rgba(180,215,204,185);border-radius:14px;padding:8px;color:#1f2d2a;font-weight:700;}
+QToolButton:hover{background:white;border:1px solid #00a879;}
+QToolButton:pressed{background:#dff5ed;border-top:1px solid rgba(160,190,180,160);}
+QScrollArea{background:transparent;border:0;}
+QScrollBar:vertical{background:rgba(230,240,236,150);width:10px;border-radius:5px;margin:2px;}
+QScrollBar::handle:vertical{background:rgba(0,168,121,120);border-radius:5px;min-height:30px;}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}
+"""
+
+# One shared palette keeps each application glow aligned with the category
+# menu. The tint is intentionally bright; the widgets use it with low alpha so
+# wallpaper transparency stays clear and application names remain readable.
+CATEGORY_HIGHLIGHT_COLORS = [
+    (0, 168, 121), (18, 103, 216), (255, 150, 30), (210, 74, 190),
+    (42, 180, 220), (120, 190, 75), (240, 85, 85), (140, 110, 220),
+    (230, 190, 45), (50, 160, 135),
+]
+SESSION_HIGHLIGHT_COLORS = list(CATEGORY_HIGHLIGHT_COLORS)
+random.SystemRandom().shuffle(SESSION_HIGHLIGHT_COLORS)
+SESSION_COLOR_OFFSET = random.SystemRandom().randrange(len(SESSION_HIGHLIGHT_COLORS))
+
+def app_highlight_color(app, selected_category='All'):
+    names=[name for name, _icon, _needles in CATEGORY_ORDER if name != 'Favorites']
+    try:
+        category_index=names.index(selected_category)
+    except ValueError:
+        category_index=0
+    token='|'.join([selected_category, app.get('desktop_id',''), app.get('name',''), app.get('exec','')])
+    token_value=sum((pos + 1) * ord(char) for pos, char in enumerate(token))
+    index=(token_value + category_index * 3 + SESSION_COLOR_OFFSET) % len(SESSION_HIGHLIGHT_COLORS)
+    return SESSION_HIGHLIGHT_COLORS[index]
+
+class CategoryDelegate(QStyledItemDelegate):
+    """Lightweight custom painter for the category list.
+    Each category is drawn as a small rounded block. Hover uses a subtle
+    rainbow accent so text stays readable and the effect remains cheap for
+    low-RAM computers.
+    """
+    ACCENTS = [QColor(*rgb) for rgb in SESSION_HIGHLIGHT_COLORS]
+
+    def paint(self, painter, option, index):
+        painter.save()
+        rect = option.rect.adjusted(4, 3, -4, -3)
+        accent = self.ACCENTS[index.row() % len(self.ACCENTS)]
+        selected = bool(option.state & QStyle.State_Selected)
+        hover = bool(option.state & QStyle.State_MouseOver)
+        high_contrast = bool(option.widget.property('accessibilityMode')) if option.widget else False
+
+        if selected:
+            bg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            bg.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue()))
+            bg.setColorAt(1, QColor(max(0, accent.red()-20), max(0, accent.green()-20), max(0, accent.blue()-20)))
+            border = QColor(255, 255, 255, 90)
+            text_color = QColor(18, 35, 31) if accent.lightness() > 145 else QColor(255, 255, 255)
+        else:
+            bg = QColor(255, 255, 255, 252 if high_contrast else 160)
+            border = QColor(70, 93, 87, 220) if high_contrast else QColor(200, 226, 216, 150)
+            text_color = QColor(31, 45, 42)
+            if hover:
+                pale=QColor(255-int((255-accent.red())*0.34), 255-int((255-accent.green())*0.34), 255-int((255-accent.blue())*0.34))
+                bg = QLinearGradient(rect.topLeft(), rect.bottomRight())
+                bg.setColorAt(0, QColor(255, 255, 255))
+                bg.setColorAt(0.48, pale)
+                bg.setColorAt(1, QColor(247, 253, 250))
+                border = QColor(accent.red(), accent.green(), accent.blue(), 215)
+                text_color = QColor(20, 38, 34)
+
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(QBrush(bg))
+        painter.setPen(QPen(border, 1))
+        painter.drawRoundedRect(rect, 12, 12)
+
+        icon = index.data(Qt.DecorationRole)
+        icon_rect = QRect(rect.left() + 12, rect.top() + 8, 24, 24)
+        if isinstance(icon, QIcon):
+            icon.paint(painter, icon_rect, Qt.AlignCenter, QIcon.Normal, QIcon.On if selected else QIcon.Off)
+
+        text = str(index.data(Qt.DisplayRole) or '').strip()
+        painter.setPen(text_color)
+        font = painter.font(); font.setBold(True); font.setPointSize(max(9, font.pointSize()))
+        painter.setFont(font)
+        text_rect = QRect(icon_rect.right() + 12, rect.top(), rect.width() - 52, rect.height())
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(190, 46)
+
+class AppButton(QToolButton):
+    def __init__(self, app, accent=None, parent=None):
+        super().__init__(parent)
+        self.app = app
+        self._accent = accent or app_highlight_color(app)
+        self._high_contrast = False
+        self._orca_enabled = False
+        self.setText(app.get('name','Application'))
+        self.setIcon(get_icon(app.get('icon')))
+        self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.setToolTip(app.get('name','Application'))
+        self.setAccessibleName(app.get('name','Application'))
+        self.setAccessibleDescription('Open application')
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.setMinimumSize(126, 112)
+        self.setMaximumHeight(118)
+        self.clicked.connect(self.launch)
+        self.customContextMenuRequested.connect(self.ctx)
+        self._apply_style()
+
+    def _apply_style(self):
+        r,g,b=self._accent
+        lr,lg,lb=(255-int((255-value)*0.34) for value in (r,g,b))
+        pr,pg,pb=(255-int((255-value)*0.48) for value in (r,g,b))
+        base_alpha=255 if self._high_contrast else 230
+        base_end=250 if self._high_contrast else 210
+        base_border='rgba(55,75,70,235)' if self._high_contrast else 'rgba(180,215,204,185)'
+        self.setStyleSheet(f"""
+            QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{base_alpha}),stop:1 rgba(232,246,240,{base_end}));border:2px solid {base_border};border-radius:14px;padding:8px;color:#1f2d2a;font-weight:800;}}
+            QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});color:#10231e;font-weight:900;}}
+            QToolButton:pressed{{background:rgb({pr},{pg},{pb});border:2px solid rgb({r},{g},{b});color:#0b1d19;}}
+        """)
+
+    def set_accessibility_mode(self, high_contrast=False, orca_enabled=False):
+        self._high_contrast=bool(high_contrast)
+        self._orca_enabled=bool(orca_enabled)
+        self._apply_style()
+
+    def enterEvent(self, event):
+        # A short dwell prevents fast pointer movement from queueing a rush of
+        # Orca announcements while preserving normal pointer response.
+        if self._orca_enabled:
+            QTimer.singleShot(320, self._focus_for_orca)
+        super().enterEvent(event)
+
+    def _focus_for_orca(self):
+        if self._orca_enabled and self.underMouse():
+            self.setFocus(Qt.MouseFocusReason)
+
+    def launch(self):
+        win = self.window()
+        if getattr(win, '_launching', False):
+            return
+        win._launching = True
+        win.hide_menu(force=True)
+        QTimer.singleShot(35, lambda: (launch_app(self.app.get('exec',''), self.app.get('name','')), setattr(win, '_launching', False)))
+
+    def ctx(self, pos):
+        m = QMenu(self); m.setStyleSheet(DARK_QSS)
+        m.addAction(get_icon('system-run'), 'Open', self.launch)
+        if is_favorite(self.app):
+            m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
+        else:
+            m.addAction(get_icon('emblem-favorite'), 'Add to Favorites', lambda: self.window().add_favorite(self.app))
+        m.addAction(get_icon('user-desktop'), 'Add to Desktop', lambda: self.window().add_to_desktop(self.app))
+        if is_app_pinned(self.app):
+            m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda: unpin_app(self.app))
+        else:
+            m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: pin_app(self.app))
+        app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
+        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: launch_app('pcmanfm-qt ' + app_dir))
+        m.exec_(self.mapToGlobal(pos))
+
+class AppListItem(QFrame):
+    def __init__(self, app, accent=None, parent=None):
+        super().__init__(parent)
+        self.app = app
+        self._accent = accent or app_highlight_color(app)
+        self._high_contrast = False
+        self._orca_enabled = False
+        self.setObjectName('appListItem')
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(app.get('name','Application'))
+        self.setAccessibleDescription('Open application')
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.ctx)
+        lay = QHBoxLayout(self); lay.setContentsMargins(12,8,12,8); lay.setSpacing(12)
+        icon = QLabel(); icon.setPixmap(get_icon(app.get('icon')).pixmap(34,34)); icon.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(icon)
+        sub = app.get('generic','') or app.get('categories','').replace(';','  ')
+        text_box=QWidget(); text_box.setAttribute(Qt.WA_TransparentForMouseEvents)
+        text_lay=QVBoxLayout(text_box); text_lay.setContentsMargins(0,0,0,0); text_lay.setSpacing(1)
+        name=QLabel(app.get('name','Application')); name.setTextFormat(Qt.PlainText); name.setObjectName('appName'); name.setAttribute(Qt.WA_TransparentForMouseEvents); text_lay.addWidget(name)
+        details=QLabel(sub[:90]); details.setTextFormat(Qt.PlainText); details.setObjectName('appDetails'); details.setAttribute(Qt.WA_TransparentForMouseEvents); text_lay.addWidget(details)
+        lay.addWidget(text_box,1)
+        star=QLabel('★' if is_favorite(app) else ''); star.setStyleSheet('color:#d49a00;font-size:18px;min-width:18px;'); star.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(star)
+        self._apply_style()
+
+    def _apply_style(self):
+        r,g,b=self._accent
+        lr,lg,lb=(255-int((255-value)*0.34) for value in (r,g,b))
+        base_alpha=255 if self._high_contrast else 236
+        border='rgba(55,75,70,235)' if self._high_contrast else 'rgba(178,207,198,205)'
+        self.setStyleSheet(f"""
+            QFrame#appListItem{{border-radius:12px;background:rgba(255,255,255,{base_alpha});border:2px solid {border};}}
+            QFrame#appListItem QLabel#appName{{color:#10231e;font-weight:900;font-size:13px;}}
+            QFrame#appListItem QLabel#appDetails{{color:#40534e;font-size:11px;font-weight:600;}}
+            QFrame#appListItem:hover,QFrame#appListItem:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});}}
+            QFrame#appListItem:hover QLabel#appName,QFrame#appListItem:focus QLabel#appName{{color:#0b1d19;font-weight:900;}}
+            QFrame#appListItem:hover QLabel#appDetails,QFrame#appListItem:focus QLabel#appDetails{{color:#29413a;}}
+        """)
+
+    def set_accessibility_mode(self, high_contrast=False, orca_enabled=False):
+        self._high_contrast=bool(high_contrast)
+        self._orca_enabled=bool(orca_enabled)
+        self._apply_style()
+
+    def enterEvent(self, event):
+        if self._orca_enabled:
+            QTimer.singleShot(320, self._focus_for_orca)
+        super().enterEvent(event)
+
+    def _focus_for_orca(self):
+        if self._orca_enabled and self.underMouse():
+            self.setFocus(Qt.MouseFocusReason)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self._launch_once(); event.accept(); return
+        super().keyPressEvent(event)
+
+    def ctx(self, pos):
+        m = QMenu(self); m.setStyleSheet(DARK_QSS)
+        m.addAction(get_icon('system-run'), 'Open', self._launch_once)
+        if is_favorite(self.app):
+            m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
+        else:
+            m.addAction(get_icon('emblem-favorite'), 'Add to Favorites', lambda: self.window().add_favorite(self.app))
+        m.addAction(get_icon('user-desktop'), 'Add to Desktop', lambda: self.window().add_to_desktop(self.app))
+        if is_app_pinned(self.app):
+            m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda: (unpin_app(self.app), self.window().refresh_apps()))
+        else:
+            m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: (pin_app(self.app), self.window().refresh_apps()))
+        app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
+        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: launch_app('pcmanfm-qt ' + app_dir))
+        m.exec_(self.mapToGlobal(pos))
+
+    def _launch_once(self):
+        win = self.window()
+        if getattr(win, '_launching', False):
+            return
+        win._launching = True
+        registry_update('desktop', {'last_launch': self.app.get('name',''), 'launching': True, 'layout': 'List', 'version': VERSION})
+        win.hide_menu(force=True)
+        QTimer.singleShot(55, lambda: (launch_app(self.app.get('exec',''), self.app.get('name','')), setattr(win, '_launching', False), registry_update('desktop', {'launching': False})))
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._launch_once(); e.accept(); return
+        super().mouseReleaseEvent(e)
+
+class EdukaMenu(QWidget):
+    def __init__(self, daemon=False, start_visible=False):
+        super().__init__()
+        ensure_dirs(); icon_theme_setup()
+        self.daemon = daemon
+        self._last_cmd_id = None
+        self._last_toggle_time = 0.0
+        self._show_guard_until = 0.0
+        self._launching = False
+        self._loading_apps = False
+        self._built = False
+        self.setWindowTitle('Edukasaun Desktop')
+        self.setProperty('eduka_internal_role', 'Eduka-Desktop-Startmenu')
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.panel_cfg = read_panel_config()
+        self.desktop_cfg = read_desktop_config()
+        self.current_category = self.desktop_cfg.get('last_category','Edukasaun') or 'Edukasaun'
+        self.layout_mode = self.desktop_cfg.get('layout','Grid')
+        self.apps = read_app_registry_fast()
+        self.build()
+        self.position()
+        self.select_category(self.current_category)
+        self.refresh_apps()
+        self._built = True
+        if daemon:
+            MENU_DAEMON_PID.write_text(str(os.getpid()))
+            registry_update('menu', {'daemon_pid': os.getpid(), 'resident': True, 'apps_in_ram': len(self.apps), 'version': VERSION})
+            self.cmd_timer = QTimer(self); self.cmd_timer.timeout.connect(self.check_command); self.cmd_timer.start(35)
+        else:
+            (RUNTIME_DIR/'menu.pid').write_text(str(os.getpid()))
+            registry_update('menu', {'resident': False, 'pid': os.getpid(), 'version': VERSION})
+        QTimer.singleShot(120, self.ensure_apps_loaded)
+        if start_visible:
+            QTimer.singleShot(20, self.show_menu)
+
+    def category_entries(self):
+        # Favorites are shown only in the right-side Favorites panel, not as a duplicated category.
+        return [(name, icon, needles) for name, icon, needles in CATEGORY_ORDER if name != 'Favorites']
+
+    def build(self):
+        root=QVBoxLayout(self); root.setContentsMargins(8,8,8,8)
+        self.bg=QFrame(); self.bg.setObjectName('menuBg'); root.addWidget(self.bg)
+        self.apply_visual_settings(initial=True)
+        main=QVBoxLayout(self.bg); main.setContentsMargins(18,14,18,14); main.setSpacing(12)
+        hdr=QHBoxLayout(); hdr.setSpacing(12)
+        logo=QLabel(); logo.setPixmap(get_icon('/usr/share/Edukasaun/Logo/Edukasaun Logo.png', START_ICON).pixmap(42,42)); hdr.addWidget(logo)
+        title=QLabel(f"<b style='font-size:15px;color:#1f2d2a'>EDUKA-DESKTOP</b><br><span style='color:#60736e'>Edukasaun OS • Codename Kameli • {VERSION}</span>")
+        hdr.addWidget(title)
+        self.search=QLineEdit(); self.search.setPlaceholderText('Search applications...')
+        self.search.setAccessibleName('Search applications')
+        self.search.setAccessibleDescription('Type an application name or category')
+        self.search.setMinimumWidth(330)
+        self.refresh_timer=QTimer(self); self.refresh_timer.setSingleShot(True); self.refresh_timer.timeout.connect(self.refresh_apps)
+        self.search.textChanged.connect(lambda: self.refresh_timer.start(90)); hdr.addWidget(self.search,1)
+        self.grid_btn=QPushButton('▦ Grid'); self.list_btn=QPushButton('☷ List')
+        self.grid_btn.setAccessibleName('Grid layout'); self.list_btn.setAccessibleName('List layout')
+        self.grid_btn.clicked.connect(lambda: self.set_layout('Grid'))
+        self.list_btn.clicked.connect(lambda: self.set_layout('List'))
+        hdr.addWidget(self.grid_btn); hdr.addWidget(self.list_btn)
+        lock=QPushButton(); lock.setIcon(get_icon('system-lock-screen')); lock.setToolTip('Lock Screen'); lock.setAccessibleName('Lock Screen'); lock.clicked.connect(lambda: (self.hide_menu(force=True), launch_app('eduka-session-action lock'))); hdr.addWidget(lock)
+        close=QPushButton('✕'); close.setToolTip('Close'); close.setAccessibleName('Close Eduka-Desktop'); close.clicked.connect(lambda: self.hide_menu(force=True)); close.setFixedWidth(42); close.setStyleSheet('QPushButton{background:#e95454;color:white;border-radius:14px;font-weight:900;} QPushButton:hover{background:#ff6b6b;}')
+        hdr.addWidget(close); main.addLayout(hdr)
+        body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
+        self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setAccessibleName('Application categories')
+        self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True)
+        self._orca_hover_item=None
+        self.orca_hover_timer=QTimer(self); self.orca_hover_timer.setSingleShot(True); self.orca_hover_timer.timeout.connect(self._focus_hovered_category)
+        for name,icon,_ in self.category_entries():
+            self.cats.addItem(QListWidgetItem(get_icon(icon), '  '+name))
+        self.cats.currentItemChanged.connect(self.change_category); self.cats.itemEntered.connect(self.category_hovered); body.addWidget(self.cats)
+        center=QFrame(); center.setObjectName('contentCard'); center.setContextMenuPolicy(Qt.CustomContextMenu); center.customContextMenuRequested.connect(self.desktop_context); center_lay=QVBoxLayout(center); center_lay.setContentsMargins(14,12,14,12); center_lay.setSpacing(10)
+        self.category_title=QLabel('Applications'); self.category_title.setObjectName('sectionTitle'); center_lay.addWidget(self.category_title)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setAutoFillBackground(False); self.scroll.viewport().setAutoFillBackground(False); self.scroll.viewport().setAttribute(Qt.WA_TranslucentBackground); self.scroll.setContextMenuPolicy(Qt.CustomContextMenu); self.scroll.customContextMenuRequested.connect(self.desktop_context)
+        self.content=QWidget(); self.content.setAutoFillBackground(False); self.content.setAttribute(Qt.WA_TranslucentBackground); self.content.setStyleSheet('background:transparent;'); self.content.setContextMenuPolicy(Qt.CustomContextMenu); self.content.customContextMenuRequested.connect(self.desktop_context); self.stack_layout=QVBoxLayout(self.content); self.stack_layout.setAlignment(Qt.AlignTop); self.stack_layout.setContentsMargins(0,0,0,0); self.stack_layout.setSpacing(10)
+        self.scroll.setWidget(self.content); center_lay.addWidget(self.scroll,1); body.addWidget(center,1)
+        self.side=QFrame(); self.side.setObjectName('sideCard'); self.side.setFixedWidth(230)
+        self.side_layout=QVBoxLayout(self.side); self.side_layout.setContentsMargins(14,12,14,12); self.side_layout.setSpacing(10)
+        body.addWidget(self.side)
+        foot=QHBoxLayout(); foot.setSpacing(10); main.addLayout(foot)
+        for label, icon, cmd in [('File Manager','system-file-manager','pcmanfm-qt'),('QTerminal','utilities-terminal','qterminal'),('Lock Screen','system-lock-screen','eduka-session-action lock'),('Logout','system-log-out','eduka-session-action logout'),('Restart','system-reboot','eduka-session-action restart'),('Shutdown','system-shutdown','eduka-session-action shutdown'),('About','help-about','eduka-about')]:
+            b=QPushButton(' '+label); b.setIcon(get_icon(icon))
+            b.setAccessibleName(label); b.setFocusPolicy(Qt.StrongFocus)
+            if label == 'About':
+                b.clicked.connect(self.open_about)
+            else:
+                b.clicked.connect(lambda _,c=cmd: (self.hide_menu(force=True), launch_app(c)))
+            foot.addWidget(b)
+        self.base_qss=DARK_QSS + """
+            QFrame#contentCard{background:transparent;border:1px solid rgba(220,235,230,58);border-radius:18px;}
+            QFrame#sideCard{background:rgba(255,255,255,108);border:1px solid rgba(220,235,230,150);border-radius:18px;}
+            QScrollArea,QScrollArea>QWidget>QWidget{background:transparent;border:0;} QToolButton,QPushButton{border-bottom:1px solid rgba(160,190,180,80);}
+            QListWidget#categoryList{border:1px solid rgba(205,228,220,210);background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(247,253,250,215),stop:1 rgba(225,242,235,190));border-radius:16px;outline:0;padding:6px;color:#1f2d2a;}
+            QLabel#sectionTitle{color:#1f2d2a;font-size:14px;font-weight:800;}
+            QLabel{color:#1f2d2a;}
+        """
+        self.setStyleSheet(self.base_qss)
+        self.apply_visual_settings()
+        for button in self.findChildren(QPushButton):
+            button.installEventFilter(self)
+
+    def apply_visual_settings(self, initial=False):
+        dcfg = getattr(self, 'desktop_cfg', read_desktop_config())
+        accessibility=bool(dcfg.get('visual_accessibility', False))
+        liquid=normalize_theme_style(dcfg.get('theme_style')) == THEME_LIQUID
+        alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
+        if accessibility:
+            alpha=0.98
+        bg_alpha = int(alpha * 255)
+        if liquid and not accessibility:
+            glass_alpha=max(150, bg_alpha)
+            self.bg.setStyleSheet(f'''QFrame#menuBg{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{min(242,glass_alpha+46)}),stop:0.22 rgba(221,250,247,{glass_alpha}),stop:0.54 rgba(235,226,255,{max(130,glass_alpha-20)}),stop:0.78 rgba(205,241,255,{glass_alpha}),stop:1 rgba(255,255,255,{min(235,glass_alpha+32)}));border:2px solid rgba(255,255,255,225);border-bottom:2px solid rgba(111,151,180,150);border-radius:28px;}} QLabel{{color:#152b31;}}''')
+        else:
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,253,250,{bg_alpha});border:1px solid rgba(220,235,230,230);border-radius:22px;}} QLabel{{color:#1f2d2a;}}')
+        if hasattr(self, 'cats'):
+            self.cats.setProperty('accessibilityMode', accessibility)
+            self.cats.viewport().update()
+        if hasattr(self, 'base_qss'):
+            accessibility_qss = """
+                QFrame#contentCard,QFrame#sideCard{background:rgba(255,255,255,252);border:2px solid #344d47;}
+                QListWidget#categoryList{background:rgba(255,255,255,255);border:2px solid #344d47;}
+                QLineEdit,QPushButton{background:white;color:#101817;border:2px solid #344d47;font-size:13px;}
+                QLabel#sectionTitle{color:#101817;font-size:16px;font-weight:900;}
+            """ if accessibility else ''
+            liquid_qss = """
+                QFrame#contentCard{background:rgba(255,255,255,44);border:1px solid rgba(255,255,255,170);border-radius:22px;}
+                QFrame#sideCard{background:rgba(255,255,255,118);border:1px solid rgba(255,255,255,205);border-radius:22px;}
+                QListWidget#categoryList{background:rgba(248,252,255,150);border:1px solid rgba(255,255,255,220);border-radius:20px;}
+                QLineEdit{background:rgba(255,255,255,205);border:1px solid rgba(255,255,255,235);}
+                QPushButton{background:rgba(255,255,255,155);border:1px solid rgba(255,255,255,205);}
+            """ if liquid and not accessibility else ''
+            self.setStyleSheet(self.base_qss + liquid_qss + accessibility_qss)
+        self.apply_blur_hint(liquid and not accessibility)
+        if (liquid and not accessibility) or (dcfg.get('enable_shadows', False) and not dcfg.get('low_resource_mode', True)):
+            if self.bg.graphicsEffect() is None:
+                sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(34 if liquid else 18); sh.setOffset(0,8 if liquid else 6); sh.setColor(QColor(37,61,83,65 if liquid else 40)); self.bg.setGraphicsEffect(sh)
+        else:
+            self.bg.setGraphicsEffect(None)
+
+    def apply_blur_hint(self, enabled):
+        """Ask compatible X11 compositors for background blur; others use the safe Qt fallback."""
+        if shutil.which('xprop') is None:
+            return
+        try:
+            wid=str(int(self.winId()))
+            if enabled:
+                safe_popen(['xprop','-id',wid,'-f','_KDE_NET_WM_BLUR_BEHIND_REGION','32c','-set','_KDE_NET_WM_BLUR_BEHIND_REGION','0'])
+            else:
+                safe_popen(['xprop','-id',wid,'-remove','_KDE_NET_WM_BLUR_BEHIND_REGION'])
+        except Exception:
+            pass
+
+    def category_hovered(self, item):
+        if bool(getattr(self, 'desktop_cfg', {}).get('orca_enabled', False)):
+            self._orca_hover_item=item
+            self.orca_hover_timer.start(320)
+
+    def _focus_hovered_category(self):
+        item=self._orca_hover_item
+        point=self.cats.viewport().mapFromGlobal(QCursor.pos())
+        if item is not None and self.cats.itemAt(point) is item:
+            self.cats.setFocus(Qt.MouseFocusReason)
+            self.cats.setCurrentItem(item)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Enter and isinstance(obj, QAbstractButton):
+            if bool(getattr(self, 'desktop_cfg', {}).get('orca_enabled', False)):
+                QTimer.singleShot(320, lambda w=obj: w.setFocus(Qt.MouseFocusReason) if w.underMouse() else None)
+        return super().eventFilter(obj, event)
+
+    def open_about(self, checked=False):
+        """Open the suite About dialog independently from update utilities."""
+        self.hide_menu(force=True)
+        if not launch_app('eduka-about'):
+            QMessageBox.information(
+                None,
+                'About Edukasaun Desktop',
+                f'Edukasaun Desktop Suite {VERSION}\n\n'
+                'Eduka-Desktop, Eduka-Panel, Eduka-Menu and '
+                'Eduka-Menu-Settings\n\nDeveloper: Hugo Moniz do Rego'
+            )
+
+    def position(self):
+        screen=QApplication.primaryScreen().availableGeometry(); panel=read_panel_config(); dcfg=read_desktop_config(); ph=int(panel.get('height',42))+18
+        wp=max(94, min(99, int(dcfg.get('width_percent',98)))) / 100.0
+        hp=max(78, min(95, int(dcfg.get('height_percent',92)))) / 100.0
+        available_h = max(520, screen.height() - ph - 14)
+        desired_h = int(screen.height() * hp)
+        self.resize(int(screen.width()*wp), min(available_h, max(560, desired_h)))
+        x = screen.x()+int((screen.width()-self.width())/2)
+        y = screen.y()+8
+        self.move(x, y)
+
+    def rebuild_categories(self, preserve=True):
+        current = self.current_category if preserve else 'Edukasaun'
+        self.cats.blockSignals(True)
+        self.cats.clear()
+        for name, icon, _ in self.category_entries():
+            self.cats.addItem(QListWidgetItem(get_icon(icon), '  '+name))
+        names = [self.cats.item(i).text().strip() for i in range(self.cats.count())]
+        if current not in names:
+            current = self.desktop_cfg.get('last_category','Edukasaun') if self.desktop_cfg.get('last_category','Edukasaun') in names else 'Edukasaun'
+        if current not in names and names:
+            current = names[0]
+        for i in range(self.cats.count()):
+            if self.cats.item(i).text().strip() == current:
+                self.cats.setCurrentRow(i); break
+        self.cats.blockSignals(False)
+        self.current_category = current
+
+    def add_favorite(self, app):
+        key=pin_app_key(app)
+        favs=read_favorites()
+        if key and key not in favs and len(favs) >= MAX_FAVORITES:
+            QMessageBox.information(self, 'Favorites limit', 'Favorites are limited to 5 selected apps only. Remove one favorite before adding another app.')
+            return
+        if not favorite_app(app):
+            QMessageBox.information(self, 'Favorites limit', 'Favorites are limited to 5 selected apps only. Remove one favorite before adding another app.')
+            return
+        self.refresh_side()
+        self.rebuild_categories(preserve=True)
+        QTimer.singleShot(10, self.refresh_apps)
+
+
+    def select_category(self, cat):
+        for i in range(self.cats.count()):
+            if self.cats.item(i).text().strip()==cat:
+                self.cats.setCurrentRow(i); return
+        self.cats.setCurrentRow(0)
+
+    def change_category(self):
+        if not getattr(self, '_built', False): return
+        item=self.cats.currentItem(); self.current_category=item.text().strip() if item else 'All'
+        self.desktop_cfg['last_category']=self.current_category
+        registry_update('desktop', {'last_category': self.current_category})
+        self.refresh_timer.start(35)
+
+    def set_layout(self, mode):
+        if mode == self.layout_mode:
+            return
+        self.layout_mode=mode; self.desktop_cfg['layout']=mode; save_desktop_config(self.desktop_cfg)
+        self.refresh_timer.start(35)
+
+    def clear_apps(self):
+        while self.stack_layout.count():
+            item=self.stack_layout.takeAt(0)
+            w=item.widget(); lay=item.layout()
+            if w:
+                w.setParent(None); w.deleteLater()
+            elif lay:
+                while lay.count():
+                    child=lay.takeAt(0)
+                    if child.widget(): child.widget().deleteLater()
+                lay.deleteLater()
+
+    def clear_layout(self, lay):
+        while lay.count():
+            item=lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            elif item.layout(): self.clear_layout(item.layout())
+
+    def refresh_side(self):
+        self.clear_layout(self.side_layout)
+        fav_title=QLabel('★  Favorites')
+        fav_title.setStyleSheet('font-weight:900;color:#d49a00;font-size:14px;')
+        self.side_layout.addWidget(fav_title)
+        apps_by_key={}
+        for a in getattr(self, 'apps', []) or []:
+            apps_by_key[pin_app_key(a)] = a
+            if a.get('path'): apps_by_key[a.get('path')] = a
+            if a.get('desktop_id'): apps_by_key[a.get('desktop_id')] = a
+            if a.get('name'): apps_by_key[a.get('name')] = a
+        fav_apps=[apps_by_key.get(k) or app_by_pin_key(k) for k in read_favorites()]
+        fav_apps=[a for a in fav_apps if a]
+        if not fav_apps:
+            lab=QLabel('No favorites yet. Right-click an app and choose Add to Favorites.')
+            lab.setWordWrap(True); lab.setStyleSheet('color:#60736e;')
+            self.side_layout.addWidget(lab)
+        for app in fav_apps[:MAX_FAVORITES]:
+            btn=QPushButton(' '+app.get('name','Application')[:23])
+            btn.setIcon(get_icon(app.get('icon')))
+            btn.setAccessibleName(app.get('name','Application')); btn.setFocusPolicy(Qt.StrongFocus); btn.installEventFilter(self)
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.clicked.connect(lambda _,a=app: (self.hide_menu(force=True), launch_app(a.get('exec',''), a.get('name',''))))
+            btn.customContextMenuRequested.connect(lambda pos,a=app,b=btn: self.favorite_context(a,b,pos))
+            self.side_layout.addWidget(btn)
+        if len(fav_apps) > MAX_FAVORITES:
+            note=QLabel('Only 5 favorites are shown to keep the launcher clean.')
+            note.setWordWrap(True); note.setStyleSheet('color:#60736e;font-size:11px;')
+            self.side_layout.addWidget(note)
+
+        # Keep System Information fixed at the bottom of the right column.
+        self.side_layout.addStretch(1)
+        info_title=QLabel('ⓘ  System Information')
+        info_title.setStyleSheet('font-weight:900;color:#1f2d2a;font-size:14px;margin-top:8px;')
+        self.side_layout.addWidget(info_title)
+        di=distro_info()
+        info=QFrame(); info.setObjectName('sysInfoCard')
+        grid=QGridLayout(info); grid.setContentsMargins(10,8,10,8); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(7)
+        rows=[('OS:', di['os']), ('Version:', di['version']), ('Codename:', di['codename']), ('Base OS:', di['base']), ('Desktop:', di['desktop'])]
+        for r,(k,v) in enumerate(rows):
+            lk=QLabel(k); lk.setStyleSheet('color:#536a64;font-weight:800;')
+            lv=QLabel(str(v)); lv.setWordWrap(True); lv.setStyleSheet('color:#1f2d2a;font-weight:650;')
+            grid.addWidget(lk,r,0,Qt.AlignTop); grid.addWidget(lv,r,1)
+        info.setStyleSheet('QFrame#sysInfoCard{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,225),stop:1 rgba(236,248,242,205));border:1px solid rgba(200,226,216,220);border-radius:14px;}')
+        self.side_layout.addWidget(info)
+
+    def desktop_context(self, pos):
+        """Context menu for empty Eduka-Desktop launcher space."""
+        m=QMenu(self); m.setStyleSheet(DARK_QSS)
+        m.addAction(get_icon('view-app-grid'), 'Arrange Applications A-Z', lambda: (self.search.clear(), self.rebuild_categories(preserve=True), self.refresh_apps()))
+        m.addAction(get_icon('view-grid'), 'Grid View', lambda: self.set_layout('Grid'))
+        m.addAction(get_icon('view-list-details'), 'List View', lambda: self.set_layout('List'))
+        m.addSeparator()
+        m.addAction(get_icon('view-refresh'), 'Refresh Applications', lambda: (setattr(self, 'apps', load_apps(force=True)), self.rebuild_categories(preserve=True), self.refresh_apps()))
+        m.addAction(get_icon('preferences-system'), 'Eduka-Menu Settings', lambda: launch_app('eduka-menu-settings'))
+        try:
+            sender = self.sender()
+            m.exec_(sender.mapToGlobal(pos) if hasattr(sender, 'mapToGlobal') else self.mapToGlobal(pos))
+        except Exception:
+            m.exec_(QCursor.pos())
+
+    def add_to_desktop(self, app):
+        ok, msg = add_app_to_desktop(app)
+        if ok:
+            QMessageBox.information(self, 'Add to Desktop', f"Shortcut added to Desktop:\n{msg}")
+        else:
+            QMessageBox.warning(self, 'Add to Desktop', f"Could not add shortcut:\n{msg}")
+
+    def favorite_context(self, app, button, pos):
+        m=QMenu(self); m.setStyleSheet(DARK_QSS)
+        m.addAction(get_icon('system-run'), 'Open', lambda a=app: (self.hide_menu(force=True), launch_app(a.get('exec',''), a.get('name',''))))
+        m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda a=app: self.remove_favorite(a))
+        if is_app_pinned(app):
+            m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda a=app: unpin_app(a))
+        else:
+            m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda a=app: pin_app(a))
+        m.exec_(button.mapToGlobal(pos))
+
+    def remove_favorite(self, app):
+        unfavorite_app(app)
+        self.refresh_side()
+        self.rebuild_categories(preserve=True)
+        QTimer.singleShot(10, self.refresh_apps)
+        registry_update('desktop', {'favorites_changed': True, 'favorite_removed': app.get('name',''), 'version': VERSION})
+
+    def refresh_apps(self):
+        if self._loading_apps and not self.apps:
+            self.clear_apps(); lab=QLabel('Loading applications...'); lab.setAlignment(Qt.AlignCenter); lab.setStyleSheet('color:#60736e;font-size:16px;padding:40px;'); self.stack_layout.addWidget(lab); return
+        self.clear_apps()
+        self.category_title.setText(self.current_category)
+        self.grid_btn.setText('✓ Grid' if self.layout_mode=='Grid' else '▦ Grid')
+        self.list_btn.setText('✓ List' if self.layout_mode=='List' else '☷ List')
+        apps=filter_apps(self.apps, self.current_category, self.search.text() if hasattr(self,'search') else '')
+        high_contrast=bool(self.desktop_cfg.get('visual_accessibility', False))
+        orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
+        registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
+        if not apps:
+            empty=QLabel('No applications found' if not self._loading_apps else 'Loading applications...')
+            empty.setAlignment(Qt.AlignCenter); empty.setStyleSheet('color:#60736e;font-size:16px;padding:40px;')
+            self.stack_layout.addWidget(empty); self.refresh_side(); return
+        if self.layout_mode=='Grid':
+            grid=QGridLayout(); grid.setContentsMargins(0,0,0,0); self.stack_layout.addLayout(grid)
+            width=max(420, self.scroll.viewport().width() or self.scroll.width() or 700)
+            large_grid = width >= 1180
+            if large_grid:
+                # Large monitors gain extra columns and evenly use the available
+                # width. Normal laptop/small-screen spacing remains unchanged.
+                cell_w=142
+                cols=max(1, min(16, max(7, width//145), len(apps)))
+                grid.setHorizontalSpacing(10); grid.setVerticalSpacing(12); grid.setAlignment(Qt.AlignTop)
+                for column in range(cols):
+                    grid.setColumnMinimumWidth(column, cell_w)
+                    grid.setColumnStretch(column, 1)
+            else:
+                cell_w=136 if width < 950 else 148
+                cols=max(3, min(7, width//cell_w))
+                grid.setSpacing(12); grid.setAlignment(Qt.AlignTop|Qt.AlignLeft)
+            for i,app in enumerate(apps):
+                accent=app_highlight_color(app, self.current_category)
+                b=AppButton(app, accent); b.setIconSize(QSize(48,48)); b.setFixedSize(cell_w-10,112)
+                b.set_accessibility_mode(high_contrast, orca_enabled)
+                grid.addWidget(b,i//cols,i%cols, Qt.AlignTop|Qt.AlignHCenter if large_grid else Qt.AlignTop|Qt.AlignLeft)
+        else:
+            for app in apps:
+                accent=app_highlight_color(app, self.current_category)
+                item=AppListItem(app, accent); item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
+        self.stack_layout.addStretch(); self.refresh_side()
+
+    def ensure_apps_loaded(self):
+        if self._loading_apps: return
+        self._loading_apps = True
+        if not self.apps: self.refresh_apps()
+        try:
+            apps = load_apps(force=False)
+            if apps:
+                self.apps = apps
+                self.rebuild_categories(preserve=True)
+        except Exception: pass
+        self._loading_apps = False
+        self.refresh_apps()
+        registry_update('apps', {'loaded_in_menu': len(self.apps), 'version': VERSION})
+
+    def resizeEvent(self,e):
+        super().resizeEvent(e)
+        if getattr(self,'layout_mode','Grid')=='Grid' and hasattr(self,'refresh_timer'):
+            self.refresh_timer.start(150)
+
+    def show_menu(self):
+        now=time.time()
+        if self.isVisible() and now - self._last_toggle_time < 0.20: return
+        self._last_toggle_time=now
+        icon_theme_setup()
+        self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
+        self._show_guard_until = time.time() + 0.35
+        self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow()
+        QTimer.singleShot(30, self.raise_)
+        (RUNTIME_DIR/'menu.pid').write_text(str(os.getpid()))
+        registry_update('menu', {'visible': True, 'show_time': now, 'internal_name': 'Eduka-Desktop', 'version': VERSION})
+        if not self.apps: QTimer.singleShot(10, self.ensure_apps_loaded)
+
+    def hide_menu(self, force=False):
+        now=time.time()
+        if (not self.isVisible()) and not force: return
+        self._last_toggle_time=now
+        registry_update('menu', {'visible': False, 'hide_time': now, 'internal_name': 'Eduka-Desktop', 'version': VERSION})
+        self.hide()
+        try: (RUNTIME_DIR/'menu.pid').unlink(missing_ok=True)
+        except Exception: pass
+        if not self.daemon: self.close()
+
+    def toggle_menu(self):
+        now=time.time()
+        if now - self._last_toggle_time < 0.16: return
+        if self.isVisible(): self.hide_menu(force=True)
+        else: self.show_menu()
+
+    def check_command(self):
+        try:
+            data=json.loads(MENU_COMMAND_PATH.read_text(encoding='utf-8'))
+            cmd_id=data.get('id')
+            if cmd_id == self._last_cmd_id: return
+            self._last_cmd_id=cmd_id
+            action=data.get('action','toggle')
+            if action in ('show','force-show'): self.show_menu()
+            elif action in ('hide','force-hide'): self.hide_menu(force=True)
+            elif action == 'reload-style':
+                self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config(); self.position(); self.apply_visual_settings(); self.refresh_apps()
+            elif action == 'reload-apps':
+                self.apps=load_apps(force=True); self.rebuild_categories(preserve=True); self.refresh_apps()
+            else: self.toggle_menu()
+        except Exception: pass
+
+    def closeEvent(self,e):
+        try: (RUNTIME_DIR/'menu.pid').unlink(missing_ok=True)
+        except Exception: pass
+        if self.daemon:
+            e.ignore(); self.hide_menu(force=True)
+        else: super().closeEvent(e)
+
+    def maybe_hide_after_deactivate(self):
+        if not self.isVisible() or self._launching: return
+        if time.time() < self._show_guard_until: return
+        if QApplication.activePopupWidget() is not None: return
+        if QApplication.activeWindow() is self: return
+        self.hide_menu(force=True)
+
+    def changeEvent(self,e):
+        if e.type() == QEvent.ActivationChange and self.isVisible() and not self._launching:
+            QTimer.singleShot(140, self.maybe_hide_after_deactivate)
+        return super().changeEvent(e)
+
+def start_daemon(start_visible=False):
+    ensure_dirs()
+    lock_file = open(MENU_DAEMON_LOCK, 'w')
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        send_menu_command('show' if start_visible else 'toggle')
+        return 0
+    app=QApplication(sys.argv); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
+    ret=app.exec_()
+    try: fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except Exception: pass
+    return ret
+
+if __name__ == '__main__':
+    ensure_dirs()
+    if '--daemon' in sys.argv:
+        sys.exit(start_daemon(start_visible='--show' in sys.argv))
+    action = 'show' if '--show' in sys.argv else ('hide' if '--hide' in sys.argv else 'toggle')
+    if not menu_daemon_alive():
+        safe_popen(['eduka-menu','--daemon','--show'] if action != 'hide' else ['eduka-menu','--daemon'])
+    else:
+        send_menu_command(action)
+    sys.exit(0)

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Edukasaun Desktop
+Exec=edukasaun-desktop-menu-open
+Icon=/usr/share/edukasaun-desktop/assets/StartMenu.png
+Categories=System;Utility;
+NoDisplay=true

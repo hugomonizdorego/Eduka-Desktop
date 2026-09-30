@@ -1,0 +1,97 @@
+Edukasaun Desktop Suite 0.9.10
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.10.
+- Randomized category and Grid/List application accent assignments for each desktop session while keeping one shared bright palette.
+- Replaced translucent radial hover rendering with fully rendered pastel linear highlights to remove the black cursor-hover glitch.
+- Replaced the retired System Default and Light Edukasaun choices with Eduka-Default-Theme and Liquid Glass.
+- Added an LXQt-native Liquid Glass implementation with translucent tint layers, bright rims, deeper shadows and a compatible X11 compositor blur hint.
+- Added a hardware warning and confirmation; Liquid Glass is blocked below 4 GB RAM or two logical CPU threads and safely falls back when compositor blur is unavailable.
+- Made Eduka-Menu Settings a normal minimizable taskbar window with file-lock and local-socket single-instance activation.
+- Allowed an existing minimized Settings window to restore and activate when its launcher is clicked again instead of opening another dialog.
+- Integrated the Eduka Update System v1 panel-status protocol, update count, official update-available icon and EUS launcher action.
+- Replaced application resizing with panel-side force repair: fullscreen apps always hide the panel, and maximized/borderless apps that overlap it on small screens also take priority.
+- Preserved accessibility controls, Orca pacing, transparent List readability, taskbar minimize/restore, About, context menus and adaptive large-monitor Grid behavior.
+- Development continues toward Final Version 1.1 in November 2026.
+
+Edukasaun Desktop Suite 0.9.9
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.9.
+- Matched Grid and List hover/focus glow colors to the bright application-category palette without obscuring icons or wallpaper.
+- Increased List-row readability with safer translucent surfaces, dark high-weight names and clear secondary text.
+- Added a dedicated Accessibility page immediately below Appearance.
+- Moved Vision Accessibility and Orca controls to the new page and added official Orca Voice Settings access.
+- Debounced pointer-driven accessibility focus so Orca announcements remain clear and do not rush during fast pointer movement.
+- Added Hearing Accessibility with visible network, volume and alert labels on Eduka-Panel.
+- Added AT-SPI, Orca and Speech Dispatcher eSpeak NG runtime dependencies for assistive-technology support.
+- Made Eduka-Panel release its screen reservation and hide behind all active fullscreen applications, then return automatically when fullscreen ends.
+- Preserved panel transparency 0.54, desktop transparency 0.51, taskbar minimize/restore toggle, adaptive large-monitor Grid, About and context menus.
+- Development continues toward Final Version 1.1 in November 2026.
+
+Edukasaun Desktop Suite 0.9.8
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.8.
+- Preserved the clear 0.51 Eduka-Desktop transparency and 0.54 Eduka-Panel transparency defaults.
+- Added deterministic, strong color highlights for application Grid/List hover and keyboard focus.
+- Added a vision accessibility mode with opaque high-contrast surfaces and larger key labels.
+- Added an Orca screen-reader switch, accessible application names, pointer-to-focus announcements and LXQt user autostart.
+- Added Orca and the Speech Dispatcher eSpeak NG backend to package dependencies.
+- Cleaned System Information to show Edukasaun OS 1.0, Kameli and Eduka-Desktop (LXQt Session).
+- Preserved the stable taskbar restore/minimize toggle, large-monitor Grid and responsive menu behavior from 0.9.7.
+- Development continues toward Final Version 1.1 in November 2026.
+
+Edukasaun Desktop Suite 0.9.7
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.7.
+- Removed the large gray content card and made the central scroll viewport transparent.
+- Kept application buttons readable while exposing the wallpaper between and behind applications.
+- Fixed restore/minimize toggle by normalizing padded and unpadded X11 window IDs.
+- Preserved the last real application focus when a window manager temporarily focuses Eduka-Panel.
+- Added adaptive Grid columns and balanced spacing on large monitors only.
+- Kept normal-screen Grid spacing and the List layout unchanged.
+- Cached icon-theme discovery and reduced menu command polling from 45 ms to 35 ms.
+- Retained panel transparency 0.54 and Eduka-Desktop transparency 0.51.
+- Preserved the stable About, launcher context menu, EWMH and upgrade behavior from 0.9.6.
+- Development continues toward Final Version 1.1 in November 2026.
+
+Edukasaun Desktop Suite 0.9.6
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.6.
+- Replaced the unreliable external About command with a native PyQt5 About dialog.
+- Added File Manager and Terminal launcher context menus with location/window actions.
+- Added Open New Window and EWMH-aware Restore, Minimize, Maximize and Close task actions.
+- Honored _NET_WM_STATE_SKIP_TASKBAR and non-task EWMH window types.
+- Kept pinned, active and minimized application buttons left-aligned in stable order.
+- Added task-button icon geometry and an active-window visual state.
+- Set panel transparency to 0.54 and Eduka-Desktop transparency to 0.51.
+- Preserved existing user configuration during upgrades and applied transparency migration once.
+- Development continues toward Final Version 1.1 in November 2026.
+
+Edukasaun Desktop 0.9.5
+- Removed the alpha label from visible version and package version.
+- Restored PCManFM-Qt/File Manager detection in Eduka-Panel taskbar.
+- Taskbar button now toggles active window minimize/restore like a normal panel.
+- Eduka-Desktop About opens the central About dialog, not updater/system-complete messages.
+- Restored Add to Desktop in Grid/List context menus.
+- Restored empty launcher area context menu with Arrange Applications A-Z, Grid/List and Refresh Applications.
+- Adjusted transparent launcher cards so the center area is not blocked by a heavy gray overlay.
+- Kept clean install/upgrade cleanup to avoid conflicts from older patches.
+
+
+0.8.2 alpha
+- Added LXQt Appearance icon theme bridge for Eduka-Desktop and Eduka-Panel.
+- Fixed Eduka-Desktop hide-on-empty-desktop-click behavior without restoring old show/hide flicker.
+- Fixed List layout click/launch behavior.
+- Fixed pinned taskbar duplication by merging pinned launchers with active windows.
+- Added preinst/postinst cleanup for old 0.8.x runtime conflicts.
+
+Edukasaun Desktop 0.8.1 alpha
+- Fast singleton fix for Eduka-Menu/Eduka-Desktop.
+- Panel start button now sends direct runtime commands instead of spawning a helper Python process on each click.
+- Eduka-Desktop uses fast cached app registry immediately and refreshes apps after the UI is alive.
+- Added daemon lock to prevent duplicate Eduka-Desktop windows.
+- Stronger filtering so Edukasaun Desktop/Eduka-Desktop internal launchers do not appear as applications inside the start menu or taskbar.
+- Launching an application hides Eduka-Desktop once, like a normal start menu.
+
+Edukasaun Desktop 0.8.1 alpha
+- Internal registry/build identity changed to Eduka-Desktop while the visible OS name remains Edukasaun Desktop.
+- Eduka-Desktop now acts as a force-singleton Startmenu engine: one click opens, one click hides, no duplicate windows.
+- Application launch from Edukasaun Desktop hides the menu immediately like a normal start menu.
+- Eduka-Panel taskbar context menu adds Activate, Minimize, Maximize/Restore, Close, Pin to Start, Pin/Unpin Taskbar.
+- Stronger taskbar filtering removes Desktop/background/helper windows from active taskbar.
+- Eduka-Menu Settings keeps Eduka-Panel locked to bottom for alpha stability and applies settings safely.
+- Eduka-Panel reserves bottom screen space for maximized PCManFM-Qt/File Manager and other applications.

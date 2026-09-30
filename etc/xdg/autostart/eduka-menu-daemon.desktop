@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Eduka Menu Fast Daemon
+Exec=env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-menu --daemon
+OnlyShowIn=LXQt;
+X-LXQt-NeedProcess=true
+Comment=Preloads Eduka-Desktop singleton engine in RAM for fast Eduka-Menu opening

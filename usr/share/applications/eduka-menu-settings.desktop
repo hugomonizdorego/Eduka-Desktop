@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Eduka-Menu Settings
+Exec=env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-menu-settings
+Icon=preferences-system
+Categories=Settings;DesktopSettings;
+StartupWMClass=eduka-menu-settings
+X-GNOME-SingleWindow=true

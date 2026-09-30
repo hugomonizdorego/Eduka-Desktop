@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+import sys, os, subprocess, fcntl
+from pathlib import Path
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import *
+
+SETTINGS_QSS = """
+QDialog{background:#f5fbf8;color:#1f2d2a;}
+QFrame#mainCard{background:rgba(250,253,250,245);border:1px solid rgba(0,168,121,55);border-radius:18px;}
+QListWidget#navList{background:rgba(235,245,240,190);border:1px solid rgba(220,235,230,210);border-radius:14px;outline:0;padding:6px;color:#1f2d2a;}
+QListWidget#navList::item{padding:9px 8px;border-radius:10px;margin:2px;color:#26433d;font-weight:750;}
+QListWidget#navList::item:selected{background:#00a879;color:white;}
+QListWidget#navList::item:hover{background:rgba(0,168,121,35);}
+QLabel{color:#1f2d2a;font-size:12px;}
+QLabel#pageTitle{font-size:18px;font-weight:900;color:#102c27;}
+QLabel#pageHint{color:#60736e;}
+QGroupBox{color:#1f2d2a;border:1px solid rgba(0,168,121,70);border-radius:12px;margin-top:10px;padding:12px;background:rgba(255,255,255,180);font-weight:800;}
+QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;}
+QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:9px;padding:7px;min-height:22px;}
+QCheckBox{color:#1f2d2a;padding:4px;}
+QPushButton{background:#eef5f2;color:#1f2d2a;border:1px solid rgba(0,168,121,35);border-radius:10px;padding:8px 12px;font-weight:800;}
+QPushButton:hover{background:white;border:1px solid #00a879;}
+QPushButton#applyButton{background:#1267d8;color:white;}
+QPushButton#saveButton{background:#188a48;color:white;}
+QPushButton#resetButton{background:#fff7e5;color:#775000;border:1px solid rgba(220,160,0,70);}
+QTextEdit{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:12px;padding:10px;}
+"""
+
+class Page(QWidget):
+    def __init__(self, title, hint=''):
+        super().__init__()
+        self.v = QVBoxLayout(self); self.v.setContentsMargins(18,16,18,14); self.v.setSpacing(10)
+        t=QLabel(title); t.setObjectName('pageTitle'); self.v.addWidget(t)
+        if hint:
+            h=QLabel(hint); h.setWordWrap(True); h.setObjectName('pageHint'); self.v.addWidget(h)
+
+class Settings(QDialog):
+    def __init__(self):
+        super().__init__()
+        ensure_dirs(); icon_theme_setup(force=True)
+        self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
+        self.setWindowTitle(f'Eduka-Menu Settings — {VERSION}')
+        self.resize(780, 520)
+        self.setMinimumSize(740, 500)
+        self.panel=read_panel_config(); self.menu=read_menu_config(); self.desktop=read_desktop_config()
+        self._initial_orca_enabled=bool(self.desktop.get('orca_enabled', False))
+        self._liquid_confirmed=normalize_theme_style(self.desktop.get('theme_style')) == THEME_LIQUID
+        self.build()
+        self.setStyleSheet(SETTINGS_QSS)
+
+    def build(self):
+        root=QVBoxLayout(self); root.setContentsMargins(14,12,14,12); root.setSpacing(10)
+        card=QFrame(); card.setObjectName('mainCard'); root.addWidget(card,1)
+        main=QVBoxLayout(card); main.setContentsMargins(14,12,14,12); main.setSpacing(10)
+        header=QHBoxLayout(); header.setSpacing(10)
+        logo=QLabel(); logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(42,42)); header.addWidget(logo)
+        title=QLabel(f"<b style='font-size:20px;color:#07152b'>EDUKA-MENU SETTINGS</b> <span style='font-size:20px;color:#1267d8;font-weight:900'>{VERSION}</span><br><span style='color:#25435a'>Compact configuration center for Eduka-Menu, Eduka-Desktop and Eduka-Panel</span>")
+        header.addWidget(title,1)
+        main.addLayout(header)
+
+        body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
+        self.nav=QListWidget(); self.nav.setObjectName('navList'); self.nav.setFixedWidth(185); self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.nav.setIconSize(QSize(24,24))
+        self.stack=QStackedWidget()
+        pages=[
+            ('General','preferences-system',self.page_general()),
+            ('Appearance','preferences-desktop-theme',self.page_appearance()),
+            ('Accessibility','preferences-desktop-accessibility',self.page_accessibility()),
+            ('Icon & Name','insert-image',self.page_icon_name()),
+            ('Behavior','input-mouse',self.page_behavior()),
+            ('Maintenance','applications-system',self.page_advanced()),
+        ]
+        for name, icon, page in pages:
+            self.nav.addItem(QListWidgetItem(get_icon(icon), name)); self.stack.addWidget(page)
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(0)
+        body.addWidget(self.nav); body.addWidget(self.stack,1)
+
+        bottom=QHBoxLayout(); bottom.setSpacing(8)
+        reset=QPushButton('Reset to Defaults'); reset.setObjectName('resetButton'); reset.clicked.connect(self.reset_defaults); bottom.addWidget(reset)
+        bottom.addStretch()
+        cancel=QPushButton('Cancel'); cancel.clicked.connect(self.reject); bottom.addWidget(cancel)
+        apply=QPushButton('Apply'); apply.setObjectName('applyButton'); apply.clicked.connect(self.apply_settings); bottom.addWidget(apply)
+        save=QPushButton('Save & Close'); save.setObjectName('saveButton'); save.clicked.connect(self.save_close); bottom.addWidget(save)
+        main.addLayout(bottom)
+
+    def page_general(self):
+        p=Page('General', 'Basic startup, language and default section options.')
+        f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
+        note=QLabel('Eduka-Desktop is the internal startmenu engine. The visible system name remains Edukasaun Desktop.'); note.setWordWrap(True); f.addRow(note)
+        self.start_login=QCheckBox('Start Eduka-Desktop daemon when the user session starts'); self.start_login.setChecked(True); f.addRow('', self.start_login)
+        self.follow_lang=QCheckBox('Follow system language / locale when translations are available'); self.follow_lang.setChecked(True); f.addRow('', self.follow_lang)
+        self.default_section=QComboBox(); self.default_section.addItems([x[0] for x in CATEGORY_ORDER if x[0] != 'Favorites']); self.default_section.setCurrentText(self.desktop.get('last_category','Edukasaun')); f.addRow('Default section:', self.default_section)
+        p.v.addLayout(f); p.v.addStretch(); return p
+
+    def page_appearance(self):
+        p=Page('Appearance', 'Choose the Eduka visual style and tune panel or desktop transparency.')
+        f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
+        self.theme=QComboBox(); self.theme.addItems([THEME_DEFAULT, THEME_LIQUID]); self.theme.setCurrentText(normalize_theme_style(self.desktop.get('theme_style'))); f.addRow('Visual theme:', self.theme)
+        self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.45,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setValue(float(self.panel.get('transparency',0.54))); f.addRow('Panel transparency:', self.panel_trans)
+        self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setValue(float(self.desktop.get('transparency',0.51))); f.addRow('Desktop transparency:', self.desktop_trans)
+        self.low=QCheckBox('Low resource mode for 512MB RAM / old CPU'); self.low.setChecked(bool(self.desktop.get('low_resource_mode',True))); f.addRow('', self.low)
+        self.shadow=QCheckBox('Enable Eduka-Desktop shadows'); self.shadow.setChecked(bool(self.desktop.get('enable_shadows',False))); f.addRow('', self.shadow)
+        hint=QLabel('Icons follow LXQt Appearance Configuration automatically. Change Papirus/Breeze/etc. in LXQt Appearance.'); hint.setWordWrap(True); hint.setStyleSheet('color:#60736e;'); f.addRow('Icon theme:', hint)
+        glass_hint=QLabel('Liquid Glass adds translucent glass layers, colored tint, bright rims, compositor blur hints and deeper shadows. Eduka-Default-Theme remains the lightweight option.'); glass_hint.setWordWrap(True); glass_hint.setStyleSheet('color:#536a64;font-size:11px;'); f.addRow('Theme details:', glass_hint)
+        self.low.setEnabled(self.theme.currentText() != THEME_LIQUID)
+        if self.theme.currentText() == THEME_LIQUID: self.low.setChecked(False)
+        self.theme.currentTextChanged.connect(self.theme_changed)
+        p.v.addLayout(f); p.v.addStretch(); return p
+
+    def liquid_glass_capability(self):
+        memory_gib=0.0
+        try:
+            for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+                if line.startswith('MemTotal:'):
+                    memory_gib=float(line.split()[1])/(1024*1024); break
+        except Exception:
+            pass
+        cpu_threads=max(1, int(os.cpu_count() or 1))
+        compositor=False
+        for process_name in ('kwin_x11','kwin_wayland','picom','compton','xfwm4','labwc'):
+            try:
+                if subprocess.run(['pgrep','-x',process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                    compositor=True; break
+            except Exception:
+                break
+        return memory_gib, cpu_threads, compositor, memory_gib >= 3.7 and cpu_threads >= 2
+
+    def theme_changed(self, theme):
+        if theme != THEME_LIQUID:
+            self._liquid_confirmed=False
+            self.low.setEnabled(True)
+            return
+        self.low.setChecked(False); self.low.setEnabled(False)
+        if self._liquid_confirmed:
+            return
+        memory_gib, cpu_threads, compositor, capable=self.liquid_glass_capability()
+        detected=f'Detected memory: {memory_gib:.1f} GiB\nLogical CPU threads: {cpu_threads}\nCompatible compositor detected: {"Yes" if compositor else "No or unknown"}'
+        requirement='Liquid Glass requires at least 4 GB RAM and a processor/graphics compositor capable of smooth transparency and blur. The theme uses more resources than Eduka-Default-Theme.'
+        if not capable:
+            QMessageBox.warning(self, 'Liquid Glass requirements', requirement+'\n\n'+detected+'\n\nLiquid Glass was not enabled to protect system stability.')
+            self.theme.blockSignals(True); self.theme.setCurrentText(THEME_DEFAULT); self.theme.blockSignals(False); self.low.setEnabled(True)
+            return
+        answer=QMessageBox.question(self, 'Enable Liquid Glass?', requirement+'\n\n'+detected+'\n\nIf compositor blur is unavailable, Eduka-Desktop will use a safe translucent Qt fallback. Continue?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer == QMessageBox.Yes:
+            self._liquid_confirmed=True
+        else:
+            self.theme.blockSignals(True); self.theme.setCurrentText(THEME_DEFAULT); self.theme.blockSignals(False); self.low.setEnabled(True)
+
+    def page_accessibility(self):
+        p=Page('Accessibility', 'Accessibility controls for clearer vision, spoken navigation and visible status information.')
+        f=QFormLayout(); f.setSpacing(10); f.setLabelAlignment(Qt.AlignRight)
+        vision_icon=QLabel(); vision_icon.setPixmap(get_icon('view-visible','preferences-desktop-accessibility').pixmap(24,24)); vision_icon.setToolTip('Vision accessibility')
+        self.visual_access=QCheckBox('Vision accessibility — high contrast, opaque panels and larger text'); self.visual_access.setChecked(bool(self.desktop.get('visual_accessibility',False)))
+        vision_row=QHBoxLayout(); vision_row.setContentsMargins(0,0,0,0); vision_row.addWidget(vision_icon); vision_row.addWidget(self.visual_access,1); f.addRow('Vision:', vision_row)
+
+        hearing_icon=QLabel(); hearing_icon.setPixmap(get_icon('preferences-desktop-notification','preferences-system-notifications').pixmap(24,24)); hearing_icon.setToolTip('Hearing accessibility')
+        self.hearing_access=QCheckBox('Hearing accessibility — show network, sound and alert status as text on Eduka-Panel'); self.hearing_access.setChecked(bool(self.desktop.get('hearing_accessibility',False)))
+        hearing_row=QHBoxLayout(); hearing_row.setContentsMargins(0,0,0,0); hearing_row.addWidget(hearing_icon); hearing_row.addWidget(self.hearing_access,1); f.addRow('Hearing:', hearing_row)
+
+        orca_icon=QLabel(); orca_icon.setPixmap(get_icon('audio-volume-high','preferences-desktop-accessibility').pixmap(24,24)); orca_icon.setToolTip('Orca screen reader')
+        self.orca=QCheckBox('Orca screen reader — speak focused applications and menus'); self.orca.setChecked(bool(self.desktop.get('orca_enabled',False)))
+        orca_row=QHBoxLayout(); orca_row.setContentsMargins(0,0,0,0); orca_row.addWidget(orca_icon); orca_row.addWidget(self.orca,1); f.addRow('Screen reader:', orca_row)
+
+        voice=QPushButton('Open Orca Voice Settings'); voice.setIcon(get_icon('preferences-desktop-accessibility')); voice.clicked.connect(self.open_orca_voice_settings); f.addRow('Voice:', voice)
+        orca_status='Orca is ready.' if orca_available() else 'Orca is supplied by the package dependencies but is not available in this session.'
+        access_hint=QLabel(orca_status+' Pointer announcements use a short dwell so speech stays smooth. In Orca Voice Settings, choose a moderate rate and adjust person, pitch and volume for clearer speech.'); access_hint.setWordWrap(True); access_hint.setStyleSheet('color:#536a64;font-size:11px;'); f.addRow('', access_hint)
+        p.v.addLayout(f); p.v.addStretch(); return p
+
+    def page_icon_name(self):
+        p=Page('Icon & Name', 'Customize the Eduka-Menu button shown on Eduka-Panel.')
+        f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
+        self.preview=QPushButton(' '+self.panel.get('menu_label','Edukasaun')); self.preview.setIcon(get_icon(self.panel.get('menu_icon',START_ICON),'start-here')); self.preview.setStyleSheet('background:#eaf7f1;color:#102c27;border-radius:13px;padding:9px;font-weight:900;border:1px solid #cfe8df;'); f.addRow('Preview:', self.preview)
+        self.label=QLineEdit(self.panel.get('menu_label','Edukasaun')); self.label.textChanged.connect(lambda t: self.preview.setText(' '+t)); f.addRow('Button name:', self.label)
+        self.icon=QLineEdit(self.panel.get('menu_icon',START_ICON)); browse=QPushButton('Browse'); browse.clicked.connect(self.browse_icon); row=QHBoxLayout(); row.addWidget(self.icon); row.addWidget(browse); f.addRow('Button icon:', row)
+        self.show_text=QCheckBox('Show text beside icon'); self.show_text.setChecked(bool(self.panel.get('show_menu_text',True))); f.addRow('', self.show_text)
+        self.icon_size=QSpinBox(); self.icon_size.setRange(18,48); self.icon_size.setValue(int(self.panel.get('menu_icon_size',26))); f.addRow('Button icon size:', self.icon_size)
+        p.v.addLayout(f); p.v.addStretch(); return p
+
+    def page_behavior(self):
+        p=Page('Behavior', 'Launcher size, layout and taskbar behavior.')
+        f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
+        self.layout_default=QComboBox(); self.layout_default.addItems(['Grid','List']); self.layout_default.setCurrentText(self.desktop.get('layout','Grid')); f.addRow('Default layout:', self.layout_default)
+        self.width=QSpinBox(); self.width.setRange(92,99); self.width.setSuffix(' %'); self.width.setValue(max(92, int(self.desktop.get('width_percent',97)))); f.addRow('Desktop width:', self.width)
+        self.height=QSpinBox(); self.height.setRange(78,95); self.height.setSuffix(' %'); self.height.setValue(max(78, int(self.desktop.get('height_percent',92)))); f.addRow('Desktop height:', self.height)
+        self.panel_height=QSpinBox(); self.panel_height.setRange(34,58); self.panel_height.setValue(int(self.panel.get('height',42))); f.addRow('Panel height:', self.panel_height)
+        self.panel_width=QSpinBox(); self.panel_width.setRange(70,100); self.panel_width.setSuffix(' %'); self.panel_width.setValue(int(self.panel.get('width_percent',96))); f.addRow('Panel width:', self.panel_width)
+        self.taskbar_style=QComboBox(); self.taskbar_style.addItems(['Icon and Text','Icon only','Text only']); self.taskbar_style.setCurrentText(self.panel.get('taskbar_style','Icon and Text')); f.addRow('Taskbar style:', self.taskbar_style)
+        p.v.addLayout(f); p.v.addStretch(); return p
+
+    def page_advanced(self):
+        p=Page('Advanced', 'Maintenance actions for testing and recovery.')
+        for text, cmd in [('Rebuild application cache','eduka-app-cache --warm'),('Reload Eduka-Desktop','eduka-menu --daemon && eduka-menu --show'),('Restart Eduka-Panel','pkill -x eduka-panel; sleep 0.2; eduka-panel')]:
+            b=QPushButton(text); b.clicked.connect(lambda _,c=cmd: subprocess.Popen(c, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)); p.v.addWidget(b)
+        p.v.addStretch(); return p
+
+    # About is intentionally centralized in Eduka-Desktop.
+
+    def browse_icon(self):
+        f,_=QFileDialog.getOpenFileName(self,'Choose panel icon','/usr/share/icons','Images (*.png *.svg *.xpm *.jpg)')
+        if f:
+            self.icon.setText(f); self.preview.setIcon(QIcon(f))
+
+    def open_orca_voice_settings(self):
+        if not orca_available():
+            QMessageBox.warning(self, 'Orca unavailable', 'Orca is not installed or is not available in this desktop session.')
+            return
+        if not safe_popen(['orca','--setup']):
+            QMessageBox.warning(self, 'Orca settings', 'Orca Voice Settings could not be opened in this desktop session.')
+
+    def activate_existing_window(self):
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.show(); self.raise_(); self.activateWindow()
+
+    def collect(self):
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':'Bottom','theme_style':self.theme.currentText()}
+        desktop={'layout':self.layout_default.currentText(),'last_category':self.default_section.currentText(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked()}
+        menu={'mode':'Eduka-Desktop','language':'system' if self.follow_lang.isChecked() else 'en'}
+        return panel, desktop, menu
+
+    def apply_settings(self):
+        panel, desktop, menu = self.collect()
+        save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
+        ok, message = self.sync_orca(desktop)
+        icon_theme_setup(force=True); send_menu_command('reload-style')
+        if not ok:
+            QMessageBox.warning(self,'Orca unavailable',message); return
+        detail=('\n\n'+message) if message else ''
+        QMessageBox.information(self,'Applied','Settings applied safely. Eduka-Panel and Eduka-Desktop will refresh.'+detail)
+
+    def save_close(self):
+        panel, desktop, menu = self.collect()
+        save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
+        ok, message = self.sync_orca(desktop)
+        icon_theme_setup(force=True); send_menu_command('reload-style')
+        if not ok:
+            QMessageBox.warning(self,'Orca unavailable',message); return
+        self.accept()
+
+    def sync_orca(self, desktop):
+        enabled=bool(desktop.get('orca_enabled', False))
+        if enabled or enabled != self._initial_orca_enabled:
+            ok, message=configure_orca(enabled)
+            if not ok:
+                desktop['orca_enabled']=False
+                self.orca.setChecked(False)
+                save_desktop_config(desktop)
+                return False, message
+            self._initial_orca_enabled=enabled
+            return True, message
+        return True, ''
+
+    def reset_defaults(self):
+        if QMessageBox.question(self,'Reset settings',f'Restore recommended {VERSION} defaults?') == QMessageBox.Yes:
+            if self._initial_orca_enabled:
+                configure_orca(False)
+            write_json(panel_config_path(), DEFAULT_PANEL); write_json(desktop_config_path(), DEFAULT_DESKTOP); write_json(menu_config_path(), DEFAULT_MENU); touch_reload(); send_menu_command('reload-style'); self.accept()
+
+def activate_running_settings(socket_name):
+    socket=QLocalSocket(); socket.connectToServer(socket_name)
+    if socket.waitForConnected(500):
+        socket.write(b'activate\n'); socket.flush(); socket.waitForBytesWritten(300); socket.disconnectFromServer(); return True
+    if shutil.which('xdotool'):
+        return safe_popen(['xdotool','search','--name','Eduka-Menu Settings','windowmap','windowactivate'])
+    return False
+
+def run_single_instance():
+    ensure_dirs(); app=QApplication(sys.argv); app.setApplicationName('eduka-menu-settings'); socket_name=f'eduka-menu-settings-{os.getuid()}'
+    lock_file=open(SETTINGS_LOCK, 'w')
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        activate_running_settings(socket_name)
+        return 0
+    QLocalServer.removeServer(socket_name)
+    server=QLocalServer()
+    if not server.listen(socket_name):
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        return 1
+    window=Settings()
+    def accept_activation():
+        connection=server.nextPendingConnection()
+        if connection:
+            connection.waitForReadyRead(80); connection.readAll(); connection.disconnectFromServer()
+        window.activate_existing_window()
+    server.newConnection.connect(accept_activation)
+    window.show(); result=app.exec_(); server.close(); QLocalServer.removeServer(socket_name)
+    try: fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except Exception: pass
+    return result
+
+if __name__ == '__main__':
+    sys.exit(run_single_instance())

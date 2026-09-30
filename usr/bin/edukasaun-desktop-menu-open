@@ -1,0 +1,4 @@
+#!/bin/sh
+# Edukasaun Desktop visible name, Eduka-Desktop internal singleton startmenu engine.
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+exec eduka-menu --toggle

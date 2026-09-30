@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+import sys
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import rebuild_app_registry, load_apps, APP_REGISTRY_PATH, registry_update
+if __name__ == '__main__':
+    apps = rebuild_app_registry() if '--warm' in sys.argv or '--rebuild' in sys.argv else load_apps()
+    if '--print' in sys.argv:
+        print(APP_REGISTRY_PATH)
+    else:
+        registry_update('apps', {'count': len(apps), 'cache_ready': True})
+        print(f'Edukasaun app cache ready: {len(apps)} applications')
