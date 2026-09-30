@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, os, subprocess, re, time, shutil, json
+import sys, os, subprocess, re, time, shutil, json, fcntl
 from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
@@ -23,8 +23,8 @@ class EdukaPanel(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowStaysOnTopHint); self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_ShowWithoutActivating)
         try: self.setAttribute(Qt.WA_X11DoNotAcceptFocus, True)
         except (AttributeError, TypeError): pass
-        self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}
-        self.build_ui(); self.load_config(); self.setup_watcher()
+        self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
+        self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
@@ -55,6 +55,16 @@ class EdukaPanel(QWidget):
         self.clock=QPushButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.calendar_popup); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
         for button,name in [(self.net,'Network'),(self.bt,'Bluetooth'),(self.printer,'Printers'),(self.battery,'Battery'),(self.vol,'Volume'),(self.eus,'Eduka Update System'),(self.notif,'Notifications'),(self.clock,'Clock and calendar')]: button.setAccessibleName(name)
         for w in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang,self.clock]: self.layout.addWidget(w)
+    def setup_screen_tracking(self):
+        """Re-layout when the resolution changes or a projector is connected."""
+        self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.load_config)
+        def watch(screen):
+            if screen is None:
+                return
+            screen.geometryChanged.connect(lambda _g: self._screen_timer.start(300))
+        watch(QApplication.primaryScreen())
+        QApplication.instance().primaryScreenChanged.connect(lambda scr: (watch(scr), self._screen_timer.start(300)))
+
     def setup_watcher(self):
         self.watcher=QFileSystemWatcher(self)
         watch_paths=[str(panel_config_path()), str(RUNTIME_DIR/'reload')]
@@ -88,7 +98,7 @@ class EdukaPanel(QWidget):
         QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,160);}}
         QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);}}
         QPushButton#batteryButton{{background:rgba(0,168,121,45);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
-        QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:4px 8px;color:#183c35;font-weight:700;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
+        QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{11 if h < 46 else 12}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
         if high_contrast:
             self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;}''')
         elif liquid:
@@ -318,6 +328,21 @@ class EdukaPanel(QWidget):
         except Exception:
             return ''
 
+    def _cached_task_properties(self, wid, max_age=5.0):
+        """Window type/state used for taskbar filtering, cached per window.
+
+        The taskbar refreshes every 0.9 s; running xprop for every window on
+        every refresh kept old CPUs busy. Types almost never change, and a
+        five-second cache still picks up skip-taskbar changes quickly.
+        """
+        now=time.monotonic()
+        cached=self._ewmh_cache.get(wid)
+        if cached and now - cached[0] < max_age:
+            return cached[1]
+        text=self._window_property_text(wid, '_NET_WM_WINDOW_TYPE', '_NET_WM_STATE')
+        self._ewmh_cache[wid]=(now, text)
+        return text
+
     def window_states(self, wid):
         out=self._window_property_text(wid, '_NET_WM_STATE')
         return set(re.findall(r'_NET_WM_STATE_[A-Z_]+', out))
@@ -348,7 +373,7 @@ class EdukaPanel(QWidget):
         # True desktop/background windows are filtered by EWMH type instead of
         # hiding every window named "Desktop". This lets PCManFM-Qt file-manager
         # windows opened inside the Desktop folder appear in the taskbar.
-        ewmh=self._window_property_text(wid, '_NET_WM_WINDOW_TYPE', '_NET_WM_STATE')
+        ewmh=self._cached_task_properties(wid)
         if '_NET_WM_WINDOW_TYPE_DESKTOP' in ewmh or '_NET_WM_STATE_SKIP_TASKBAR' in ewmh:
             return False
         non_task_types=(
@@ -522,6 +547,9 @@ class EdukaPanel(QWidget):
             if wid not in current:
                 self.buttons.pop(wid).deleteLater()
                 self.icon_geometry_cache.pop(wid, None)
+        for wid in list(self._ewmh_cache.keys()):
+            if wid not in current:
+                self._ewmh_cache.pop(wid, None)
         # Keep every pinned/minimized/active application at the left edge in a
         # stable order. Deleted Qt widgets can otherwise leave temporary gaps.
         for index, button in enumerate(desired_buttons):
@@ -530,15 +558,23 @@ class EdukaPanel(QWidget):
         for wid, button in self.buttons.items():
             if wid in current:
                 self.set_window_icon_geometry(wid, button)
-        registry_update('panel', {'task_count': len(current), 'tasks': current, 'pinned_count': len(read_pinned_apps()), 'visible_pinned_count': len(visible_pins), 'icon_theme': QIcon.themeName(), 'panel_locked_width': self.width(), 'version': VERSION})
-        QTimer.singleShot(120, self.enforce_window_space)
+        registry_update('panel', {'task_count': len(current), 'tasks': current, 'pinned_count': len(pinned_keys), 'visible_pinned_count': len(visible_pins), 'icon_theme': QIcon.themeName(), 'panel_locked_width': self.width(), 'version': VERSION})
+        # The workarea timer already repairs stacking regularly; only react
+        # immediately when focus moved to another window.
+        if active_wid != getattr(self, '_last_checked_active_wid', None):
+            self._last_checked_active_wid=active_wid
+            QTimer.singleShot(120, self.enforce_window_space)
 
     def pinned_context(self, key, button, pos):
         app=app_by_pin_key(key)
         m=self._context_menu_style(QMenu(self))
         if app:
             m.addAction(get_icon('system-run'),'Launch', lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
-            m.addAction(get_icon('emblem-favorite'),'Add to Favorites', lambda a=app: favorite_app(a))
+            if is_favorite(app):
+                m.addAction(get_icon('list-remove'),'Remove from Favorites', lambda a=app: unfavorite_app(a))
+            else:
+                m.addAction(get_icon('emblem-favorite'),'Add to Favorites', lambda a=app: favorite_app(a))
+        m.addSeparator()
         m.addAction(get_icon('list-remove'),'Unpin from Taskbar', lambda: (unpin_app(key), self.update_tasks()))
         m.exec_(button.mapToGlobal(pos))
 
@@ -722,8 +758,25 @@ class EdukaPanel(QWidget):
         m.addAction(get_icon('preferences-system-time'), 'Date and Time Settings', lambda: launch_app('lxqt-admin-time'))
         self._show_context(m, self.clock, pos)
 
+    def update_keyboard_layout(self):
+        """Show the active X11 keyboard layout instead of a fixed 'EN'."""
+        layout=''
+        if shutil.which('setxkbmap'):
+            try:
+                out=subprocess.check_output(['setxkbmap','-query'], text=True, stderr=subprocess.DEVNULL, timeout=1)
+                m=re.search(r'^layout:\s*([^\s,]+)', out, re.M)
+                layout=m.group(1) if m else ''
+            except Exception:
+                layout=''
+        text=(layout or 'en')[:3].upper()
+        if self.lang.text() != text:
+            self.lang.setText(text)
+        self.lang.setToolTip(f'Keyboard layout: {text}')
+        self.lang.setAccessibleName(f'Keyboard layout {text}')
+
     def update_status_icons(self):
         self.update_eus_status()
+        self.update_keyboard_layout()
         nicon='network-offline'; tip='Offline'
         try:
             out=subprocess.check_output(['nmcli','-t','-f','TYPE,STATE,CONNECTION','device'], text=True, stderr=subprocess.DEVNULL)
@@ -749,7 +802,16 @@ class EdukaPanel(QWidget):
         self.notif.setText(' Alerts' if self.hearing_accessibility else ''); self.notif.setToolTip('Notifications and visual alerts'); self.notif.setAccessibleName('Notifications and visual alerts')
     def wheelEvent(self,e):
         if self.vol.underMouse(): self.change_volume(5 if e.angleDelta().y()>0 else -5)
-    def change_volume(self,delta): safe_popen(f"pactl set-sink-volume @DEFAULT_SINK@ {'+' if delta>0 else '-'}{abs(delta)}%", shell=True); self.update_status_icons()
+    def change_volume(self,delta):
+        # Stay within 0-100 % so scrolling over the icon cannot distort speakers.
+        current=50
+        try:
+            out=subprocess.check_output(['pactl','get-sink-volume','@DEFAULT_SINK@'], text=True, stderr=subprocess.DEVNULL, timeout=1)
+            m=re.search(r'(\d+)%', out); current=int(m.group(1)) if m else current
+        except Exception:
+            pass
+        target=max(0, min(100, current+delta))
+        safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(120, self.update_status_icons)
     def show_popup_above(self,popup,anchor):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
     def volume_popup(self):
@@ -783,7 +845,30 @@ class EdukaPanel(QWidget):
     def calendar_popup(self):
         p=PopupFrame(self); cal=QCalendarWidget(); cal.setGridVisible(True); cal.setSelectedDate(QDate.currentDate()); cal.setStyleSheet('QCalendarWidget{background:#ffffff;color:#1f2d2a;border:0;} QCalendarWidget QWidget{background:#ffffff;color:#1f2d2a;} QCalendarWidget QToolButton{background:#eef7f3;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:8px;padding:5px;} QCalendarWidget QToolButton:hover{background:white;} QCalendarWidget QMenu{background:white;color:#1f2d2a;} QCalendarWidget QSpinBox{background:white;color:#1f2d2a;} QAbstractItemView{background:white;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;alternate-background-color:#f5fbf8;} QAbstractItemView:disabled{color:#879792;background:#ffffff;}'); p.v.addWidget(cal); self.show_popup_above(p,self.clock)
 
+PANEL_LOCK = RUNTIME_DIR/'panel.lock'
+
+def acquire_panel_lock(wait_seconds=3.0):
+    """Keep one Eduka-Panel per session.
+
+    'Restart Eduka-Panel' starts the new panel right after pkill, so wait a
+    moment for the old process to release the lock instead of giving up.
+    """
+    ensure_dirs()
+    lock_file=open(PANEL_LOCK, 'w')
+    deadline=time.monotonic()+wait_seconds
+    while True:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_file
+        except OSError:
+            if time.monotonic() >= deadline:
+                lock_file.close(); return None
+            time.sleep(0.1)
+
 if __name__ == '__main__':
-    app=QApplication(sys.argv); icon_theme_setup(); panel=EdukaPanel()
+    panel_lock=acquire_panel_lock()
+    if panel_lock is None:
+        print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
+    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); icon_theme_setup(); panel=EdukaPanel()
     if not panel._fullscreen_hidden: panel.show()
     registry_update('panel', {'pid': os.getpid(), 'running': True}); sys.exit(app.exec_())

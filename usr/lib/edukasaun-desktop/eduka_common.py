@@ -4,7 +4,7 @@ from pathlib import Path
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize
 
-VERSION = "0.9.10"
+VERSION = "0.9.11"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -172,7 +172,7 @@ def panel_config_path(): return PANEL_CONFIG_DIR/'settings.json'
 def menu_config_path(): return MENU_CONFIG_DIR/'settings.json'
 def desktop_config_path(): return DESKTOP_CONFIG_DIR/'settings.json'
 def normalize_theme_style(value):
-    """Map retired 0.9.x theme names to the two supported 0.9.10 themes."""
+    """Map retired 0.9.x theme names to the two supported themes."""
     return THEME_LIQUID if str(value or '').strip().casefold() == THEME_LIQUID.casefold() else THEME_DEFAULT
 def read_panel_config():
     data=read_json(panel_config_path(), DEFAULT_PANEL)
@@ -273,6 +273,42 @@ def configure_orca(enabled):
     return True, 'Orca screen reader is disabled for Eduka-Desktop sessions.'
 
 
+def menu_daemon_autostart_path():
+    return Path.home()/'.config'/'autostart'/'eduka-menu-daemon.desktop'
+
+def menu_daemon_autostart_enabled():
+    """False only when the user placed a Hidden=true override for the daemon."""
+    try:
+        text=menu_daemon_autostart_path().read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return True
+    return not re.search(r'^\s*Hidden\s*=\s*true\s*$', text, re.M | re.I)
+
+def set_menu_daemon_autostart(enabled):
+    """Enable or disable the Eduka-Desktop daemon for this user only.
+
+    The system entry in /etc/xdg/autostart stays untouched; XDG autostart lets a
+    same-named file in ~/.config/autostart override it.
+    """
+    entry=menu_daemon_autostart_path()
+    try:
+        if enabled:
+            entry.unlink(missing_ok=True)
+        else:
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text(
+                '[Desktop Entry]\n'
+                'Type=Application\n'
+                'Name=Eduka Menu Fast Daemon\n'
+                'Exec=eduka-menu --daemon\n'
+                'Hidden=true\n',
+                encoding='utf-8'
+            )
+        return True
+    except OSError:
+        return False
+
+
 def registry_read():
     """Compatibility state reader.
     Lightweight runtime state/cache map under XDG_RUNTIME_DIR. It is not a
@@ -289,7 +325,12 @@ def registry_read():
 def registry_update(section, values):
     ensure_dirs(); data=registry_read()
     sec=data.get(section, {}) if isinstance(data.get(section, {}), dict) else {}
-    sec.update(values or {}); sec['updated_at']=time.time(); data[section]=sec
+    values=dict(values or {})
+    # Eduka-Panel and Eduka-Desktop report state on short timers. Skip the disk
+    # write when nothing changed so old laptops are not woken every second.
+    if values and all(sec.get(k) == v for k, v in values.items() if k != 'updated_at'):
+        return data
+    sec.update(values); sec['updated_at']=time.time(); data[section]=sec
     try: write_json(STATE_REGISTRY_PATH, data)
     except Exception: pass
     return data
@@ -601,17 +642,31 @@ def _desktop_registry_signature():
     return sig
 
 
+_APP_REGISTRY_MEMO = {'stamp': None, 'apps': []}
+
 def read_app_registry_fast():
     """Return the current cached app list without checking signatures.
     This is used by the resident Eduka-Desktop startmenu so the window appears
     immediately. A background warm-up can rebuild the cache later.
+
+    Eduka-Panel calls this for every window on every taskbar refresh, so the
+    parsed list is kept in memory until the cache file itself changes.
     """
     ensure_dirs()
+    try:
+        st=APP_REGISTRY_PATH.stat()
+        stamp=(st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    if _APP_REGISTRY_MEMO['stamp'] == stamp:
+        return list(_APP_REGISTRY_MEMO['apps'])
     try:
         data=json.loads(APP_REGISTRY_PATH.read_text(encoding='utf-8'))
         apps=data.get('apps', [])
         if isinstance(apps, list):
-            return sorted(apps, key=lambda a: a.get('name','').casefold())
+            apps=sorted(apps, key=lambda a: a.get('name','').casefold())
+            _APP_REGISTRY_MEMO['stamp']=stamp; _APP_REGISTRY_MEMO['apps']=apps
+            return list(apps)
     except Exception:
         pass
     return []
@@ -655,7 +710,9 @@ def load_apps(force=False):
             seen[key]=True; apps.append(app)
     apps=sorted(apps, key=lambda a: a['name'].casefold())
     try:
-        APP_REGISTRY_PATH.write_text(json.dumps({'version': VERSION, 'signature': sig, 'apps': apps}, ensure_ascii=False), encoding='utf-8')
+        tmp=APP_REGISTRY_PATH.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps({'version': VERSION, 'signature': sig, 'apps': apps}, ensure_ascii=False), encoding='utf-8')
+        os.replace(tmp, APP_REGISTRY_PATH)
         registry_update('apps', {'count': len(apps), 'cache': 'rebuilt', 'path': str(APP_REGISTRY_PATH)})
     except Exception:
         pass
@@ -926,12 +983,22 @@ def add_app_to_desktop(app):
     except Exception as e:
         return False, str(e)
 
+SESSION_COMMANDS = {
+    # lxqt-leave is tried first: it asks for confirmation before shutdown or
+    # restart, so a single misclick in Eduka-Desktop cannot power off a class PC.
+    'lock': [['lxqt-leave','--lockscreen'], ['loginctl','lock-session'], ['xdg-screensaver','lock']],
+    'logout': [['lxqt-leave','--logout'], ['qdbus','org.lxqt.session','/LXQtSession','logout']],
+    'shutdown': [['lxqt-leave','--shutdown'], ['systemctl','poweroff']],
+    'restart': [['lxqt-leave','--reboot'], ['systemctl','reboot']],
+}
+
 def session_action(action):
-    if action == 'lock':
-        for cmd in ['lxqt-leave --lockscreen','loginctl lock-session','xdg-screensaver lock']:
-            if launch_app(cmd): return
-    elif action == 'logout':
-        for cmd in ['lxqt-leave --logout','qdbus org.lxqt.session /LXQtSession logout']:
-            if launch_app(cmd): return
-    elif action == 'shutdown': safe_popen(['systemctl','poweroff'])
-    elif action == 'restart': safe_popen(['systemctl','reboot'])
+    """Run the first available command for a session action.
+
+    launch_app() falls back to a shell and therefore reports success even when
+    the program is missing, so the executable is checked before it is used.
+    """
+    for cmd in SESSION_COMMANDS.get(action, []):
+        if shutil.which(cmd[0]) and safe_popen(cmd):
+            return True
+    return False

@@ -1,5 +1,5 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.10
+Version: 0.9.11
 Section: x11
 Priority: optional
 Architecture: all
@@ -7,8 +7,8 @@ Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
 Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, qtwayland5, lxqt-session
-Description: Edukasaun Desktop 0.9.10 - Liquid Glass and EUS Integration Patch
+Description: Edukasaun Desktop 0.9.11 - Polish and Performance Patch
  Edukasaun Desktop, Eduka-Menu, Eduka-Menu Settings, and Eduka-Panel.
- Adds session-randomized soft-glow highlights, a safe LXQt Liquid Glass theme,
- single-instance settings, Eduka Update System panel notifications, and
- force-repaired fullscreen/small-screen panel behavior at version 0.9.10.
+ Lighter taskbar and menu polling for old hardware, search across all
+ applications, keyboard shortcuts in Eduka-Desktop, a single Eduka-Panel per
+ session, a cleaner scrollable Settings window and confirmed shutdown/restart.

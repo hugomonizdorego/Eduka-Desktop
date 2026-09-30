@@ -175,7 +175,7 @@ class AppButton(QToolButton):
         else:
             m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: pin_app(self.app))
         app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
-        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: launch_app('pcmanfm-qt ' + app_dir))
+        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: safe_popen(['pcmanfm-qt', app_dir]))
         m.exec_(self.mapToGlobal(pos))
 
 class AppListItem(QFrame):
@@ -249,7 +249,7 @@ class AppListItem(QFrame):
         else:
             m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: (pin_app(self.app), self.window().refresh_apps()))
         app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
-        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: launch_app('pcmanfm-qt ' + app_dir))
+        m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: safe_popen(['pcmanfm-qt', app_dir]))
         m.exec_(self.mapToGlobal(pos))
 
     def _launch_once(self):
@@ -272,6 +272,7 @@ class EdukaMenu(QWidget):
         ensure_dirs(); icon_theme_setup()
         self.daemon = daemon
         self._last_cmd_id = None
+        self._last_cmd_stamp = None
         self._last_toggle_time = 0.0
         self._show_guard_until = 0.0
         self._launching = False
@@ -320,7 +321,7 @@ class EdukaMenu(QWidget):
         self.search.setAccessibleDescription('Type an application name or category')
         self.search.setMinimumWidth(330)
         self.refresh_timer=QTimer(self); self.refresh_timer.setSingleShot(True); self.refresh_timer.timeout.connect(self.refresh_apps)
-        self.search.textChanged.connect(lambda: self.refresh_timer.start(90)); hdr.addWidget(self.search,1)
+        self.search.textChanged.connect(lambda: self.refresh_timer.start(90)); self.search.returnPressed.connect(self.launch_first_result); hdr.addWidget(self.search,1)
         self.grid_btn=QPushButton('▦ Grid'); self.list_btn=QPushButton('☷ List')
         self.grid_btn.setAccessibleName('Grid layout'); self.list_btn.setAccessibleName('List layout')
         self.grid_btn.clicked.connect(lambda: self.set_layout('Grid'))
@@ -616,10 +617,13 @@ class EdukaMenu(QWidget):
         if self._loading_apps and not self.apps:
             self.clear_apps(); lab=QLabel('Loading applications...'); lab.setAlignment(Qt.AlignCenter); lab.setStyleSheet('color:#60736e;font-size:16px;padding:40px;'); self.stack_layout.addWidget(lab); return
         self.clear_apps()
-        self.category_title.setText(self.current_category)
+        query=self.search.text().strip() if hasattr(self,'search') else ''
+        # Searching always covers every application, not only the selected category.
+        category='All' if query else self.current_category
+        self.category_title.setText(f'Search results for “{query}”' if query else self.current_category)
         self.grid_btn.setText('✓ Grid' if self.layout_mode=='Grid' else '▦ Grid')
         self.list_btn.setText('✓ List' if self.layout_mode=='List' else '☷ List')
-        apps=filter_apps(self.apps, self.current_category, self.search.text() if hasattr(self,'search') else '')
+        apps=filter_apps(self.apps, category, query)
         high_contrast=bool(self.desktop_cfg.get('visual_accessibility', False))
         orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
         registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
@@ -645,13 +649,13 @@ class EdukaMenu(QWidget):
                 cols=max(3, min(7, width//cell_w))
                 grid.setSpacing(12); grid.setAlignment(Qt.AlignTop|Qt.AlignLeft)
             for i,app in enumerate(apps):
-                accent=app_highlight_color(app, self.current_category)
+                accent=app_highlight_color(app, category)
                 b=AppButton(app, accent); b.setIconSize(QSize(48,48)); b.setFixedSize(cell_w-10,112)
                 b.set_accessibility_mode(high_contrast, orca_enabled)
                 grid.addWidget(b,i//cols,i%cols, Qt.AlignTop|Qt.AlignHCenter if large_grid else Qt.AlignTop|Qt.AlignLeft)
         else:
             for app in apps:
-                accent=app_highlight_color(app, self.current_category)
+                accent=app_highlight_color(app, category)
                 item=AppListItem(app, accent); item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
         self.stack_layout.addStretch(); self.refresh_side()
 
@@ -683,6 +687,8 @@ class EdukaMenu(QWidget):
         self._show_guard_until = time.time() + 0.35
         self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow()
         QTimer.singleShot(30, self.raise_)
+        # Typing right after opening the menu searches, like other start menus.
+        QTimer.singleShot(40, lambda: self.search.setFocus(Qt.PopupFocusReason))
         (RUNTIME_DIR/'menu.pid').write_text(str(os.getpid()))
         registry_update('menu', {'visible': True, 'show_time': now, 'internal_name': 'Eduka-Desktop', 'version': VERSION})
         if not self.apps: QTimer.singleShot(10, self.ensure_apps_loaded)
@@ -693,6 +699,10 @@ class EdukaMenu(QWidget):
         self._last_toggle_time=now
         registry_update('menu', {'visible': False, 'hide_time': now, 'internal_name': 'Eduka-Desktop', 'version': VERSION})
         self.hide()
+        if self.search.text():
+            # Start the next opening from the full category view.
+            self.search.blockSignals(True); self.search.clear(); self.search.blockSignals(False)
+            self.refresh_timer.start(60)
         try: (RUNTIME_DIR/'menu.pid').unlink(missing_ok=True)
         except Exception: pass
         if not self.daemon: self.close()
@@ -704,6 +714,15 @@ class EdukaMenu(QWidget):
         else: self.show_menu()
 
     def check_command(self):
+        # Polled every 35 ms: compare the file stamp first and only parse JSON
+        # when the panel actually wrote a new command.
+        try:
+            st=MENU_COMMAND_PATH.stat(); stamp=(st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+        if stamp == self._last_cmd_stamp:
+            return
+        self._last_cmd_stamp=stamp
         try:
             data=json.loads(MENU_COMMAND_PATH.read_text(encoding='utf-8'))
             cmd_id=data.get('id')
@@ -718,6 +737,25 @@ class EdukaMenu(QWidget):
                 self.apps=load_apps(force=True); self.rebuild_categories(preserve=True); self.refresh_apps()
             else: self.toggle_menu()
         except Exception: pass
+
+    def launch_first_result(self):
+        """Enter in the search box opens the first matching application."""
+        query=self.search.text().strip()
+        apps=filter_apps(self.apps, 'All' if query else self.current_category, query)
+        if not apps:
+            return
+        app=apps[0]
+        self.hide_menu(force=True)
+        QTimer.singleShot(35, lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            if self.search.text():
+                self.search.clear()
+            else:
+                self.hide_menu(force=True)
+            e.accept(); return
+        super().keyPressEvent(e)
 
     def closeEvent(self,e):
         try: (RUNTIME_DIR/'menu.pid').unlink(missing_ok=True)
