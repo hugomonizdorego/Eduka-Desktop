@@ -7,12 +7,72 @@ from PyQt5.QtGui import *
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
 
+def popup_qss():
+    """Popup look that follows the transparency and theme chosen in
+    Eduka-Menu-Settings (a little more opaque than the panel so text stays
+    readable), high contrast for vision accessibility."""
+    cfg=read_panel_config(); dcfg=read_desktop_config()
+    if dcfg.get('visual_accessibility', False):
+        box='background:#ffffff;border:2px solid #344d47;'
+        card='background:#ffffff;border:2px solid #344d47;'
+    else:
+        t=max(0.50, min(1.0, float(cfg.get('transparency', 0.54))))
+        a=int(255*max(0.80, min(0.97, t+0.36))); c=min(255, a+14)
+        if normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID:
+            box=(f'background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgba(255,255,255,{a}),stop:0.45 rgba(226,248,246,{a}),'
+                 f'stop:1 rgba(232,226,255,{a}));border:2px solid rgba(255,255,255,225);')
+        else:
+            box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(236,248,242,{a}));'
+                 'border:1px solid rgba(255,255,255,220);')
+        card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
+    return ('QFrame#popupBox{'+box+'border-radius:18px;}'
+            'QFrame#acCard{'+card+'border-radius:14px;}'
+            'QLabel{color:#1f2d2a;font-size:13px;background:transparent;}'
+            'QLabel#popTitle{font-size:15px;font-weight:800;color:#10231e;}'
+            'QLabel#popSub{font-size:12px;color:#536a64;}'
+            'QLabel#popHint{font-size:11px;color:#536a64;}'
+            'QPushButton{border:1px solid rgba(0,120,90,45);border-radius:11px;padding:7px 10px;background:rgba(255,255,255,200);color:#1f2d2a;font-weight:700;}'
+            'QPushButton:hover{background:#ffffff;border:1px solid #00a879;}'
+            'QPushButton#switch{min-width:52px;padding:5px 8px;border-radius:13px;background:#d9e4e0;color:#40534e;}'
+            'QPushButton#switch:checked{background:#00a879;color:#ffffff;border:1px solid #00946b;}'
+            'QPushButton#netRow{text-align:left;padding:8px 10px;border-radius:12px;background:transparent;border:1px solid transparent;}'
+            'QPushButton#netRow:hover{background:rgba(255,255,255,235);border:1px solid rgba(0,168,121,120);}'
+            'QPushButton#netRow[active="true"]{background:rgba(0,168,121,40);border:1px solid rgba(0,168,121,150);}'
+            'QToolButton#roundIcon{background:rgba(255,255,255,200);border:1px solid rgba(0,120,90,45);border-radius:17px;padding:5px;}'
+            'QToolButton#roundIcon:hover{background:#ffffff;border:1px solid #00a879;}'
+            'QToolButton#roundIcon:checked{background:#00a879;border:1px solid #00946b;}'
+            'QComboBox{background:rgba(255,255,255,230);border:1px solid rgba(0,120,90,45);border-radius:10px;padding:5px 8px;color:#1f2d2a;}'
+            'QScrollArea,QScrollArea>QWidget>QWidget{background:transparent;border:0;}'
+            'QScrollBar:vertical{background:transparent;width:8px;margin:2px;}'
+            'QScrollBar::handle:vertical{background:rgba(0,168,121,110);border-radius:4px;min-height:24px;}'
+            'QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}'
+            'QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}'
+            'QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}'
+            'QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}'
+            'QSlider::sub-page:horizontal:disabled{background:#c9d6d2;}'
+            'QSlider::handle:horizontal:disabled{border:2px solid #b8c6c2;}')
+
+
+def popup_header(icon, title, subtitle=''):
+    """Icon + title + subtitle row shared by the Sound and Network popups."""
+    row=QHBoxLayout(); row.setSpacing(10)
+    pic=QLabel(); pic.setPixmap(get_icon(icon,'preferences-system').pixmap(30,30)); row.addWidget(pic)
+    text=QVBoxLayout(); text.setSpacing(0)
+    t=QLabel(title); t.setObjectName('popTitle'); sub=QLabel(subtitle); sub.setObjectName('popSub')
+    text.addWidget(t); text.addWidget(sub); row.addLayout(text, 1)
+    return row, pic, sub
+
+
 class PopupFrame(QFrame):
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint); self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_DeleteOnClose)
-        self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(6,6,6,6); lay.addWidget(self.box)
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint); self.setAttribute(Qt.WA_DeleteOnClose)
+        composited=compositor_running()
+        if composited: self.setAttribute(Qt.WA_TranslucentBackground)
+        self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(*((6,6,6,6) if composited else (0,0,0,0))); lay.addWidget(self.box)
         self.v=QVBoxLayout(self.box); self.v.setContentsMargins(16,14,16,14); self.v.setSpacing(10)
-        self.setStyleSheet('QFrame#popupBox{background:rgba(250,253,250,250);border:1px solid rgba(0,168,121,80);border-radius:16px;} QLabel{color:#1f2d2a;font-size:13px;} QPushButton{border:1px solid rgba(0,168,121,70);border-radius:10px;padding:8px;background:#eef7f3;color:#1f2d2a;font-weight:700;} QPushButton:hover{background:white;border:1px solid #00a879;} QSlider::groove:horizontal{height:7px;border-radius:3px;background:#dfeee9;} QSlider::handle:horizontal{width:18px;margin:-6px 0;border-radius:9px;background:#00a879;}')
+        # Without a compositor a translucent popup gets black corners: use a
+        # square opaque popup instead.
+        self.setStyleSheet(popup_qss() if composited else popup_qss().replace('border-radius:18px','border-radius:0px'))
         self._fade=None
         # Popup shadows disabled in low resource mode to avoid sluggish LXQt/QEMU sessions.
         if read_panel_config().get('enable_shadows', False) and not read_panel_config().get('low_resource_mode', True):
@@ -101,7 +161,7 @@ def collect_status():
 
 class StatusWorker(QThread):
     """Keeps nmcli/pactl/bluetoothctl off the GUI thread so the panel never stutters."""
-    ready=pyqtSignal(dict)
+    ready=pyqtSignal(object)
     def run(self):
         try: self.ready.emit(collect_status())
         except Exception: pass
@@ -115,7 +175,6 @@ QToolButton#acTile:hover{background:#ffffff;border:1px solid #00a879;}
 QToolButton#acTile[on="true"]{background:#00a879;color:#ffffff;border:1px solid #00946b;}
 QToolButton#acTile[on="true"]:hover{background:#00b683;}
 QToolButton#acTile:disabled{background:#f3f6f5;color:#9aa9a5;border:1px solid rgba(0,0,0,18);}
-QFrame#acCard{background:#ffffff;border:1px solid rgba(0,120,90,35);border-radius:14px;}
 QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}
 QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}
 QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}
@@ -174,6 +233,9 @@ class ActionCenter(PopupFrame):
         cl.addWidget(self.vol_icon,0,0); cl.addWidget(self.vol_slider,0,1); cl.addWidget(self.vol_value,0,2)
         cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
         self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,3)
+        # Status that normally sits on the panel tray while it is hidden.
+        self.extra_label=QLabel(''); self.extra_label.setObjectName('popHint'); cl.addWidget(self.extra_label,3,0,1,3)
+        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,4,0,1,3)
         self.v.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
         self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
@@ -238,6 +300,13 @@ class ActionCenter(PopupFrame):
         self.bri_slider.setToolTip('Screen brightness' if bri is not None else 'This display does not report a backlight')
         bat=st.get('battery')
         self.battery_label.setText(f"Battery {bat['capacity']}% • {bat['status']}" if bat else 'Power: AC (no battery)')
+        extra=[f"Keyboard {st.get('layout','EN')}"]
+        if st.get('printers'): extra.append('Printer ready')
+        if st.get('net') == 'ethernet': extra.append('Ethernet connected')
+        self.extra_label.setText('  •  '.join(extra))
+        count=int(self.panel.eus_status.get('count',0) or 0) if self.panel.eus_status else 0
+        self.update_button.setVisible(count > 0)
+        if count: self.update_button.setText(f'  {count} update{"s" if count != 1 else ""} available'); self.update_button.setIcon(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'))
 
     def launch(self, cmd):
         self.close(); launch_app(cmd)
@@ -294,7 +363,225 @@ class ActionCenter(PopupFrame):
 
     def hideEvent(self, e):
         self.panel._action_center_closed_at=time.monotonic()
+        self.panel.set_tray_compact(False)
         super().hideEvent(e)
+
+
+def _nm_split(line):
+    """Split an `nmcli -t` line; SSIDs may contain escaped colons."""
+    fields=re.split(r'(?<!\\):', line)
+    return [f.replace('\\:', ':').replace('\\\\', '\\') for f in fields]
+
+
+class WifiScanWorker(QThread):
+    ready=pyqtSignal(object)
+    def run(self):
+        result={'nm': shutil.which('nmcli') is not None, 'networks': [], 'known': set()}
+        if result['nm']:
+            out=_run_text(['nmcli','-t','-f','IN-USE,SSID,SIGNAL,SECURITY','device','wifi','list','--rescan','auto'], timeout=12)
+            seen={}
+            for line in (out or '').splitlines():
+                f=_nm_split(line)
+                if len(f) < 4 or not f[1]: continue
+                ssid=f[1]; active=f[0].strip() == '*'
+                try: signal=int(f[2] or 0)
+                except ValueError: signal=0
+                secure=bool(f[3].strip() and f[3].strip() != '--')
+                old=seen.get(ssid)
+                if old is None or active or signal > old['signal']:
+                    seen[ssid]={'ssid':ssid,'active':active or (old or {}).get('active',False),'signal':signal,'secure':secure}
+            result['networks']=sorted(seen.values(), key=lambda n: (not n['active'], -n['signal'], n['ssid'].casefold()))
+            known=_run_text(['nmcli','-t','-f','NAME,TYPE','connection','show'])
+            result['known']={_nm_split(l)[0] for l in (known or '').splitlines() if 'wireless' in l}
+        self.ready.emit(result)
+
+
+def _signal_icon(signal):
+    if signal >= 75: return 'network-wireless-signal-excellent'
+    if signal >= 50: return 'network-wireless-signal-good'
+    if signal >= 25: return 'network-wireless-signal-ok'
+    return 'network-wireless-signal-weak'
+
+
+class NetworkPopup(PopupFrame):
+    """Wi-Fi list with signal, lock and connected state; Wi-Fi switch."""
+    def __init__(self, panel):
+        super().__init__(panel); self.panel=panel
+        self.box.setFixedWidth(340); self.setAccessibleName('Network')
+        st=panel.last_status or {}
+        head, self.head_icon, self.subtitle = popup_header('network-wireless','Network', self.status_text(st))
+        self.switch=QPushButton('On'); self.switch.setObjectName('switch'); self.switch.setCheckable(True); self.switch.setAccessibleName('Wi-Fi')
+        self.switch.setChecked(bool(st.get('wifi_on'))); self.switch.setText('On' if self.switch.isChecked() else 'Off')
+        self.switch.setEnabled(st.get('wifi_on') is not None); self.switch.toggled.connect(self.toggle_wifi)
+        head.addWidget(self.switch); self.v.addLayout(head)
+        self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,0,0); self.list_layout.setSpacing(3)
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(self.list_widget); scroll.setFixedHeight(250); self.v.addWidget(scroll)
+        self.message=QLabel(''); self.message.setObjectName('popHint'); self.message.setWordWrap(True); self.v.addWidget(self.message)
+        foot=QHBoxLayout()
+        refresh=QPushButton(get_icon('view-refresh'),' Refresh'); refresh.clicked.connect(self.scan); foot.addWidget(refresh)
+        settings=QPushButton(get_icon('preferences-system-network','preferences-system'),' Network Settings'); settings.clicked.connect(lambda: (self.close(), launch_app('nm-connection-editor'))); foot.addWidget(settings)
+        self.v.addLayout(foot)
+        self.worker=None; self.scan()
+
+    @staticmethod
+    def status_text(st):
+        if st.get('net') == 'wifi': return f"Connected to {st.get('connection') or 'Wi-Fi'}"
+        if st.get('net') == 'ethernet': return 'Ethernet connected'
+        return 'Not connected'
+
+    def show_message(self, text):
+        self.clear_list(); lab=QLabel(text); lab.setObjectName('popSub'); lab.setAlignment(Qt.AlignCenter); lab.setWordWrap(True)
+        self.list_layout.addWidget(lab); self.list_layout.addStretch()
+
+    def clear_list(self):
+        while self.list_layout.count():
+            item=self.list_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+
+    def scan(self):
+        if self.worker is not None: return
+        if self.panel.last_status.get('wifi_on') is False:
+            self.show_message('Wi-Fi is off.'); return
+        self.show_message('Searching for Wi-Fi networks…')
+        # Parented to the panel: the popup may close while nmcli still scans.
+        worker=WifiScanWorker(self.panel); self.worker=worker
+        worker.ready.connect(self.fill); worker.finished.connect(self._scan_done); worker.finished.connect(worker.deleteLater); worker.start()
+
+    def _scan_done(self):
+        self.worker=None
+
+    def closeEvent(self, e):
+        if self.worker is not None:
+            try:
+                self.worker.ready.disconnect(self.fill); self.worker.finished.disconnect(self._scan_done)
+            except (TypeError, RuntimeError):
+                pass
+            self.worker=None
+        super().closeEvent(e)
+
+    def fill(self, result):
+        if not result.get('nm'):
+            self.show_message('NetworkManager is not available.'); return
+        nets=result.get('networks') or []
+        if not nets:
+            self.show_message('No Wi-Fi networks found.'); return
+        self.clear_list(); known=result.get('known') or set()
+        for n in nets[:20]:
+            row=QPushButton(); row.setObjectName('netRow'); row.setProperty('active', n['active']); row.setCursor(Qt.PointingHandCursor)
+            row.setAccessibleName(f"{n['ssid']}, signal {n['signal']} percent" + (', secured' if n['secure'] else '') + (', connected' if n['active'] else ''))
+            lay=QHBoxLayout(row); lay.setContentsMargins(8,4,8,4); lay.setSpacing(8)
+            ic=QLabel(); ic.setPixmap(get_icon(_signal_icon(n['signal']),'network-wireless').pixmap(20,20)); lay.addWidget(ic)
+            name=QLabel(n['ssid']); name.setStyleSheet('font-weight:%s;' % ('800' if n['active'] else '600')); lay.addWidget(name,1)
+            if n['active']:
+                tag=QLabel('Connected'); tag.setStyleSheet('color:#00875f;font-weight:700;font-size:11px;'); lay.addWidget(tag)
+            if n['secure']:
+                lock=QLabel(); lock.setPixmap(get_icon('network-wireless-encrypted','changes-prevent').pixmap(14,14)); lay.addWidget(lock)
+            for w in row.findChildren(QLabel): w.setAttribute(Qt.WA_TransparentForMouseEvents)
+            row.setMinimumHeight(38)
+            row.clicked.connect(lambda _=False, net=n, k=(n['ssid'] in known): self.choose(net, k))
+            self.list_layout.addWidget(row)
+        self.list_layout.addStretch()
+
+    def toggle_wifi(self, on):
+        self.switch.setText('On' if on else 'Off')
+        safe_popen(['nmcli','radio','wifi','on' if on else 'off'])
+        self.panel.last_status['wifi_on']=on
+        if on: QTimer.singleShot(2500, self.scan)
+        else: self.show_message('Wi-Fi is off.')
+        QTimer.singleShot(800, self.panel.update_status_icons)
+
+    def choose(self, net, known):
+        ssid=net['ssid']
+        if net['active']:
+            m=RoundedMenu(self); m.addAction(get_icon('network-disconnect','process-stop'),'Disconnect', lambda: self.panel.run_network(['nmcli','connection','down','id',ssid], f'Disconnected from {ssid}.'))
+            m.exec_(QCursor.pos()); return
+        if known:
+            self.close(); self.panel.run_network(['nmcli','connection','up','id',ssid], f'Connected to {ssid}.'); return
+        if net['secure']:
+            self.close()
+            password, ok = QInputDialog.getText(None, 'Connect to Wi-Fi', f'Password for “{ssid}”:', QLineEdit.Password)
+            if not ok or not password: return
+            self.panel.run_network(['nmcli','device','wifi','connect',ssid,'password',password], f'Connected to {ssid}.')
+            return
+        self.close(); self.panel.run_network(['nmcli','device','wifi','connect',ssid], f'Connected to {ssid}.')
+
+
+class SinkWorker(QThread):
+    ready=pyqtSignal(object)
+    def run(self):
+        sinks=[]; current={}
+        for line in (_run_text(['pactl','list','sinks'], timeout=3) or '').splitlines():
+            line=line.strip()
+            if line.startswith('Sink #'):
+                current={}; sinks.append(current)
+            elif line.startswith('Name:') and sinks:
+                current['name']=line.split(':',1)[1].strip()
+            elif line.startswith('Description:') and sinks:
+                current['description']=line.split(':',1)[1].strip()
+        default=(_run_text(['pactl','get-default-sink']) or '').strip()
+        self.ready.emit({'sinks':[x for x in sinks if x.get('name')], 'default':default})
+
+
+class SoundPopup(PopupFrame):
+    """Volume, mute and output device."""
+    def __init__(self, panel):
+        super().__init__(panel); self.panel=panel
+        self.box.setFixedWidth(330); self.setAccessibleName('Sound')
+        st=panel.last_status or {}
+        head, self.head_icon, self.subtitle = popup_header('audio-volume-high','Sound','Output device')
+        self.v.addLayout(head)
+        card=QFrame(); card.setObjectName('acCard'); row=QHBoxLayout(card); row.setContentsMargins(10,8,12,8); row.setSpacing(10)
+        self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(20,20)); self.mute.setAccessibleName('Mute')
+        self.mute.setChecked(bool(st.get('muted'))); self.mute.toggled.connect(self.toggle_mute); row.addWidget(self.mute)
+        self.slider=QSlider(Qt.Horizontal); self.slider.setRange(0,100); self.slider.setAccessibleName('Volume'); row.addWidget(self.slider,1)
+        self.value=QLabel(''); self.value.setFixedWidth(42); self.value.setAlignment(Qt.AlignRight|Qt.AlignVCenter); row.addWidget(self.value)
+        vol=st.get('volume'); self.slider.setEnabled(vol is not None); self.slider.setValue(50 if vol is None else int(vol)); self.value.setText(f'{self.slider.value()}%' if vol is not None else '—')
+        self.v.addWidget(card)
+        self.devices=QComboBox(); self.devices.setAccessibleName('Output device'); self.devices.setVisible(False); self.devices.activated.connect(self.choose_device); self.v.addWidget(self.devices)
+        foot=QHBoxLayout()
+        settings=QPushButton(get_icon('preferences-desktop-sound','audio-volume-high'),' Sound Settings'); settings.clicked.connect(lambda: (self.close(), launch_app('pavucontrol-qt'))); foot.addWidget(settings)
+        self.v.addLayout(foot)
+        self._timer=QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self.apply_volume)
+        self.slider.valueChanged.connect(lambda v: (self.value.setText(f'{v}%'), self.update_icons(), self._timer.start(60)))
+        self.update_icons()
+        worker=SinkWorker(panel); self.worker=worker
+        worker.ready.connect(self.fill_devices); worker.finished.connect(worker.deleteLater); worker.start()
+
+    def update_icons(self):
+        muted=self.mute.isChecked(); v=self.slider.value()
+        name='audio-volume-muted' if muted or v == 0 else ('audio-volume-low' if v < 34 else 'audio-volume-medium' if v < 67 else 'audio-volume-high')
+        self.mute.setIcon(get_icon(name,'audio-volume-high')); self.head_icon.setPixmap(get_icon(name,'audio-volume-high').pixmap(30,30))
+
+    def fill_devices(self, data):
+        sinks=data.get('sinks') or []
+        current=next((s for s in sinks if s.get('name') == data.get('default')), sinks[0] if sinks else None)
+        self.subtitle.setText((current or {}).get('description') or ('No output device' if not sinks else 'Output device'))
+        if len(sinks) > 1:
+            for sink in sinks:
+                self.devices.addItem(get_icon('audio-card','audio-speakers'), sink.get('description') or sink['name'], sink['name'])
+            self.devices.setCurrentIndex(max(0, self.devices.findData(data.get('default'))))
+            self.devices.setVisible(True); self.adjustSize()
+
+    def choose_device(self, index):
+        name=self.devices.itemData(index)
+        if name:
+            safe_popen(['pactl','set-default-sink',name]); self.subtitle.setText(self.devices.itemText(index))
+            QTimer.singleShot(400, self.panel.update_status_icons)
+
+    def toggle_mute(self, on):
+        safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','1' if on else '0'])
+        self.panel.last_status['muted']=on; self.update_icons(); QTimer.singleShot(300, self.panel.update_status_icons)
+
+    def apply_volume(self):
+        v=self.slider.value(); self.panel.last_status['volume']=v
+        safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{v}%'])
+        QTimer.singleShot(400, self.panel.update_status_icons)
+
+    def closeEvent(self, e):
+        try: self.worker.ready.disconnect(self.fill_devices)
+        except (TypeError, RuntimeError): pass
+        super().closeEvent(e)
 
 
 class EdukaPanel(QWidget):
@@ -304,6 +591,7 @@ class EdukaPanel(QWidget):
         try: self.setAttribute(Qt.WA_X11DoNotAcceptFocus, True)
         except (AttributeError, TypeError): pass
         self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
+        self._tray_compact=False; self._showing_desktop=False; self._spy=None
         self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
@@ -311,6 +599,10 @@ class EdukaPanel(QWidget):
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
         self.workarea_timer=QTimer(self); self.workarea_timer.timeout.connect(self.enforce_window_space); self.workarea_timer.start(1400)
+        self.start_window_spy()
+        # Eduka-Panel replaces lxqt-panel, but only in Eduka-Desktop sessions.
+        QTimer.singleShot(2500, stop_lxqt_panel_in_eduka_session)
+        QTimer.singleShot(9000, stop_lxqt_panel_in_eduka_session)
         QTimer.singleShot(500, lambda: safe_popen(['eduka-app-cache','--warm']))
         QTimer.singleShot(900, lambda: safe_popen(['eduka-menu','--daemon']))
     def build_ui(self):
@@ -343,6 +635,10 @@ class EdukaPanel(QWidget):
         self.clock.setToolTip('Action Center — calendar, Wi-Fi, Bluetooth, sound and brightness')
         self.clock.setAccessibleName('Clock. Opens Action Center')
         self.layout.addWidget(self.tray)
+        # Thin corner button like other taskbars: show / restore the desktop.
+        self.desktop_button=QPushButton(); self.desktop_button.setObjectName('desktopButton'); self.desktop_button.setFixedWidth(10)
+        self.desktop_button.setToolTip('Show desktop'); self.desktop_button.setAccessibleName('Show desktop'); self.desktop_button.clicked.connect(self.toggle_show_desktop)
+        self.layout.addWidget(self.desktop_button)
     def setup_screen_tracking(self):
         """Re-layout when the resolution changes or a projector is connected."""
         self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.load_config)
@@ -385,6 +681,7 @@ class EdukaPanel(QWidget):
         QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(225,243,236,210));border:1px solid rgba(185,215,205,130);border-radius:{max(13,int(h/2.7))}px;padding:4px 12px;font-weight:700;color:#183c35;}} QPushButton#startButton:hover{{background:white;border:1px solid rgba(0,168,121,95);}}
         QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,200);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:#dff5ed;}} QPushButton#clockButton:hover{{background:rgba(255,255,255,200);}} QPushButton#clockButton:pressed{{background:#dff5ed;}}
         QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);border-bottom:3px solid #00a879;}}
+        QPushButton#desktopButton{{background:transparent;border:0;border-left:1px solid rgba(90,130,120,90);border-radius:0;margin:6px 0;}} QPushButton#desktopButton:hover{{background:rgba(0,168,121,60);}}
         QFrame#trayGroup{{background:rgba(255,255,255,{min(200, bg_alpha+30)});border:1px solid rgba(255,255,255,210);border-radius:{max(12,int(h/2.6))}px;}}
         QPushButton#batteryButton{{background:rgba(0,168,121,45);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
         QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{11 if h < 46 else 12}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
@@ -525,6 +822,52 @@ class EdukaPanel(QWidget):
             return
         if self._fullscreen_hidden:
             self.restore_after_covering_window()
+    def start_window_spy(self):
+        """React to window open/close/focus instantly instead of waiting for
+        the next poll: xprop -spy prints a line whenever the window list,
+        the active window or show-desktop state changes."""
+        if shutil.which('xprop') is None:
+            return
+        self._spy_debounce=QTimer(self); self._spy_debounce.setSingleShot(True); self._spy_debounce.timeout.connect(self.update_tasks)
+        spy=QProcess(self); self._spy=spy
+        spy.readyReadStandardOutput.connect(self._on_window_spy)
+        spy.finished.connect(lambda *_: QTimer.singleShot(5000, self.start_window_spy) if self._spy is spy else None)
+        spy.start('xprop', ['-root','-spy','_NET_CLIENT_LIST','_NET_ACTIVE_WINDOW','_NET_SHOWING_DESKTOP'])
+        app=QApplication.instance()
+        if app is not None and not getattr(self, '_spy_quit_hooked', False):
+            app.aboutToQuit.connect(self.stop_window_spy); self._spy_quit_hooked=True
+        if spy.waitForStarted(1000):
+            # Events drive the taskbar now; the timer only catches title changes.
+            self.task_timer.setInterval(2500)
+
+    def stop_window_spy(self):
+        spy=self._spy; self._spy=None
+        if spy is not None and spy.state() != QProcess.NotRunning:
+            spy.kill(); spy.waitForFinished(500)
+
+    def _on_window_spy(self):
+        if self._spy is None: return
+        data=bytes(self._spy.readAllStandardOutput()).decode('utf-8','replace')
+        for line in data.splitlines():
+            if line.startswith('_NET_SHOWING_DESKTOP'):
+                self._showing_desktop=line.strip().endswith('= 1')
+        self._spy_debounce.start(40)
+
+    def toggle_show_desktop(self):
+        if shutil.which('wmctrl'):
+            safe_popen(['wmctrl','-k','off' if self._showing_desktop else 'on'])
+            self._showing_desktop=not self._showing_desktop
+        elif shutil.which('xdotool'):
+            safe_popen(['xdotool','key','super+d'])
+
+    def eventFilter(self, obj, event):
+        # Middle click on a task or pinned button opens a new window of that app.
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.MiddleButton:
+            app=getattr(obj, '_eduka_app', None)
+            if app:
+                launch_app(app.get('exec',''), app.get('name','')); return True
+        return super().eventFilter(obj, event)
+
     def toggle_menu(self):
         # 0.9.7: direct in-process command with the resident menu daemon for normal response time.
         if not menu_daemon_alive():
@@ -795,7 +1138,7 @@ class EdukaPanel(QWidget):
             app=app_by_pin_key(key)
             if not app: continue
             if key not in self.pinned_buttons:
-                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.setToolTip('Pinned: '+app.get('name','Application'))
+                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.installEventFilter(self); btn.setToolTip('Pinned: '+app.get('name','Application')); btn._eduka_app=app
                 btn.setAccessibleName('Pinned application '+app.get('name','Application'))
                 btn.clicked.connect(lambda _,a=app: launch_app(a.get('exec',''), a.get('name','')))
                 btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -818,7 +1161,7 @@ class EdukaPanel(QWidget):
         for wid,title,wmclass,app,key in windows:
             name=(app['name'] if app else title)[:28]
             if wid not in self.buttons:
-                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.setToolTip(title); btn.clicked.connect(lambda _,w=wid: self.activate_or_minimize(w))
+                btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.installEventFilter(self); btn.setToolTip(title); btn.clicked.connect(lambda _,w=wid: self.activate_or_minimize(w))
                 btn.setContextMenuPolicy(Qt.CustomContextMenu)
                 btn.customContextMenuRequested.connect(lambda pos,w=wid,b=btn: self.task_context(w,b,pos))
                 btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -1045,7 +1388,7 @@ class EdukaPanel(QWidget):
         except (TypeError, ValueError): count=0
         visible=state == 'available' and count > 0
         self.eus_status=data if visible else {}
-        self.eus.setVisible(visible)
+        self.eus.setVisible(visible and not self._tray_compact)
         if not visible:
             self.eus.setText('')
             return
@@ -1105,6 +1448,23 @@ class EdukaPanel(QWidget):
         self.notif.setText(' Alerts' if self.hearing_accessibility else ''); self.notif.setToolTip('Notifications and visual alerts'); self.notif.setAccessibleName('Notifications and visual alerts')
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.refresh(st)
+        if self._tray_compact:
+            for w in self.tray_status_widgets(): w.hide()
+
+    def tray_status_widgets(self):
+        return [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang]
+
+    def set_tray_compact(self, compact):
+        """While the Action Center is open its tiles show network, sound,
+        Bluetooth and battery, so the tray keeps only the clock."""
+        compact=bool(compact)
+        if compact == self._tray_compact: return
+        self._tray_compact=compact
+        if compact:
+            for w in self.tray_status_widgets(): w.hide()
+        else:
+            self.lang.show(); self.net.show(); self.vol.show(); self.notif.show()
+            self.apply_status(self.last_status or {}); self.update_eus_status()
 
     def toggle_action_center(self):
         if self.action_center is not None and self.action_center.isVisible():
@@ -1120,6 +1480,7 @@ class EdukaPanel(QWidget):
         x=min(self.x()+self.width()-ac.width(), screen.right()-ac.width()-4); x=max(screen.x()+4, x)
         y=self.y()-ac.height()-8
         ac.move(x, y); ac.show(); ac.activateWindow()
+        self.set_tray_compact(True)
         self.update_status_icons()
 
     def wheelEvent(self,e):
@@ -1135,29 +1496,27 @@ class EdukaPanel(QWidget):
     def show_popup_above(self,popup,anchor):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
     def volume_popup(self):
-        p=PopupFrame(self); p.resize(270,125); p.v.addWidget(QLabel('<b>Sound</b>')); slider=QSlider(Qt.Horizontal); slider.setRange(0,100)
-        vol=self.last_status.get('volume'); slider.setValue(50 if vol is None else int(vol))
-        slider.valueChanged.connect(lambda v: safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{v}%'])); p.v.addWidget(slider)
-        row=QHBoxLayout(); row.addWidget(QPushButton('Mute')); row.addWidget(QPushButton('Sound Settings')); row.itemAt(0).widget().clicked.connect(lambda: (safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle']), self.update_status_icons())); row.itemAt(1).widget().clicked.connect(lambda: launch_app('pavucontrol-qt')); p.v.addLayout(row); self.show_popup_above(p,self.vol)
+        self.show_popup_above(SoundPopup(self), self.vol)
     def notification_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Notifications</b>')); p.v.addWidget(QLabel('No new notifications')); self.show_popup_above(p,self.notif)
     def battery_info(self):
         return battery_info()
     def battery_popup(self): info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>')); p.v.addWidget(QLabel(f"{info['capacity']}% • {info['status']}" if info else 'No battery detected')); self.show_popup_above(p,self.battery)
     def bluetooth_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Bluetooth</b>')); p.v.addWidget(QLabel('Use Bluetooth manager to pair devices.')); b=QPushButton('Open Bluetooth'); b.clicked.connect(lambda: launch_app('blueman-manager')); p.v.addWidget(b); self.show_popup_above(p,self.bt)
     def network_popup(self):
-        p=PopupFrame(self); p.resize(310,230); p.v.addWidget(QLabel('<b>Network</b>'))
-        try:
-            out=subprocess.check_output(['nmcli','-t','-f','SSID,SIGNAL,SECURITY','device','wifi','list','--rescan','no'], text=True, stderr=subprocess.DEVNULL, timeout=2); rows=[]
-            for r in out.splitlines():
-                parts=r.split(':');
-                if parts and parts[0] and parts[0] not in rows: rows.append(parts[0])
-            if not rows: p.v.addWidget(QLabel('No Wi-Fi networks found'))
-            for ssid in rows[:7]:
-                btn=QPushButton(ssid); btn.clicked.connect(lambda _,s=ssid: self.connect_wifi(s)); p.v.addWidget(btn)
-        except Exception: p.v.addWidget(QLabel('NetworkManager not available'))
-        self.show_popup_above(p,self.net)
-    def connect_wifi(self, ssid):
-        if not safe_popen(['nmcli','device','wifi','connect',ssid]): launch_app('nm-connection-editor')
+        self.show_popup_above(NetworkPopup(self), self.net)
+
+    def run_network(self, cmd, success):
+        """Run an nmcli action without blocking the panel and report the result."""
+        proc=QProcess(self); proc.setProcessChannelMode(QProcess.MergedChannels)
+        def done(code, _status, p=proc):
+            out=bytes(p.readAll()).decode('utf-8','replace').strip()
+            text=success if code == 0 else ('Could not connect: '+(out.splitlines()[-1] if out else 'unknown error'))
+            QToolTip.showText(self.net.mapToGlobal(QPoint(0,-30)) if self.net.isVisible() else QCursor.pos(), text, self.net, QRect(), 6000)
+            p.deleteLater(); QTimer.singleShot(300, self.update_status_icons)
+        proc.finished.connect(done)
+        proc.start(cmd[0], cmd[1:])
+        QToolTip.showText(QCursor.pos(), 'Connecting…' if 'up' in cmd or 'connect' in cmd else 'Working…', self.net, QRect(), 3000)
+
     def calendar_popup(self):
         self.toggle_action_center()
 

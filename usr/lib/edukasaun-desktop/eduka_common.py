@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.12"
+VERSION = "0.9.13"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -76,11 +76,50 @@ QMenu::indicator{width:14px;height:14px;padding-left:6px;}
 QMenu::right-arrow{width:8px;height:8px;margin-right:8px;}
 """
 
+_COMPOSITOR = {'checked': 0.0, 'value': True}
+
+def compositor_running():
+    """True when a compositing manager runs (needed for translucent windows).
+
+    Without one, X11 paints the transparent corners of rounded windows black.
+    Checks the EWMH _NET_WM_CM_Sn selection owner through libX11; cached for
+    30 seconds. Wayland always composites.
+    """
+    now=time.monotonic()
+    if _COMPOSITOR['checked'] and now - _COMPOSITOR['checked'] < 30:
+        return _COMPOSITOR['value']
+    value=True
+    if session_type() != 'wayland' and os.environ.get('DISPLAY'):
+        try:
+            import ctypes, ctypes.util
+            x11=ctypes.cdll.LoadLibrary(ctypes.util.find_library('X11') or 'libX11.so.6')
+            x11.XOpenDisplay.restype=ctypes.c_void_p; x11.XOpenDisplay.argtypes=[ctypes.c_char_p]
+            x11.XDefaultScreen.argtypes=[ctypes.c_void_p]
+            x11.XInternAtom.restype=ctypes.c_ulong; x11.XInternAtom.argtypes=[ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            x11.XGetSelectionOwner.restype=ctypes.c_ulong; x11.XGetSelectionOwner.argtypes=[ctypes.c_void_p, ctypes.c_ulong]
+            x11.XCloseDisplay.argtypes=[ctypes.c_void_p]
+            display=x11.XOpenDisplay(None)
+            if display:
+                atom=x11.XInternAtom(display, ('_NET_WM_CM_S%d' % x11.XDefaultScreen(display)).encode(), 0)
+                value=x11.XGetSelectionOwner(display, atom) != 0
+                x11.XCloseDisplay(display)
+        except Exception:
+            value=True
+    _COMPOSITOR['checked']=now; _COMPOSITOR['value']=value
+    return value
+
 def round_menu(menu):
-    """Give any QMenu (also Qt's built-in ones) smooth rounded corners."""
-    menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-    menu.setAttribute(Qt.WA_TranslucentBackground, True)
-    menu.setStyleSheet(MENU_QSS)
+    """Give any QMenu (also Qt's built-in ones) smooth rounded corners.
+
+    Without a compositor the menu stays an opaque window with a small radius,
+    so no black corners appear.
+    """
+    if compositor_running():
+        menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        menu.setAttribute(Qt.WA_TranslucentBackground, True)
+        menu.setStyleSheet(MENU_QSS)
+    else:
+        menu.setStyleSheet(MENU_QSS.replace('border-radius:14px', 'border-radius:0px'))
     return menu
 
 class RoundedMenu(QMenu):
@@ -209,7 +248,12 @@ DESKTOP_DIRS = [
 HIDE_IDS = {
     'edukasaun-desktop.desktop','eduka-menu-settings.desktop',
     'eduka-menu.desktop','eduka-panel.desktop','eduka-about.desktop',
-    'edukasaun-desktop-menu-open.desktop','eduka-app-registry.desktop','eduka-app-cache.desktop'
+    'edukasaun-desktop-menu-open.desktop','eduka-app-registry.desktop','eduka-app-cache.desktop',
+    # LXQt pieces that Eduka-Desktop already provides (footer buttons, About,
+    # Eduka-Panel). Eduka-Desktop only shows the LXQt tools it really needs.
+    'lxqt-leave.desktop','lxqt-logout.desktop','lxqt-lockscreen.desktop','lxqt-reboot.desktop',
+    'lxqt-shutdown.desktop','lxqt-suspend.desktop','lxqt-hibernate.desktop','lxqt-about.desktop',
+    'lxqt-panel.desktop',
 }
 INTERNAL_EXEC_MARKERS = (
     'eduka-menu', 'eduka-panel', 'eduka-about', 'eduka-app-registry', 'eduka-app-cache',
@@ -290,6 +334,33 @@ def save_menu_config(c):
 def save_desktop_config(c):
     current=read_desktop_config(); current.update(c); current['theme_style']=normalize_theme_style(current.get('theme_style')); write_json(desktop_config_path(), current); touch_reload()
 def touch_reload(): ensure_dirs(); (RUNTIME_DIR/'reload').write_text(str(time.time()))
+
+def in_eduka_session():
+    """True inside an Eduka-Desktop login session (set by eduka-desktop-session)."""
+    return bool(os.environ.get('EDUKA_DESKTOP_SESSION'))
+
+def stop_lxqt_panel_in_eduka_session():
+    """Stop lxqt-panel through lxqt-session, only in Eduka-Desktop sessions.
+
+    Eduka-Panel replaces lxqt-panel. Asking lxqt-session (instead of killing
+    the process) keeps it from restarting the panel, and a plain LXQt session
+    is never touched.
+    """
+    if not in_eduka_session() or shutil.which('pgrep') is None:
+        return False
+    try:
+        running=subprocess.run(['pgrep','-x','lxqt-panel'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2).returncode == 0
+    except Exception:
+        return False
+    if not running:
+        return False
+    if shutil.which('dbus-send'):
+        cmd=['dbus-send','--session','--type=method_call','--dest=org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule','string:lxqt-panel.desktop']
+    elif shutil.which('qdbus'):
+        cmd=['qdbus','org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule','lxqt-panel.desktop']
+    else:
+        return False
+    return safe_popen(cmd)
 
 def orca_available():
     """Return True when the Orca executable is available for this session."""

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Eduka-Desktop (X11)
-Comment=Edukasaun Desktop with Eduka-Panel on LXQt (X11, recommended)
+Name=Eduka-Desktop
+Comment=Edukasaun OS desktop: Eduka-Desktop, Eduka-Panel and Eduka-Menu on LXQt (X11)
 Exec=eduka-desktop-session
 TryExec=startlxqt
 Icon=/usr/share/pixmaps/eduka-desktop.png

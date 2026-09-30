@@ -74,6 +74,16 @@ def app_highlight_color(app, selected_category='All', position=None):
         position=sum((pos + 1) * ord(char) for pos, char in enumerate(token))
     return colors[(position + category_index + PALETTE['offset']) % len(colors)]
 
+# Surface opacity for tiles and the category list, derived from the
+# Eduka-Desktop transparency chosen in Eduka-Menu-Settings (0.45-1.0).
+# Tiles stay more opaque than the background so names remain readable.
+SURFACE = {'alpha': 205}
+
+def set_surface_from_transparency(transparency, high_contrast=False):
+    t=max(0.45, min(1.0, float(transparency)))
+    # 0.51 (default) gives ~222, close to the original 0.9.10 tiles.
+    SURFACE['alpha']=255 if high_contrast else int(215 + (t - 0.45) / 0.55 * 40)
+
 def _mix(rgb, amount):
     """Blend a color toward white; amount=1 keeps the color, 0 gives white."""
     return tuple(255 - int((255 - value) * amount) for value in rgb)
@@ -99,7 +109,7 @@ class CategoryDelegate(QStyledItemDelegate):
             border = QColor(255, 255, 255, 90)
             text_color = QColor(18, 35, 31) if accent.lightness() > 145 else QColor(255, 255, 255)
         else:
-            bg = QColor(255, 255, 255, 252 if high_contrast else 190)
+            bg = QColor(255, 255, 255, 252 if high_contrast else max(120, SURFACE['alpha'] - 40))
             border = QColor(70, 93, 87, 220) if high_contrast else QColor(accent.red(), accent.green(), accent.blue(), 70)
             text_color = QColor(31, 45, 42)
             if hover:
@@ -173,12 +183,13 @@ class AppButton(QToolButton):
         r,g,b=self._accent
         lr,lg,lb=_mix(self._accent, 0.34)
         pr,pg,pb=_mix(self._accent, 0.48)
-        tr,tg,tb=_mix(self._accent, 0.16)
+        tr,tg,tb=_mix(self._accent, 0.10)
+        a=SURFACE['alpha']
         if self._high_contrast:
             base=f'background:white;border:2px solid rgba(55,75,70,235);'
         else:
-            base=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,235),stop:1 rgba({tr},{tg},{tb},225));'
-                  f'border:2px solid rgba({r},{g},{b},90);')
+            base=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba({tr},{tg},{tb},{max(0,a-12)}));'
+                  f'border:2px solid rgba({r},{g},{b},70);')
         self.setStyleSheet(f"""
             QToolButton{{{base}border-radius:16px;padding:8px;color:#1f2d2a;font-weight:800;}}
             QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgb(255,255,255),stop:0.48 rgb({lr},{lg},{lb}),stop:1 rgb(247,253,250));border:2px solid rgb({r},{g},{b});color:#10231e;font-weight:900;}}
@@ -256,8 +267,8 @@ class AppListItem(QFrame):
     def _apply_style(self):
         r,g,b=self._accent
         lr,lg,lb=_mix(self._accent, 0.34)
-        base_alpha=255 if self._high_contrast else 236
-        border='rgba(55,75,70,235)' if self._high_contrast else f'rgba({r},{g},{b},80)'
+        base_alpha=255 if self._high_contrast else SURFACE['alpha']
+        border='rgba(55,75,70,235)' if self._high_contrast else f'rgba({r},{g},{b},60)'
         stripe='#344d47' if self._high_contrast else f'rgb({r},{g},{b})'
         self.setStyleSheet(f"""
             QFrame#appListItem{{border-radius:14px;background:rgba(255,255,255,{base_alpha});border:2px solid {border};border-left:6px solid {stripe};}}
@@ -425,6 +436,7 @@ class EdukaMenu(QWidget):
         accessibility=bool(dcfg.get('visual_accessibility', False))
         liquid=normalize_theme_style(dcfg.get('theme_style')) == THEME_LIQUID
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
+        set_surface_from_transparency(alpha, accessibility)
         if accessibility:
             alpha=0.98
         bg_alpha = int(alpha * 255)

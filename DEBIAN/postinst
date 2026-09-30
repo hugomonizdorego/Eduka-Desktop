@@ -11,6 +11,32 @@ done
 for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do
     [ -e "$d" ] && rm -rf "$d" || true
 done
+# SDDM has no "default session" option; it preselects the session stored in
+# its state file. Preselect Eduka-Desktop (X11) when nothing is stored, when
+# the stored session was removed, or when it is the plain LXQt session.
+eduka_session=/usr/share/xsessions/edukasaun-desktop.desktop
+if [ -d /var/lib/sddm ]; then
+    state=/var/lib/sddm/state.conf
+    current=$(sed -n 's/^[[:space:]]*Session=//p' "$state" 2>/dev/null | head -n1)
+    update=no
+    case "$current" in
+        "") update=yes ;;
+        *lxqt*.desktop) update=yes ;;
+        /*) [ -e "$current" ] || update=yes ;;
+        *) [ -e "/usr/share/xsessions/$current" ] || [ -e "/usr/share/wayland-sessions/$current" ] || update=yes ;;
+    esac
+    if [ "$update" = yes ]; then
+        if [ -f "$state" ] && grep -q '^[[:space:]]*Session=' "$state"; then
+            sed -i "s|^[[:space:]]*Session=.*|Session=$eduka_session|" "$state"
+        elif [ -f "$state" ] && grep -q '^\[Last\]' "$state"; then
+            sed -i "/^\[Last\]/a Session=$eduka_session" "$state"
+        else
+            printf '[Last]\nSession=%s\n' "$eduka_session" >> "$state"
+        fi
+        if id sddm >/dev/null 2>&1; then chown sddm:sddm "$state" 2>/dev/null || true; fi
+    fi
+fi
+
 pkill -f "eduka-menu --daemon" 2>/dev/null || true
 pkill -x eduka-panel 2>/dev/null || true
 # Do not force-start the GUI in an image-builder/chroot. It autostarts after desktop login.

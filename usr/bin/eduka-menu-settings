@@ -249,11 +249,12 @@ class Settings(QDialog):
             ('view-refresh','Rebuild application list','Use after installing or removing applications.', self.rebuild_apps),
             ('start-here','Reload Eduka-Desktop','Reload the start menu applications and style.', self.reload_desktop),
             ('system-reboot','Restart Eduka-Panel','Restart the bottom panel if it stops responding.', self.restart_panel),
+            ('edit-clear','Repair LXQt theme and session','Use if LXQt asks for a window manager or the theme looks wrong. Your old settings are kept as a backup.', self.repair_lxqt),
             ('help-about','About Edukasaun Desktop','Version and credits.', lambda: safe_popen(['eduka-about'])),
         ]
         for icon, text, hint, handler in actions:
             b=QPushButton(get_icon(icon), '  '+text); b.setObjectName('maintButton'); b.setIconSize(QSize(22,22)); b.setToolTip(hint); b.setAccessibleDescription(hint); b.clicked.connect(handler); p.v.addWidget(b)
-            h=QLabel(hint); h.setObjectName('fieldHint'); h.setContentsMargins(6,0,0,4); p.v.addWidget(h)
+            h=QLabel(hint); h.setObjectName('fieldHint'); h.setWordWrap(True); h.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); h.setContentsMargins(6,0,0,4); p.v.addWidget(h)
         p.v.addStretch(); return p
 
     def rebuild_apps(self):
@@ -271,6 +272,19 @@ class Settings(QDialog):
     def restart_panel(self):
         safe_popen('pkill -x eduka-panel; sleep 0.3; env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-panel', shell=True)
         self.show_status('Eduka-Panel is restarting.')
+
+    def repair_lxqt(self):
+        if QMessageBox.question(self, 'Repair LXQt settings',
+                'Move your LXQt settings aside so LXQt recreates them from the Edukasaun defaults?\n\n'
+                'Nothing is deleted: the old settings are kept in ~/.config/lxqt.backup-… . '
+                'Log out and log in again afterwards.') != QMessageBox.Yes:
+            return
+        try:
+            out=subprocess.run(['eduka-lxqt-repair'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+            ok=out.returncode == 0; text=out.stdout.strip().splitlines()
+        except Exception as exc:
+            ok=False; text=[str(exc)]
+        self.show_status(('LXQt settings repaired. Log out and log in again.' if ok else 'Repair failed: '+(text[-1] if text else 'unknown error')), error=not ok)
 
     def show_status(self, text, error=False):
         self.status.setText(text); self.status.setProperty('error', bool(error))

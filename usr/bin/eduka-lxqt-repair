@@ -1,0 +1,17 @@
+#!/bin/sh
+# Repair LXQt user settings for Eduka-Desktop.
+# 0.9.12 started LXQt without its default configuration directory, so an
+# account that logged in with it may have LXQt settings without a window
+# manager and without the Edukasaun theme. This moves ~/.config/lxqt aside
+# (nothing is deleted); LXQt recreates it from the system defaults at the
+# next login.
+set -e
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+if [ ! -d "$cfg/lxqt" ]; then
+    echo "LXQt settings are already at their defaults."
+    exit 0
+fi
+backup="$cfg/lxqt.backup-$(date +%Y%m%d-%H%M%S)"
+mv "$cfg/lxqt" "$backup"
+echo "LXQt settings moved to $backup"
+echo "Log out and log in again to finish."
