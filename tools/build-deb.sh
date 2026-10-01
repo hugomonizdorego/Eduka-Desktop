@@ -30,6 +30,7 @@ find "$STAGE" -type d -exec chmod 0755 {} +
 find "$STAGE" -type f -exec chmod 0644 {} +
 chmod 0755 "$STAGE"/usr/bin/*
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/live-autologin
+chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-sddm-apply
 for s in preinst postinst prerm postrm; do
     [ -f "$STAGE/DEBIAN/$s" ] && chmod 0755 "$STAGE/DEBIAN/$s"
 done

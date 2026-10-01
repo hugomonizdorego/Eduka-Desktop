@@ -427,6 +427,28 @@ class EdukaMenu(QWidget):
         if start_visible:
             QTimer.singleShot(20, self.show_menu)
 
+    @staticmethod
+    def search_icon():
+        """Magnifier from the icon theme, or a drawn one when it has none."""
+        for name in ('system-search', 'edit-find'):
+            if QIcon.hasThemeIcon(name):
+                return QIcon.fromTheme(name)
+        pix=QPixmap(32, 32); pix.fill(Qt.transparent)
+        p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor('#7a8f89'), 3.2, Qt.SolidLine, Qt.RoundCap)); p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QRectF(5, 5, 16, 16)); p.drawLine(QPointF(19, 19), QPointF(27, 27)); p.end()
+        return QIcon(pix)
+
+    def update_greeting(self):
+        hour=QTime.currentTime().hour()
+        part='Good morning' if 4 <= hour < 12 else 'Good afternoon' if hour < 18 else 'Good evening'
+        try:
+            import pwd
+            name=(pwd.getpwuid(os.getuid()).pw_gecos.split(',')[0] or pwd.getpwuid(os.getuid()).pw_name).strip()
+        except Exception:
+            name=os.environ.get('USER','')
+        self.greeting.setText(f'{part}, {name.split()[0].capitalize()}' if name else part)
+
     def category_entries(self):
         # Favorites are shown only in the right-side Favorites panel, not as a duplicated category.
         return [(name, icon, needles) for name, icon, needles in CATEGORY_ORDER if name != 'Favorites']
@@ -439,23 +461,28 @@ class EdukaMenu(QWidget):
         hdr=QHBoxLayout(); hdr.setSpacing(12)
         logo=QLabel(); logo.setPixmap(get_icon('/usr/share/Edukasaun/Logo/Edukasaun Logo.png', START_ICON).pixmap(42,42)); hdr.addWidget(logo)
         brand=QVBoxLayout(); brand.setSpacing(0)
-        brand_title=QLabel('EDUKA-DESKTOP'); brand_title.setObjectName('brandTitle')
-        brand_sub=QLabel(f'Edukasaun OS • Codename Kameli • {VERSION}'); brand_sub.setObjectName('brandSub')
-        brand.addWidget(brand_title); brand.addWidget(brand_sub); hdr.addLayout(brand)
-        self.search=QLineEdit(); self.search.setPlaceholderText('Search applications...')
+        # Friendly greeting; refreshed every time Eduka-Desktop opens.
+        self.greeting=QLabel(''); self.greeting.setObjectName('brandTitle')
+        brand_sub=QLabel(f'Eduka-Desktop • Edukasaun OS {VERSION}'); brand_sub.setObjectName('brandSub')
+        brand.addWidget(self.greeting); brand.addWidget(brand_sub); hdr.addLayout(brand)
+        self.update_greeting()
+        self.search=QLineEdit(); self.search.setPlaceholderText('Search applications…')
+        self.search.addAction(self.search_icon(), QLineEdit.LeadingPosition)
+        self.search.setClearButtonEnabled(True); self.search.setObjectName('searchBox')
         self.search.setAccessibleName('Search applications')
         self.search.setAccessibleDescription('Type an application name or category')
         self.search.setMinimumWidth(330)
         rounded_text_context_menu(self.search)
         self.refresh_timer=QTimer(self); self.refresh_timer.setSingleShot(True); self.refresh_timer.timeout.connect(self.refresh_apps)
         self.search.textChanged.connect(lambda: self.refresh_timer.start(90)); self.search.returnPressed.connect(self.launch_first_result); hdr.addWidget(self.search,1)
-        self.grid_btn=QPushButton('▦ Grid'); self.list_btn=QPushButton('☷ List')
+        self.grid_btn=QPushButton('▦  Grid'); self.list_btn=QPushButton('☷  List')
+        self.grid_btn.setObjectName('segLeft'); self.list_btn.setObjectName('segRight')
+        for b in (self.grid_btn, self.list_btn): b.setCheckable(True)
         self.grid_btn.setAccessibleName('Grid layout'); self.list_btn.setAccessibleName('List layout')
         self.grid_btn.clicked.connect(lambda: self.set_layout('Grid'))
         self.list_btn.clicked.connect(lambda: self.set_layout('List'))
-        hdr.addWidget(self.grid_btn); hdr.addWidget(self.list_btn)
-        lock=QPushButton(); lock.setIcon(get_icon('system-lock-screen')); lock.setToolTip('Lock Screen'); lock.setAccessibleName('Lock Screen'); lock.clicked.connect(lambda: (self.hide_menu(force=True), launch_app('eduka-session-action lock'))); hdr.addWidget(lock)
-        close=QPushButton('✕'); close.setToolTip('Close'); close.setAccessibleName('Close Eduka-Desktop'); close.clicked.connect(lambda: self.hide_menu(force=True)); close.setFixedWidth(42); close.setStyleSheet('QPushButton{background:#e95454;color:white;border-radius:14px;font-weight:900;} QPushButton:hover{background:#ff6b6b;}')
+        seg=QHBoxLayout(); seg.setSpacing(0); seg.addWidget(self.grid_btn); seg.addWidget(self.list_btn); hdr.addLayout(seg)
+        close=QPushButton('✕'); close.setObjectName('closeButton'); close.setToolTip('Close (Esc)'); close.setAccessibleName('Close Eduka-Desktop'); close.clicked.connect(lambda: self.hide_menu(force=True)); close.setFixedSize(38,38)
         hdr.addWidget(close); main.addLayout(hdr)
         body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
         self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.cats.setAccessibleName('Application categories')
@@ -473,10 +500,17 @@ class EdukaMenu(QWidget):
         self.side=QFrame(); self.side.setObjectName('sideCard'); self.side.setFixedWidth(230)
         self.side_layout=QVBoxLayout(self.side); self.side_layout.setContentsMargins(14,12,14,12); self.side_layout.setSpacing(10)
         body.addWidget(self.side)
-        foot=QHBoxLayout(); foot.setSpacing(10); main.addLayout(foot)
-        for label, icon, cmd in [('File Manager','system-file-manager','pcmanfm-qt'),('QTerminal','utilities-terminal','qterminal'),('Lock Screen','system-lock-screen','eduka-session-action lock'),('Logout','system-log-out','eduka-session-action logout'),('Restart','system-reboot','eduka-session-action restart'),('Shutdown','system-shutdown','eduka-session-action shutdown'),('About','help-about','eduka-about')]:
-            b=QPushButton(' '+label); b.setIcon(get_icon(icon))
+        # Footer: places on the left, round session buttons on the right.
+        foot=QHBoxLayout(); foot.setSpacing(8); main.addLayout(foot)
+        for label, icon, cmd in [('File Manager','system-file-manager','pcmanfm-qt'),('Terminal','utilities-terminal','qterminal'),('Settings','preferences-system','eduka-menu-settings')]:
+            b=QPushButton(' '+label); b.setObjectName('footChip'); b.setIcon(get_icon(icon)); b.setIconSize(QSize(20,20))
             b.setAccessibleName(label); b.setFocusPolicy(Qt.StrongFocus)
+            b.clicked.connect(lambda _,c=cmd: (self.hide_menu(force=True), launch_app(c)))
+            foot.addWidget(b)
+        foot.addStretch(1)
+        for label, icon, cmd in [('About','help-about','eduka-about'),('Lock Screen','system-lock-screen','eduka-session-action lock'),('Logout','system-log-out','eduka-session-action logout'),('Restart','system-reboot','eduka-session-action restart'),('Shut Down','system-shutdown','eduka-session-action shutdown')]:
+            b=QPushButton(); b.setObjectName('powerShutdown' if label == 'Shut Down' else 'powerButton'); b.setIcon(get_icon(icon)); b.setIconSize(QSize(20,20)); b.setFixedSize(40,40)
+            b.setToolTip(label); b.setAccessibleName(label); b.setFocusPolicy(Qt.StrongFocus)
             if label == 'About':
                 b.clicked.connect(self.open_about)
             else:
@@ -498,6 +532,17 @@ class EdukaMenu(QWidget):
             QLabel#infoValue{color:#1f2d2a;font-weight:650;}
             QFrame#sysInfoCard{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,225),stop:1 rgba(236,248,242,205));border:1px solid rgba(200,226,216,220);border-radius:14px;}
             QLabel{color:#1f2d2a;}
+            QLabel#brandTitle{font-size:17px;}
+            QLineEdit#searchBox{border-radius:17px;padding:8px 12px;}
+            QPushButton#segLeft,QPushButton#segRight{padding:8px 14px;border:1px solid rgba(0,120,90,40);}
+            QPushButton#segLeft{border-top-right-radius:0;border-bottom-right-radius:0;border-top-left-radius:14px;border-bottom-left-radius:14px;}
+            QPushButton#segRight{border-top-left-radius:0;border-bottom-left-radius:0;border-top-right-radius:14px;border-bottom-right-radius:14px;border-left:0;}
+            QPushButton#segLeft:checked,QPushButton#segRight:checked{background:#00a879;color:white;border:1px solid #00a879;}
+            QPushButton#closeButton{background:rgba(233,84,84,30);color:#d03c3c;border:0;border-radius:19px;font-weight:900;padding:0;}
+            QPushButton#closeButton:hover{background:#e95454;color:white;}
+            QPushButton#footChip{border-radius:16px;padding:8px 14px;}
+            QPushButton#powerButton,QPushButton#powerShutdown{border-radius:20px;padding:0;}
+            QPushButton#powerShutdown:hover{background:rgba(233,84,84,40);border:1px solid #e95454;}
         """
         # apply_visual_settings() sets the one window stylesheet (base + theme);
         # setting base_qss first as well left Qt with stale theme rules.
@@ -542,6 +587,8 @@ class EdukaMenu(QWidget):
                 'QLineEdit{background:rgba(255,255,255,215);border:1px solid rgba(255,255,255,240);}'
                 'QPushButton{'+liquid_glass_surface(1.3, 12, 1)+'}'
                 'QPushButton:hover{background:rgba(255,255,255,230);}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:rgba(30,155,215,215);color:white;border:1px solid rgba(255,255,255,200);}'
+                'QLineEdit#searchBox:focus{border:1px solid #1e9bd7;}'
             ) if liquid and not accessibility else ''
             dark_qss = (
                 'QLineEdit{background:rgba(56,56,56,235);border:1px solid rgba(255,255,255,40);color:#ffffff;selection-background-color:#26A69A;}'
@@ -559,6 +606,8 @@ class EdukaMenu(QWidget):
                 'QLabel#sectionTitle,QLabel#brandTitle,QLabel#infoTitle,QLabel#infoValue{color:#ffffff;}'
                 'QLabel#brandSub,QLabel#mutedText,QLabel#mutedSmall,QLabel#emptyText,QLabel#infoKey{color:rgba(255,255,255,153);}'
                 'QFrame#sysInfoCard{background:rgba(66,66,66,200);border:1px solid rgba(255,255,255,30);}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:#26A69A;color:white;border:1px solid #26A69A;}'
+                'QPushButton#closeButton{background:rgba(239,154,154,30);color:#EF9A9A;}'
             ) if dark else ''
             # The application stylesheet (tooltips) must change before the
             # window stylesheet; the other order leaves window rules stale.
@@ -801,8 +850,7 @@ class EdukaMenu(QWidget):
         # Searching always covers every application, not only the selected category.
         category='All' if query else self.current_category
         self.category_title.setText(f'Search results for “{query}”' if query else self.current_category)
-        self.grid_btn.setText('✓ Grid' if self.layout_mode=='Grid' else '▦ Grid')
-        self.list_btn.setText('✓ List' if self.layout_mode=='List' else '☷ List')
+        self.grid_btn.setChecked(self.layout_mode=='Grid'); self.list_btn.setChecked(self.layout_mode=='List')
         apps=filter_apps(self.apps, category, query)
         high_contrast=bool(self.desktop_cfg.get('visual_accessibility', False))
         orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
@@ -866,7 +914,7 @@ class EdukaMenu(QWidget):
         icon_theme_setup()
         self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
         self._show_guard_until = time.time() + 0.35
-        self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow()
+        self.update_greeting(); self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow()
         QTimer.singleShot(30, self.raise_)
         # Typing right after opening the menu searches, like other start menus.
         QTimer.singleShot(40, lambda: self.search.setFocus(Qt.PopupFocusReason))
@@ -913,12 +961,29 @@ class EdukaMenu(QWidget):
             action=data.get('action','toggle')
             if action in ('show','force-show'): self.show_menu()
             elif action in ('hide','force-hide'): self.hide_menu(force=True)
-            elif action == 'reload-style':
-                self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config(); self.position(); self.apply_visual_settings(); self.refresh_apps()
+            elif action in ('reload-style', 'reset'):
+                self.reload_style(reset=action == 'reset')
             elif action == 'reload-apps':
                 self.apps=load_apps(force=True); self.rebuild_categories(preserve=True); self.refresh_apps()
             else: self.toggle_menu()
         except Exception: pass
+
+    def reload_style(self, reset=False):
+        """Re-read every setting written by Eduka-Menu Settings and apply it
+        right away: theme, icon theme, size, layout and default section.
+        With reset=True the remembered search, colors and category are
+        dropped too, so Eduka-Desktop looks exactly like a fresh install."""
+        self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
+        icon_theme_setup(force=True)
+        QApplication.instance().setStyleSheet(tooltip_qss())
+        self.layout_mode=self.desktop_cfg.get('layout','Grid')
+        if reset:
+            self.search.blockSignals(True); self.search.clear(); self.search.blockSignals(False)
+            reshuffle_palette(); self.cats.itemDelegate().row_colors.clear(); self._hover_row=None
+        self.current_category=self.desktop_cfg.get('last_category','Edukasaun') or 'Edukasaun'
+        self.position(); self.apply_visual_settings()
+        self.rebuild_categories(preserve=True); self.refresh_side()
+        self.refresh_apps()
 
     def recolor(self):
         """Apply a new palette to the hidden menu (no rebuild needed)."""

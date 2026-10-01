@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.15"
+VERSION = "0.9.16"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -133,11 +133,75 @@ def ensure_compositor():
     only started when nothing composites. xrender backend, no shadows, no
     fading: light and stable, also in VirtualBox.
     """
-    if not in_eduka_session() or session_type() == 'wayland':
+    if not in_eduka_session() or session_type() == 'wayland' or shutil.which('picom') is None:
         return False
-    if compositor_running(force=True) or shutil.which('picom') is None:
+    mode, args = _picom_mode()
+    own=_own_picom()
+    if own and own[1] == mode:
+        return True
+    if own:
+        # Theme or blur setting changed: restart the picom Eduka started.
+        try: os.kill(own[0], 15)
+        except Exception: pass
+        for _ in range(20):
+            if not compositor_running(force=True): break
+            time.sleep(0.05)
+    elif compositor_running(force=True):
+        return False        # xfwm4, KWin or a user-started compositor
+    ok=_start_picom(mode, args)
+    if not ok and mode != 'xrender':
+        # No working OpenGL (e.g. VirtualBox without 3D): glass without blur.
+        fallback_mode, fallback_args = 'xrender', _PICOM_XRENDER
+        ok=_start_picom(fallback_mode, fallback_args)
+    return ok
+
+PICOM_STATE = RUNTIME_DIR/'picom.json'
+_PICOM_XRENDER = ['picom','--backend','xrender','--config','/dev/null']
+
+def _picom_mode():
+    """xrender (light, works everywhere) or glx with blur behind the glass of
+    Eduka-Panel and Eduka-Desktop when Liquid Glass blur is switched on."""
+    try:
+        cfg=read_desktop_config()
+        blur=normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID and bool(cfg.get('glass_blur', False))
+    except Exception:
+        blur=False
+    if blur:
+        return 'glx-blur', ['picom','--backend','glx','--config','/dev/null',
+                            '--blur-method','dual_kawase','--blur-strength','4',
+                            '--blur-background-exclude',"class_g != 'eduka-panel' && class_g != 'eduka-menu'"]
+    return 'xrender', list(_PICOM_XRENDER)
+
+def _own_picom():
+    """(pid, mode) of the picom this session's Eduka started, if it runs."""
+    try:
+        data=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
+        pid=int(data.get('pid', 0))
+        cmdline=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')[0]
+        if pid > 0 and os.path.basename(cmdline.decode('utf-8', 'ignore')) == 'picom':
+            return pid, data.get('mode', 'xrender')
+    except Exception:
+        pass
+    return None
+
+def _start_picom(mode, args):
+    try:
+        proc=subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
+    except Exception:
         return False
-    return safe_popen(['picom','-b','--backend','xrender','--config','/dev/null'])
+    for _ in range(30):
+        time.sleep(0.05)
+        if proc.poll() is not None:
+            return False
+        if compositor_running(force=True):
+            break
+    if proc.poll() is not None:
+        return False
+    try:
+        write_json(PICOM_STATE, {'pid': proc.pid, 'mode': mode})
+    except Exception:
+        pass
+    return True
 
 def wait_for_compositor(timeout=2.5):
     """Before creating windows: start picom if needed and give the
@@ -189,6 +253,19 @@ def effective_theme(value):
     return theme
 
 def liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
+    """Liquid Glass surface (0.9.16): soft milky glass, a gentle highlight
+    along the top edge, an even body and a slightly brighter foot, with a
+    thin light rim. After github.com/ryohsuke1231/liquid-glass, drawn with
+    Qt stylesheets (blur comes from picom when enabled)."""
+    k=max(0.4, min(1.6, float(alpha_scale)))
+    a=lambda v: max(0, min(255, int(v*k)))
+    return (f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,'
+            f'stop:0 rgba(255,255,255,{a(150)}),stop:0.04 rgba(255,255,255,{a(118)}),'
+            f'stop:0.5 rgba(246,250,252,{a(96)}),stop:0.96 rgba(240,247,250,{a(108)}),stop:1 rgba(255,255,255,{a(140)}));'
+            f'border:{rim}px solid rgba(255,255,255,{a(150)});border-top:{rim}px solid rgba(255,255,255,{a(215)});'
+            f'border-radius:{radius}px;')
+
+def _old_liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
     """Liquid Glass surface: clear glass with a bright specular band at the
     top, a soft base and a light rim (after the Liquid Glass look of
     github.com/ryohsuke1231/liquid-glass, rendered with Qt stylesheets)."""
@@ -305,6 +382,151 @@ def _set_ini_value(path, section, key, value):
     tmp=path.with_suffix(path.suffix+'.eduka-tmp')
     tmp.write_text('\n'.join(out)+'\n', encoding='utf-8'); os.replace(tmp, path)
 
+def _get_ini_value(path, section, key, default=None):
+    try:
+        lines=Path(path).read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        return default
+    in_section=False
+    for line in lines:
+        stripped=line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            in_section = stripped == f'[{section}]'
+        elif in_section:
+            m=re.match(r'\s*%s\s*=\s*(.*)$' % re.escape(key), line)
+            if m:
+                return m.group(1).strip()
+    return default
+
+def _remove_ini_value(path, section, key):
+    path=Path(path)
+    if not path.exists():
+        return
+    out=[]; in_section=False
+    for line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        stripped=line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            in_section = stripped == f'[{section}]'
+        elif in_section and re.match(r'\s*%s\s*=' % re.escape(key), line):
+            continue
+        out.append(line)
+    path.write_text('\n'.join(out)+'\n', encoding='utf-8')
+
+DARK_PALETTE = {
+    # LXQt's Qt platform plugin reads these from lxqt.conf [Palette].
+    'window_color': '#2c2c2c', 'base_color': '#212121', 'highlight_color': '#26a69a',
+    'window_text_color': '#ffffff', 'text_color': '#ffffff', 'highlighted_text_color': '#ffffff',
+    'link_color': '#4db6ac', 'link_visited_color': '#80cbc4',
+}
+THEME_BACKUP = BASE_CONFIG/'desktop-theme-backup.json'
+DESKTOP_DARK_THEME = 'Edukasaun-Dark'
+
+def _home(*parts):
+    return Path.home().joinpath(*parts)
+
+def _openbox_rc():
+    for name in ('lxqt-rc.xml', 'rc.xml'):
+        path=_home('.config','openbox',name)
+        if path.exists():
+            return path
+    return None
+
+def _openbox_theme(path):
+    try:
+        m=re.search(r'<theme>.*?<name>([^<]*)</name>', path.read_text(encoding='utf-8', errors='ignore'), re.S)
+        return m.group(1).strip() if m else None
+    except Exception:
+        return None
+
+def _set_openbox_theme(path, name):
+    try:
+        text=path.read_text(encoding='utf-8', errors='ignore')
+        new=re.sub(r'(<theme>.*?<name>)[^<]*(</name>)', lambda m: m.group(1)+name+m.group(2), text, count=1, flags=re.S)
+        if new != text:
+            path.write_text(new, encoding='utf-8')
+        if shutil.which('openbox'):
+            safe_popen(['openbox','--reconfigure'])
+    except Exception:
+        pass
+
+def _xfwm4_theme():
+    if shutil.which('xfconf-query') is None:
+        return None
+    try:
+        out=subprocess.run(['xfconf-query','-c','xfwm4','-p','/general/theme'], capture_output=True, text=True, timeout=2)
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except Exception:
+        return None
+
+def _set_xfwm4_theme(name):
+    if shutil.which('xfconf-query'):
+        safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-s',name])
+
+def apply_desktop_theme(theme=None):
+    """Make the whole desktop follow the Eduka theme.
+
+    Edukasaun-Dark switches GTK applications (GTK 2/3/4), Qt applications
+    (LXQt palette) and the window borders (xfwm4 or Openbox) to the bundled
+    Edukasaun-Dark theme (Orchis dark). The user's previous choices are saved
+    first and restored when another Eduka theme is chosen.
+    """
+    theme=normalize_theme_style(theme if theme is not None else read_desktop_config().get('theme_style'))
+    lxqt=_home('.config','lxqt','lxqt.conf')
+    gtk3=_home('.config','gtk-3.0','settings.ini'); gtk4=_home('.config','gtk-4.0','settings.ini')
+    gtk2=_home('.gtkrc-2.0')
+    if theme == THEME_DARK:
+        if not THEME_BACKUP.exists():
+            ob=_openbox_rc()
+            backup={
+                'gtk3_theme': _get_ini_value(gtk3, 'Settings', 'gtk-theme-name'),
+                'gtk3_dark': _get_ini_value(gtk3, 'Settings', 'gtk-application-prefer-dark-theme'),
+                'gtk4_theme': _get_ini_value(gtk4, 'Settings', 'gtk-theme-name'),
+                'gtk4_dark': _get_ini_value(gtk4, 'Settings', 'gtk-application-prefer-dark-theme'),
+                'gtk2': gtk2.read_text(encoding='utf-8', errors='ignore') if gtk2.exists() else None,
+                'palette': {k: _get_ini_value(lxqt, 'Palette', k) for k in DARK_PALETTE},
+                'openbox': _openbox_theme(ob) if ob else None,
+                'xfwm4': _xfwm4_theme(),
+            }
+            write_json(THEME_BACKUP, backup)
+        for path in (gtk3, gtk4):
+            _set_ini_value(path, 'Settings', 'gtk-theme-name', DESKTOP_DARK_THEME)
+            _set_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme', 'true')
+        lines=[l for l in (gtk2.read_text(encoding='utf-8', errors='ignore').splitlines() if gtk2.exists() else []) if not l.strip().startswith('gtk-theme-name')]
+        lines.append(f'gtk-theme-name="{DESKTOP_DARK_THEME}"')
+        gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+        for key, value in DARK_PALETTE.items():
+            _set_ini_value(lxqt, 'Palette', key, value)
+        ob=_openbox_rc()
+        if ob: _set_openbox_theme(ob, DESKTOP_DARK_THEME)
+        if shutil.which('xfwm4') and _xfwm4_theme() is not None: _set_xfwm4_theme(DESKTOP_DARK_THEME)
+        return True
+    if not THEME_BACKUP.exists():
+        return False
+    try:
+        backup=json.loads(THEME_BACKUP.read_text(encoding='utf-8'))
+    except Exception:
+        backup={}
+    for path, tkey, dkey in ((gtk3, 'gtk3_theme', 'gtk3_dark'), (gtk4, 'gtk4_theme', 'gtk4_dark')):
+        if backup.get(tkey): _set_ini_value(path, 'Settings', 'gtk-theme-name', backup[tkey])
+        else: _remove_ini_value(path, 'Settings', 'gtk-theme-name')
+        if backup.get(dkey): _set_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme', backup[dkey])
+        else: _remove_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme')
+    if backup.get('gtk2') is not None:
+        gtk2.write_text(backup['gtk2'], encoding='utf-8')
+    elif gtk2.exists():
+        lines=[l for l in gtk2.read_text(encoding='utf-8', errors='ignore').splitlines() if not l.strip().startswith('gtk-theme-name')]
+        gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+    for key in DARK_PALETTE:
+        old=(backup.get('palette') or {}).get(key)
+        if old: _set_ini_value(lxqt, 'Palette', key, old)
+        else: _remove_ini_value(lxqt, 'Palette', key)
+    ob=_openbox_rc()
+    if ob and backup.get('openbox'): _set_openbox_theme(ob, backup['openbox'])
+    if backup.get('xfwm4'): _set_xfwm4_theme(backup['xfwm4'])
+    try: THEME_BACKUP.unlink()
+    except Exception: pass
+    return True
+
 def set_icon_theme(name):
     """Use an icon theme for the whole desktop: LXQt (file manager, dialogs),
     GTK applications and the Eduka components."""
@@ -387,8 +609,8 @@ DEFAULT_PANEL = {
     "taskbar_max_button_width": 175,
     "taskbar_min_button_width": 46
 }
-DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system"}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False}
+DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),

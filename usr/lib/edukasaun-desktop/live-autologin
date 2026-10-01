@@ -44,6 +44,23 @@ Session=edukasaun-desktop.desktop
 Relogin=false
 CONF
 
+# live-config (and some installers) write an [Autologin] section into
+# /etc/sddm.conf, which SDDM reads after sddm.conf.d: make that section log
+# in to Eduka-Desktop as the live user as well.
+MAIN_CONF="${EDUKA_SDDM_CONF:-/etc/sddm.conf}"  # override for tests
+if [ -f "$MAIN_CONF" ] && grep -q '^\[Autologin\]' "$MAIN_CONF"; then
+    tmp="$MAIN_CONF.eduka-tmp"
+    awk -v user="$user" '
+        function finish() { if (inauto) { if (!u) print "User=" user; if (!s) print "Session=edukasaun-desktop.desktop" } }
+        /^\[/ { finish(); inauto = ($0 == "[Autologin]"); u = 0; s = 0; print; next }
+        inauto && /^[[:space:]]*User[[:space:]]*=/ { print "User=" user; u = 1; next }
+        inauto && /^[[:space:]]*Session[[:space:]]*=/ { print "Session=edukasaun-desktop.desktop"; s = 1; next }
+        { print }
+        END { finish() }
+    ' "$MAIN_CONF" > "$tmp" && cat "$tmp" > "$MAIN_CONF"
+    rm -f "$tmp"
+fi
+
 if [ -d /etc/lightdm ]; then
     mkdir -p /etc/lightdm/lightdm.conf.d
     cat > "$LIGHTDM_FILE" <<CONF

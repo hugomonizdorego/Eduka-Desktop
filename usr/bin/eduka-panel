@@ -268,6 +268,10 @@ def ac_qss():
     u=ui_colors()
     return f"""
 QLabel#acTime{{font-size:30px;font-weight:800;color:{u['title']};}}
+QFrame#acGrip{{background:{u['muted']};border-radius:2px;}}
+QFrame#acGripArea:hover QFrame#acGrip{{background:{u['accent']};}}
+QLabel#todayDay{{background:{u['accent']};color:#ffffff;border-radius:27px;font-size:24px;font-weight:800;}}
+QLabel#todayWeekday{{font-size:16px;font-weight:800;color:{u['title']};}}
 QLabel#acDate{{font-size:13px;color:{u['sub']};font-weight:600;}}
 QToolButton#acTile{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:6px 4px;color:{u['text']};font-size:11px;font-weight:700;}}
 QToolButton#acTile:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
@@ -344,7 +348,7 @@ class CalendarCard(QFrame):
         self.next=QToolButton(); self.next.setObjectName('calNav'); self.next.setIcon(QIcon(arrow_icon_path('right', color))); self.next.setAccessibleName('Next month')
         for b in (self.prev, self.next): b.setIconSize(QSize(14,14)); b.setCursor(Qt.PointingHandCursor); head.addWidget(b)
         lay.addLayout(head)
-        self.calendar=ModernCalendar(); self.calendar.setFixedHeight(200); lay.addWidget(self.calendar)
+        self.calendar=ModernCalendar(); self.calendar.setFixedHeight(166); lay.addWidget(self.calendar)
         self.prev.clicked.connect(self.calendar.showPreviousMonth)
         self.next.clicked.connect(self.calendar.showNextMonth)
         today.clicked.connect(lambda: (self.calendar.setSelectedDate(QDate.currentDate()), self.calendar.showToday()))
@@ -354,6 +358,194 @@ class CalendarCard(QFrame):
     def update_title(self):
         page=QDate(self.calendar.yearShown(), self.calendar.monthShown(), 1)
         self.title.setText(QLocale().toString(page, 'MMMM yyyy'))
+
+
+NOTIFY_HISTORY = BASE_CONFIG/'notifications.json'
+NOTIFY_MAX = 40
+PANEL_STATE = BASE_CONFIG/'panel-state.json'
+
+def read_panel_state():
+    try:
+        data=json.loads(PANEL_STATE.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_panel_state(**values):
+    data=read_panel_state(); data.update(values)
+    try: write_json(PANEL_STATE, data)
+    except Exception: pass
+
+
+def _dbus_string(chunk):
+    m=re.match(r'string "(.*)"\s*$', chunk, re.S)
+    return m.group(1).replace('\\"', '"') if m else ''
+
+def parse_notify_call(block):
+    """Arguments of one org.freedesktop.Notifications.Notify call printed by
+    dbus-monitor: app_name, replaces_id, app_icon, summary, body, ..."""
+    args=re.split(r'\n   (?=[a-z]+[0-9]*[ \[]|array \[)', '\n'+block.split('\n',1)[1] if '\n' in block else '')
+    args=[a for a in args if a.strip()]
+    if len(args) < 5:
+        return None
+    app=_dbus_string(args[0]); icon=_dbus_string(args[2]); summary=_dbus_string(args[3]); body=_dbus_string(args[4])
+    body=re.sub(r'<[^>]+>', '', body).strip()
+    if not (summary or body):
+        return None
+    return {'app': app or 'Application', 'icon': icon, 'summary': summary[:120], 'body': body[:300], 'time': time.time()}
+
+
+class NotificationCenter(QObject):
+    """Keeps a history of desktop notifications.
+
+    LXQt's notification daemon still shows the bubbles; Eduka-Panel only
+    listens to the Notify calls on the session bus (dbus-monitor, no extra
+    service) so the user can read missed notifications later."""
+    changed=pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        try:
+            data=json.loads(NOTIFY_HISTORY.read_text(encoding='utf-8'))
+            self.items=data.get('items', [])[:NOTIFY_MAX]; self.unread=int(data.get('unread', 0))
+        except Exception:
+            self.items=[]; self.unread=0
+        self._buffer=''; self._block=None; self.proc=None
+        self._save_timer=QTimer(self); self._save_timer.setSingleShot(True); self._save_timer.timeout.connect(self.save)
+        self._flush_timer=QTimer(self); self._flush_timer.setSingleShot(True); self._flush_timer.timeout.connect(self._finish)
+        self.start()
+
+    def start(self):
+        if shutil.which('dbus-monitor') is None or not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
+            return
+        self.proc=QProcess(self)
+        self.proc.setProcessChannelMode(QProcess.SeparateChannels)
+        self.proc.readyReadStandardOutput.connect(self._read)
+        self.proc.start('dbus-monitor', ["interface='org.freedesktop.Notifications',member='Notify'"])
+
+    def stop(self):
+        if self.proc is not None and self.proc.state() != QProcess.NotRunning:
+            self.proc.kill(); self.proc.waitForFinished(500)
+
+    def _read(self):
+        self._buffer+=bytes(self.proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        lines=self._buffer.split('\n'); self._buffer=lines.pop()
+        for line in lines:
+            if re.match(r'^(method call|method return|signal|error) ', line):
+                self._finish()
+                self._block=line if 'member=Notify' in line else None
+            elif self._block is not None:
+                self._block+='\n'+line
+        # A message may arrive in several reads: finish it once output pauses.
+        if self._block is not None:
+            self._flush_timer.start(120)
+
+    def _finish(self):
+        if self._block is None:
+            return
+        item=parse_notify_call(self._block); self._block=None
+        if item:
+            self.items.insert(0, item); del self.items[NOTIFY_MAX:]
+            self.unread=min(99, self.unread+1)
+            self._save_timer.start(400); self.changed.emit()
+
+    def mark_read(self):
+        if self.unread:
+            self.unread=0; self._save_timer.start(400); self.changed.emit()
+
+    def remove(self, index):
+        if 0 <= index < len(self.items):
+            del self.items[index]; self._save_timer.start(400); self.changed.emit()
+
+    def clear(self):
+        self.items=[]; self.unread=0; self._save_timer.start(100); self.changed.emit()
+
+    def save(self):
+        try: write_json(NOTIFY_HISTORY, {'items': self.items, 'unread': self.unread})
+        except Exception: pass
+
+
+def notification_age(stamp):
+    delta=max(0, time.time()-float(stamp or 0))
+    if delta < 60: return 'now'
+    if delta < 3600: return f'{int(delta//60)} min'
+    if delta < 86400: return f'{int(delta//3600)} h'
+    return QDateTime.fromSecsSinceEpoch(int(stamp)).toString('d MMM')
+
+
+class NotificationRow(QFrame):
+    """One notification: app icon, summary, body, age and a dismiss button."""
+    def __init__(self, item, on_dismiss, parent=None):
+        super().__init__(parent)
+        self.setObjectName('notifRow')
+        lay=QHBoxLayout(self); lay.setContentsMargins(10,8,6,8); lay.setSpacing(10)
+        pic=QLabel(); pic.setFixedSize(28,28); icon=item.get('icon') or ''
+        pic.setPixmap(get_icon(icon if icon else 'preferences-system-notifications', 'dialog-information').pixmap(26,26)); lay.addWidget(pic, 0, Qt.AlignTop)
+        text=QVBoxLayout(); text.setSpacing(1)
+        head=QHBoxLayout(); head.setSpacing(6)
+        app=QLabel(item.get('app','')); app.setObjectName('notifApp'); head.addWidget(app, 1)
+        age=QLabel(notification_age(item.get('time'))); age.setObjectName('notifAge'); head.addWidget(age)
+        text.addLayout(head)
+        if item.get('summary'):
+            summary=QLabel(item['summary']); summary.setObjectName('notifSummary'); summary.setWordWrap(True); summary.setTextFormat(Qt.PlainText); text.addWidget(summary)
+        if item.get('body'):
+            body=QLabel(item['body']); body.setObjectName('notifBody'); body.setWordWrap(True); body.setTextFormat(Qt.PlainText); text.addWidget(body)
+        lay.addLayout(text, 1)
+        close=QToolButton(); close.setObjectName('notifClose'); close.setText('✕'); close.setAccessibleName('Dismiss notification'); close.setCursor(Qt.PointingHandCursor); close.clicked.connect(on_dismiss)
+        lay.addWidget(close, 0, Qt.AlignTop)
+
+
+def notif_qss():
+    u=ui_colors()
+    return f"""
+QFrame#notifRow{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:12px;}}
+QFrame#notifRow:hover{{border:1px solid {u['accent']};}}
+QLabel#notifApp{{font-size:11px;font-weight:700;color:{u['sub']};}}
+QLabel#notifAge{{font-size:11px;color:{u['sub']};}}
+QLabel#notifSummary{{font-size:13px;font-weight:700;color:{u['title']};}}
+QLabel#notifBody{{font-size:12px;color:{u['text']};}}
+QToolButton#notifClose{{background:transparent;border:0;border-radius:10px;padding:2px 6px;color:{u['sub']};}}
+QToolButton#notifClose:hover{{background:{u['btn_hover']};color:{u['title']};}}
+QPushButton#linkButton{{background:transparent;border:0;padding:3px 6px;color:{u['accent']};font-weight:700;}}
+QPushButton#linkButton:hover{{text-decoration:underline;background:transparent;border:0;}}
+"""
+
+
+class NotificationPopup(PopupFrame):
+    """Notification history: newest first, dismiss one or clear all."""
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel=panel; self.center=panel.notifications
+        self.setAccessibleName('Notifications')
+        self.box.setFixedWidth(360)
+        self.setStyleSheet(self.styleSheet()+notif_qss())
+        row, self.pic, self.sub=popup_header('preferences-system-notifications', 'Notifications', '')
+        self.v.addLayout(row)
+        self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,4,0); self.list_layout.setSpacing(6)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll.setWidget(self.list_widget)
+        self.v.addWidget(self.scroll)
+        foot=QHBoxLayout()
+        settings=QPushButton('Settings'); settings.setObjectName('linkButton'); settings.clicked.connect(lambda: (self.close(), launch_app('lxqt-config-notificationd')))
+        self.clear_button=QPushButton('Clear all'); self.clear_button.setObjectName('linkButton'); self.clear_button.clicked.connect(self.center.clear)
+        foot.addWidget(settings); foot.addStretch(); foot.addWidget(self.clear_button)
+        self.v.addLayout(foot)
+        self.center.changed.connect(self.fill)
+        self.fill(); self.center.mark_read()
+
+    def fill(self):
+        while self.list_layout.count():
+            item=self.list_layout.takeAt(0); w=item.widget()
+            if w: w.setParent(None); w.deleteLater()
+        items=self.center.items
+        self.sub.setText(f'{len(items)} notification{"s" if len(items) != 1 else ""}' if items else 'You are all caught up')
+        self.clear_button.setEnabled(bool(items))
+        if not items:
+            empty=QLabel('No notifications'); empty.setAlignment(Qt.AlignCenter); empty.setObjectName('popHint'); empty.setMinimumHeight(70)
+            self.list_layout.addWidget(empty)
+        for i, item in enumerate(items[:20]):
+            self.list_layout.addWidget(NotificationRow(item, lambda _=False, idx=i: self.center.remove(idx)))
+        self.list_layout.addStretch()
+        self.list_widget.adjustSize()
+        self.scroll.setFixedHeight(min(380, max(80, self.list_layout.sizeHint().height()+4)))
 
 
 class ActionCenter(PopupFrame):
@@ -371,17 +563,28 @@ class ActionCenter(PopupFrame):
         self.panel=panel
         self.setAccessibleName('Action Center')
         self.box.setFixedWidth(372)
-        self.setStyleSheet(self.styleSheet()+ac_qss())
-        self.v.setSpacing(10)
-        head=QVBoxLayout(); head.setSpacing(0)
+        self.setStyleSheet(self.styleSheet()+ac_qss()+notif_qss())
+        self.v.setSpacing(8); self.v.setContentsMargins(14,4,14,12)
+        # Resize grip: drag down for the compact Action Center (today's date
+        # instead of the month calendar), drag up for the full one.
+        self.grip=QFrame(); self.grip.setObjectName('acGripArea'); self.grip.setFixedHeight(14); self.grip.setCursor(Qt.SizeVerCursor)
+        self.grip.setToolTip('Drag down for a compact view, up for the calendar'); self.grip.setAccessibleName('Resize Action Center')
+        gl=QHBoxLayout(self.grip); gl.setContentsMargins(0,4,0,4); bar=QFrame(); bar.setObjectName('acGrip'); bar.setFixedSize(44,5); gl.addWidget(bar, 0, Qt.AlignCenter)
+        self.grip.installEventFilter(self); self._drag_y=None
+        self.v.addWidget(self.grip)
+        head=QHBoxLayout(); head.setSpacing(8)
+        texts=QVBoxLayout(); texts.setSpacing(0)
         self.time_label=QLabel(); self.time_label.setObjectName('acTime')
         self.date_label=QLabel(); self.date_label.setObjectName('acDate')
-        head.addWidget(self.time_label); head.addWidget(self.date_label); self.v.addLayout(head)
+        texts.addWidget(self.time_label); texts.addWidget(self.date_label); head.addLayout(texts, 1)
+        self.mode_button=QToolButton(); self.mode_button.setObjectName('roundIcon'); self.mode_button.setFixedSize(34,34); self.mode_button.setIconSize(QSize(12,12)); self.mode_button.setCursor(Qt.PointingHandCursor)
+        self.mode_button.clicked.connect(lambda: self.set_compact(not self.compact, remember=True)); head.addWidget(self.mode_button, 0, Qt.AlignTop)
+        self.v.addLayout(head)
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
             t=QToolButton(); t.setObjectName('acTile'); t.setText(label); t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system'))
-            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,64)
+            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,58)
             t.setAccessibleName(label); t.setProperty('on', False); t.setCursor(Qt.PointingHandCursor)
             t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
             t.setContextMenuPolicy(Qt.CustomContextMenu); t.customContextMenuRequested.connect(lambda _pos,k=key: self.tile_settings(k))
@@ -414,8 +617,23 @@ class ActionCenter(PopupFrame):
         self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self.update_sound_icon(), self._vol_timer.start(70)))
         self.bri_slider.valueChanged.connect(lambda v: (self.bri_value.setText(f'{v}%'), self._bri_timer.start(90)))
 
+        # Latest notification (the full history opens from the bell).
+        self.notif_card=QFrame(); self.notif_card.setObjectName('acCard'); nl=QHBoxLayout(self.notif_card); nl.setContentsMargins(10,8,8,8); nl.setSpacing(8)
+        self.notif_icon=QLabel(); self.notif_icon.setFixedSize(26,26); nl.addWidget(self.notif_icon)
+        self.notif_text=QLabel(''); self.notif_text.setWordWrap(True); self.notif_text.setTextFormat(Qt.PlainText); nl.addWidget(self.notif_text, 1)
+        self.notif_open=QPushButton('All'); self.notif_open.setObjectName('linkButton'); self.notif_open.clicked.connect(lambda: (self.close(), panel.notification_popup())); nl.addWidget(self.notif_open)
+        self.v.addWidget(self.notif_card)
+        panel.notifications.changed.connect(self.update_notifications); self.update_notifications()
+
         self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar
         self.v.addWidget(self.calendar_card)
+        # Compact mode: only today's date.
+        self.today_card=QFrame(); self.today_card.setObjectName('acCard'); tl=QHBoxLayout(self.today_card); tl.setContentsMargins(14,10,14,10); tl.setSpacing(14)
+        self.today_day=QLabel(''); self.today_day.setObjectName('todayDay'); self.today_day.setAlignment(Qt.AlignCenter); self.today_day.setFixedSize(54,54); tl.addWidget(self.today_day)
+        tt=QVBoxLayout(); tt.setSpacing(1)
+        self.today_weekday=QLabel(''); self.today_weekday.setObjectName('todayWeekday'); self.today_month=QLabel(''); self.today_month.setObjectName('acDate')
+        tt.addWidget(self.today_weekday); tt.addWidget(self.today_month); tl.addLayout(tt, 1)
+        self.v.addWidget(self.today_card)
 
         foot=QHBoxLayout(); foot.setSpacing(8)
         for label, icon, handler in [('Network','preferences-system-network',lambda: self.launch('nm-connection-editor')),
@@ -425,11 +643,87 @@ class ActionCenter(PopupFrame):
         self.v.addLayout(foot)
         self.update_time()
         self.refresh(panel.last_status or {})
+        self.compact=None
+        self.set_compact(bool(read_panel_state().get('action_center_compact', False)) or self.too_tall())
+
+    def too_tall(self):
+        """Small screens (1024x600 netbooks) start in compact mode."""
+        screen=QApplication.primaryScreen().availableGeometry()
+        return screen.height() < 640
+
+    def set_compact(self, compact, remember=False):
+        compact=bool(compact)
+        if compact == self.compact:
+            return
+        self._show_compact(compact)
+        if remember:
+            save_panel_state(action_center_compact=compact)
+        if self.isVisible():
+            self.place()
+
+    def _show_compact(self, compact):
+        self.compact=compact
+        self.calendar_card.setVisible(not compact); self.today_card.setVisible(compact)
+        color='#e0e0e0' if is_dark_theme() else '#2d4a43'
+        self.mode_button.setIcon(QIcon(arrow_icon_path('up' if compact else 'down', color)))
+        self.mode_button.setToolTip('Show the calendar' if compact else 'Compact view (today only)')
+        self.mode_button.setAccessibleName(self.mode_button.toolTip())
+
+    def place(self):
+        """Keep the bottom edge just above Eduka-Panel and grow upwards."""
+        panel=self.panel; screen=QApplication.primaryScreen().availableGeometry()
+        self.box.adjustSize(); self.adjustSize()
+        room=panel.y()-8-(screen.y()+4)
+        if not self.compact and self.sizeHint().height() > room:
+            # Not enough room above the panel for the month: today only.
+            self._show_compact(True); self.box.adjustSize(); self.adjustSize()
+        x=min(panel.x()+panel.width()-self.width(), screen.right()-self.width()-4); x=max(screen.x()+4, x)
+        y=max(screen.y()+4, panel.y()-self.height()-8)
+        self.setGeometry(x, y, self.width(), self.height())
+
+    def eventFilter(self, obj, event):
+        if obj is self.grip:
+            t=event.type()
+            if t == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._drag_y=event.globalPos().y(); return True
+            if t == QEvent.MouseMove and self._drag_y is not None:
+                delta=event.globalPos().y()-self._drag_y
+                if delta > 36 and not self.compact:
+                    self.set_compact(True, remember=True); self._drag_y=event.globalPos().y()
+                elif delta < -36 and self.compact:
+                    self.set_compact(False, remember=True); self._drag_y=event.globalPos().y()
+                return True
+            if t == QEvent.MouseButtonRelease:
+                self._drag_y=None; return True
+            if t == QEvent.MouseButtonDblClick:
+                self.set_compact(not self.compact, remember=True); return True
+        return super().eventFilter(obj, event)
+
+    def wheelEvent(self, e):
+        # Scrolling on the header also switches the size.
+        if self.grip.underMouse() or self.time_label.underMouse():
+            self.set_compact(e.angleDelta().y() < 0, remember=True); return
+        super().wheelEvent(e)
+
+    def update_notifications(self):
+        items=self.panel.notifications.items
+        if items:
+            n=items[0]; text=n.get('summary') or n.get('body') or ''
+            self.notif_text.setText(f"{n.get('app','')}: {text}"[:90] + (f"   (+{len(items)-1})" if len(items) > 1 else ''))
+            self.notif_icon.setPixmap(get_icon(n.get('icon') or 'preferences-system-notifications','dialog-information').pixmap(22,22))
+        else:
+            self.notif_text.setText('No new notifications')
+            self.notif_icon.setPixmap(get_icon('preferences-system-notifications','dialog-information').pixmap(22,22))
+        self.notif_open.setVisible(bool(items))
 
     def update_time(self):
-        now=QDateTime.currentDateTime()
+        now=QDateTime.currentDateTime(); loc=QLocale()
         self.time_label.setText(now.toString('HH:mm'))
-        self.date_label.setText(QLocale().toString(now.date(), QLocale.LongFormat))
+        self.date_label.setText(loc.toString(now.date(), QLocale.LongFormat))
+        if hasattr(self, 'today_day'):
+            self.today_day.setText(str(now.date().day()))
+            self.today_weekday.setText(loc.dayName(now.date().dayOfWeek(), QLocale.LongFormat))
+            self.today_month.setText(loc.toString(now.date(), 'MMMM yyyy'))
 
     def set_tile(self, key, on, enabled=True, tip=''):
         t=self.tiles[key]
@@ -797,7 +1091,9 @@ class EdukaPanel(QWidget):
         self._tray_compact=False; self._showing_desktop=False; self._spy=None
         self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
+        self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
         self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
+        QApplication.instance().aboutToQuit.connect(self.notifications.stop)
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
@@ -873,7 +1169,16 @@ class EdukaPanel(QWidget):
         self.watcher.fileChanged.connect(lambda p: QTimer.singleShot(120,self.reload_from_watcher))
 
     def reload_from_watcher(self):
+        # Settings are written with os.replace(): the watched inode is gone,
+        # so watch the new file again or later changes would be missed.
+        for pth in [str(panel_config_path()), str(RUNTIME_DIR/'reload')]+[str(p) for p in lxqt_appearance_files()]:
+            if Path(pth).exists() and pth not in self.watcher.files():
+                self.watcher.addPath(pth)
+        ensure_compositor()
         icon_theme_setup(force=True)
+        for kind, icon in (('files','system-file-manager'),('terminal','utilities-terminal')):
+            if kind in self.quick_launchers: self.quick_launchers[kind].setIcon(get_icon(icon))
+        self.update_notification_badge()
         app=QApplication.instance()
         if app is not None and app.styleSheet() != tooltip_qss():
             app.setStyleSheet(tooltip_qss())
@@ -888,22 +1193,27 @@ class EdukaPanel(QWidget):
         if high_contrast or not self._composited: alpha=1.0
         screen=QApplication.primaryScreen().geometry(); w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2); y=screen.y()+screen.height()-h-5
         self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3) if self._composited else 0; bg_alpha=int(alpha*255)
-        self.bg.setStyleSheet(f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{min(255,bg_alpha+12)}),stop:0.55 rgba(236,248,242,{bg_alpha}),stop:1 rgba(217,237,230,{bg_alpha}));border:1px solid rgba(255,255,255,220);border-bottom:1px solid rgba(135,175,160,130);border-radius:{radius}px;}}
-        QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,230),stop:1 rgba(225,243,236,210));border:1px solid rgba(185,215,205,130);border-radius:{max(13,int(h/2.7))}px;padding:4px 12px;font-weight:700;color:#183c35;}} QPushButton#startButton:hover{{background:white;border:1px solid rgba(0,168,121,95);}}
-        QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(255,255,255,200);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:#dff5ed;}} QPushButton#clockButton:hover{{background:rgba(255,255,255,200);}} QPushButton#clockButton:pressed{{background:#dff5ed;}}
-        QPushButton#taskButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,215),stop:1 rgba(229,244,238,190));border:1px solid rgba(190,220,210,115);border-radius:12px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:white;border:1px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:#dff5ed;}} QPushButton#taskButton[activeTask="true"]{{background:#d7f4e9;border:1px solid rgba(0,168,121,150);border-bottom:3px solid #00a879;}}
-        QPushButton#desktopButton{{background:transparent;border:0;border-left:1px solid rgba(90,130,120,90);border-radius:0;margin:6px 0;}} QPushButton#desktopButton:hover{{background:rgba(0,168,121,60);}}
-        QFrame#trayGroup{{background:rgba(255,255,255,{min(200, bg_alpha+30)});border:1px solid rgba(255,255,255,210);border-radius:{max(12,int(h/2.6))}px;}}
-        QPushButton#batteryButton{{background:rgba(0,168,121,45);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
-        QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{11 if h < 46 else 12}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
+        sb=max(13,int(h/2.7)); fs=11 if h < 46 else 12
+        # 0.9.16 look: bright surface, accent start button, flat task buttons
+        # with an accent indicator. Plain stylesheets only (no effects), so it
+        # stays smooth on 2 GB / 2017 computers.
+        self.bg.setStyleSheet(f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{min(255,bg_alpha+16)}),stop:1 rgba(240,247,244,{bg_alpha}));border:1px solid rgba(255,255,255,235);border-bottom:1px solid rgba(120,160,148,110);border-radius:{radius}px;}}
+        QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #14bd8e,stop:1 #00966c);border:1px solid #00916a;border-radius:{sb}px;padding:4px 14px;font-weight:800;color:#ffffff;}} QPushButton#startButton:hover{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #22cc9c,stop:1 #00a879);}} QPushButton#startButton:pressed{{background:#00845f;}}
+        QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(0,168,121,26);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:rgba(0,168,121,48);}} QPushButton#clockButton:hover{{background:rgba(0,168,121,26);}} QPushButton#clockButton:pressed{{background:rgba(0,168,121,48);}}
+        QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;border-radius:11px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:rgba(0,168,121,22);border:1px solid rgba(0,168,121,40);border-bottom:3px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:rgba(0,168,121,40);}} QPushButton#taskButton[activeTask="true"]{{background:rgba(0,168,121,34);border:1px solid rgba(0,168,121,70);border-bottom:3px solid #00a879;color:#0f2c26;}}
+        QPushButton#desktopButton{{background:transparent;border:0;border-left:1px solid rgba(90,130,120,80);border-radius:0;margin:6px 0;}} QPushButton#desktopButton:hover{{background:rgba(0,168,121,60);}}
+        QFrame#trayGroup{{background:rgba(255,255,255,{min(210, bg_alpha+40)});border:1px solid rgba(0,120,90,28);border-radius:{max(12,int(h/2.6))}px;}}
+        QPushButton#batteryButton{{background:rgba(0,168,121,38);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
+        QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{fs}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
         if high_contrast:
             self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;} QFrame#trayGroup{background:white;border:2px solid #344d47;}''')
         elif dark:
             # Edukasaun-Dark: Orchis dark surfaces with the teal accent.
             self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(52,52,52,{bg_alpha}),stop:1 rgba(33,33,33,{bg_alpha}));border:1px solid rgba(255,255,255,40);border-bottom:1px solid rgba(0,0,0,90);border-radius:{radius}px;}}
-            QPushButton#startButton,QPushButton#taskButton{{background:rgba(255,255,255,20);border:1px solid rgba(255,255,255,32);color:rgba(255,255,255,230);}}
-            QPushButton#startButton:hover,QPushButton#taskButton:hover{{background:rgba(255,255,255,40);border:1px solid #4DB6AC;}}
-            QPushButton#taskButton[activeTask="true"]{{background:rgba(77,182,172,55);border:1px solid #4DB6AC;border-bottom:3px solid #4DB6AC;}}
+            QPushButton#startButton{{background:#26A69A;border:1px solid #26A69A;color:#ffffff;}} QPushButton#startButton:hover{{background:#4DB6AC;}}
+            QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;color:rgba(255,255,255,225);}}
+            QPushButton#taskButton:hover{{background:rgba(255,255,255,26);border:1px solid rgba(255,255,255,30);border-bottom:3px solid rgba(77,182,172,120);}}
+            QPushButton#taskButton[activeTask="true"]{{background:rgba(77,182,172,45);border:1px solid rgba(77,182,172,90);border-bottom:3px solid #4DB6AC;color:#ffffff;}}
             QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{background:transparent;border:0;color:rgba(255,255,255,230);}}
             QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,30);}}
             QFrame#trayGroup{{background:rgba(255,255,255,16);border:1px solid rgba(255,255,255,30);}}
@@ -914,10 +1224,13 @@ class EdukaPanel(QWidget):
             glass=liquid_glass_surface(alpha/0.54, radius, 1)
             pill=liquid_glass_surface(1.15, max(12,int(h/2.7)), 1)
             self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{{glass}}}
-            QPushButton#startButton,QPushButton#taskButton,QFrame#trayGroup{{{pill}color:#10262b;}}
+            QFrame#trayGroup{{{pill}color:#10262b;}}
+            QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(60,190,235,215),stop:1 rgba(20,140,200,215));border:1px solid rgba(255,255,255,170);border-top:1px solid rgba(255,255,255,230);color:#ffffff;}}
+            QPushButton#startButton:hover{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(85,205,245,230),stop:1 rgba(30,155,215,230));}}
+            QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;color:#10262b;}}
             QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{background:transparent;border:0;color:#10262b;}}
-            QPushButton#startButton:hover,QPushButton#taskButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,215);border:1px solid rgba(255,255,255,240);}}
-            QPushButton#taskButton[activeTask="true"]{{background:rgba(255,255,255,200);border-bottom:3px solid #00a879;}}''')
+            QPushButton#taskButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,150);border:1px solid rgba(255,255,255,200);}}
+            QPushButton#taskButton[activeTask="true"]{{{pill}border-bottom:3px solid #1e9bd7;color:#0b2230;}}''')
         # No QGraphicsDropShadowEffect: re-rendering the whole panel through an
         # effect on every repaint made it sluggish.
         self.bg.setGraphicsEffect(None)
@@ -927,6 +1240,7 @@ class EdukaPanel(QWidget):
         self.start.setIcon(get_icon(menu_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
         self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) else '')
         for b in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif]: b.setIconSize(QSize(icon_size,icon_size))
+        if hasattr(self, 'notifications'): self.update_notification_badge()
         for b in self.buttons.values(): b.setIconSize(QSize(int(cfg.get('taskbar_icon_size',22)), int(cfg.get('taskbar_icon_size',22))))
         blocking_wid, reason=self.active_panel_blocker()
         if blocking_wid:
@@ -1586,6 +1900,7 @@ class EdukaPanel(QWidget):
     def notification_context(self, pos):
         m=RoundedMenu(self)
         m.addAction(get_icon('preferences-system-notifications'), 'Notifications', self.notification_popup)
+        clear=m.addAction(get_icon('edit-clear-all','edit-clear'), 'Clear All Notifications', self.notifications.clear); clear.setEnabled(bool(self.notifications.items))
         m.addAction(get_icon('preferences-system'), 'Notification Settings', lambda: launch_app('lxqt-config-notificationd'))
         self._show_context(m, self.notif, pos)
 
@@ -1672,7 +1987,7 @@ class EdukaPanel(QWidget):
         muted=bool(st.get('muted')); vol=st.get('volume')
         volume_status=('Muted' if muted else 'Volume')+(f': {vol}%' if vol is not None else '')
         self.vol.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high','audio-volume-medium')); self.vol.setToolTip(volume_status); self.vol.setAccessibleName(volume_status); self.vol.setText(' '+volume_status if self.hearing_accessibility else '')
-        self.notif.setText(' Alerts' if self.hearing_accessibility else ''); self.notif.setToolTip('Notifications and visual alerts'); self.notif.setAccessibleName('Notifications and visual alerts')
+        self.notif.setText(((f' {self.notifications.unread} new' if self.notifications.unread else ' Alerts')) if self.hearing_accessibility else '')
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.refresh(st)
         if self._tray_compact:
@@ -1702,11 +2017,8 @@ class EdukaPanel(QWidget):
             return
         ac=ActionCenter(self); self.action_center=ac
         ac.destroyed.connect(lambda *_: setattr(self, 'action_center', None))
-        ac.adjustSize()
-        screen=QApplication.primaryScreen().availableGeometry()
-        x=min(self.x()+self.width()-ac.width(), screen.right()-ac.width()-4); x=max(screen.x()+4, x)
-        y=self.y()-ac.height()-8
-        ac.move(x, y); ac.show(); ac.activateWindow()
+        ac.place(); ac.show(); ac.activateWindow()
+        QTimer.singleShot(0, ac.place)   # final size is known once shown
         self.set_tray_compact(True)
         self.update_status_icons()
 
@@ -1724,7 +2036,27 @@ class EdukaPanel(QWidget):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
     def volume_popup(self):
         self.show_popup_above(SoundPopup(self), self.vol)
-    def notification_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Notifications</b>')); p.v.addWidget(QLabel('No new notifications')); self.show_popup_above(p,self.notif)
+    def notification_popup(self):
+        self.show_popup_above(NotificationPopup(self), self.notif if self.notif.isVisible() else self.clock)
+
+    def update_notification_badge(self):
+        """Bell icon with an accent dot and count while notifications are unread."""
+        count=self.notifications.unread
+        size=self.notif.iconSize() if self.notif.iconSize().width() > 0 else QSize(22,22)
+        base=get_icon('preferences-system-notifications','dialog-information').pixmap(size)
+        if count:
+            pix=QPixmap(base); painter=QPainter(pix); painter.setRenderHint(QPainter.Antialiasing)
+            d=max(9, int(size.width()*0.55)); r=QRectF(pix.width()/pix.devicePixelRatio()-d, 0, d, d)
+            painter.setPen(Qt.NoPen); painter.setBrush(QColor('#e5484d')); painter.drawEllipse(r)
+            font=painter.font(); font.setPixelSize(max(7, int(d*0.72))); font.setBold(True); painter.setFont(font); painter.setPen(QColor('#ffffff'))
+            painter.drawText(r, Qt.AlignCenter, str(count) if count < 10 else '9+'); painter.end()
+            self.notif.setIcon(QIcon(pix))
+        else:
+            self.notif.setIcon(QIcon(base))
+        label=f'{count} unread notification{"s" if count != 1 else ""}' if count else 'Notifications'
+        self.notif.setToolTip(label); self.notif.setAccessibleName(label)
+        if self.hearing_accessibility:
+            self.notif.setText(f' {count} new' if count else ' Alerts')
     def battery_info(self):
         return battery_info()
     def battery_popup(self): info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>')); p.v.addWidget(QLabel(f"{info['capacity']}% • {info['status']}" if info else 'No battery detected')); self.show_popup_above(p,self.battery)

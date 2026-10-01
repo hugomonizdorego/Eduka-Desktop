@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Edukasaun-Dark
+Comment=Edukasaun OS dark theme, based on the Orchis theme (teal, dark) by vinceliuice, GPL-3.0
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Edukasaun-Dark
+MetacityTheme=Edukasaun-Dark
+ButtonLayout=close,minimize,maximize:menu
