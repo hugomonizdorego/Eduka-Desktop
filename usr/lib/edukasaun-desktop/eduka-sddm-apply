@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply Edukasaun login screen (SDDM) settings. Runs as root via pkexec.
 
-Reads one JSON object from standard input (written by Eduka-Menu-Settings):
+Reads one JSON object from standard input (written by Eduka-Settings):
   style          light | dark | glass
   accent         #rrggbb
   title          short text shown on the login card
@@ -23,6 +23,8 @@ BACKGROUND = DATA_DIR + '/Default.png'
 LOGO = DATA_DIR + '/Logo.png'
 DEFAULT_LOGO = '/usr/share/Edukasaun/Logo/Edukasaun Logo.png'
 AUTOLOGIN = '/etc/sddm.conf.d/20-eduka-autologin.conf'
+THEME_PIN = '/etc/sddm.conf.d/zz-edukasaun-theme.conf'
+METADATA = THEME_DIR + '/metadata.desktop'
 SESSION = 'edukasaun-desktop.desktop'
 STYLES = ('light', 'dark', 'glass')
 MAX_IMAGE = 25 * 1024 * 1024
@@ -78,6 +80,32 @@ def write_text(path, text, mode=0o644):
     os.replace(tmp, path)
 
 
+def ensure_theme_active():
+    """SDDM reads /etc/sddm.conf.d in order and /etc/sddm.conf last: make
+    every place point to the Edukasaun theme."""
+    write_text(THEME_PIN, '# Written by Eduka-Settings: use the Edukasaun login screen.\n[Theme]\nCurrent=edukasaun\n')
+    main_conf='/etc/sddm.conf'
+    if os.path.exists(main_conf):
+        with open(main_conf, encoding='utf-8', errors='ignore') as handle:
+            text=handle.read()
+        new=re.sub(r'(?m)^(\s*Current\s*=).*$', r'\1edukasaun', text)
+        if new != text:
+            write_text(main_conf, new)
+
+
+def ensure_qt_version():
+    """SDDM 0.21 starts the Qt 6 greeter only for themes that say
+    QtVersion=6; the theme works with both greeters."""
+    if not os.path.exists(METADATA):
+        return
+    with open(METADATA, encoding='utf-8') as handle:
+        lines=[l for l in handle.read().splitlines() if not l.startswith('QtVersion=')]
+    qt6=shutil.which('sddm-greeter-qt6') is not None and shutil.which('sddm-greeter') is None
+    if qt6:
+        lines.append('QtVersion=6')
+    write_text(METADATA, '\n'.join(lines)+'\n')
+
+
 def main():
     if os.geteuid() != 0:
         fail('eduka-sddm-apply must run as root (use pkexec).')
@@ -131,7 +159,7 @@ def main():
         logo_path = LOGO
 
     write_text(USER_CONF, (
-        '# Written by Eduka-Menu Settings (Login Screen page).\n'
+        '# Written by Eduka-Settings (Login Screen page).\n'
         '[General]\n'
         f'style={style}\n'
         f'accent={accent}\n'
@@ -143,13 +171,15 @@ def main():
 
     if autologin:
         write_text(AUTOLOGIN, (
-            '# Written by Eduka-Menu Settings: log in automatically.\n'
+            '# Written by Eduka-Settings: log in automatically.\n'
             '[Autologin]\n'
             f'User={autologin}\n'
             f'Session={SESSION}\n'
             'Relogin=false\n'))
     elif os.path.exists(AUTOLOGIN):
         os.remove(AUTOLOGIN)
+    ensure_theme_active()
+    ensure_qt_version()
     print('Login screen updated.')
 
 

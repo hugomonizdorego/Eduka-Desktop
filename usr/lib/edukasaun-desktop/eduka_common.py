@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.16"
+VERSION = "0.9.17"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -527,6 +527,150 @@ def apply_desktop_theme(theme=None):
     except Exception: pass
     return True
 
+LANGUAGES = [('system', 'System language'), ('en', 'English'), ('id', 'Bahasa Indonesia'),
+             ('tet', 'Tetun'), ('pt', 'Português')]
+
+STRINGS = {
+    'morning':   {'en': 'Good morning', 'id': 'Selamat pagi', 'tet': 'Bondia', 'pt': 'Bom dia'},
+    'midday':    {'en': 'Good afternoon', 'id': 'Selamat siang', 'tet': 'Botarde', 'pt': 'Boa tarde'},
+    'afternoon': {'en': 'Good afternoon', 'id': 'Selamat sore', 'tet': 'Botarde', 'pt': 'Boa tarde'},
+    'evening':   {'en': 'Good evening', 'id': 'Selamat malam', 'tet': 'Bonoite', 'pt': 'Boa noite'},
+    'net_off':   {'en': 'Network not connected', 'id': 'Jaringan tidak terhubung', 'tet': 'Rede la konekta', 'pt': 'Rede não ligada'},
+    'net_wifi':  {'en': 'Connected to Wi-Fi', 'id': 'Terhubung ke Wi-Fi', 'tet': 'Konekta ba Wi-Fi', 'pt': 'Ligado ao Wi-Fi'},
+    'net_lan':   {'en': 'Connected by cable (Ethernet)', 'id': 'Terhubung lewat kabel (Ethernet)', 'tet': 'Konekta ho kabu (Ethernet)', 'pt': 'Ligado por cabo (Ethernet)'},
+    'offline':   {'en': 'Offline', 'id': 'Tidak terhubung', 'tet': 'La konekta', 'pt': 'Desligado'},
+    'lock':      {'en': 'Lock', 'id': 'Kunci', 'tet': 'Xavi', 'pt': 'Bloquear'},
+    'logout':    {'en': 'Log Out', 'id': 'Keluar', 'tet': 'Sai', 'pt': 'Terminar sessão'},
+    'restart':   {'en': 'Restart', 'id': 'Mulai Ulang', 'tet': 'Hahu fali', 'pt': 'Reiniciar'},
+    'shutdown':  {'en': 'Shut Down', 'id': 'Matikan', 'tet': 'Hamate', 'pt': 'Desligar'},
+    'dnd':       {'en': 'Do Not Disturb', 'id': 'Jangan Ganggu', 'tet': 'Labele hanehan', 'pt': 'Não incomodar'},
+    'no_notif':  {'en': 'No new notifications', 'id': 'Tidak ada notifikasi baru', 'tet': 'Notifikasaun foun la iha', 'pt': 'Sem notificações novas'},
+}
+
+def ui_language():
+    """Language chosen in Eduka-Settings (General), or the system one."""
+    try:
+        lang=str(read_menu_config().get('language', 'system') or 'system')
+    except Exception:
+        lang='system'
+    if lang in ('en', 'id', 'tet', 'pt'):
+        return lang
+    for var in ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
+        value=os.environ.get(var, '')
+        if value:
+            code=value.split(':')[0].split('.')[0].split('_')[0].lower()
+            return code if code in ('id', 'tet', 'pt') else 'en'
+    return 'en'
+
+def tr(key, lang=None):
+    entry=STRINGS.get(key, {})
+    return entry.get(lang or ui_language()) or entry.get('en') or key
+
+def greeting_text(hour=None, lang=None):
+    """Selamat pagi / siang / sore / malam (and the other languages)."""
+    import datetime
+    hour=datetime.datetime.now().hour if hour is None else int(hour)
+    if 4 <= hour < 11: key='morning'
+    elif 11 <= hour < 15: key='midday'
+    elif 15 <= hour < 18: key='afternoon'
+    else: key='evening'
+    return tr(key, lang)
+
+def user_display_name():
+    try:
+        import pwd
+        entry=pwd.getpwuid(os.getuid())
+        name=(entry.pw_gecos.split(',')[0] or entry.pw_name).strip()
+    except Exception:
+        name=os.environ.get('USER', '')
+    return name.split()[0].capitalize() if name else ''
+
+def clock_settings():
+    cfg=read_panel_config()
+    style=cfg.get('clock_style', 'digital'); fmt=cfg.get('clock_format', '24h')
+    return (style if style in ('digital', 'analog') else 'digital'), (fmt if fmt in ('24h', '12h') else '24h')
+
+def format_clock(qtime, fmt=None, seconds=False):
+    """'14:05' (24 hours) or '2:05 PM' (12 hours)."""
+    fmt=fmt or clock_settings()[1]
+    if fmt == '12h':
+        return qtime.toString('h:mm:ss AP' if seconds else 'h:mm AP')
+    return qtime.toString('HH:mm:ss' if seconds else 'HH:mm')
+
+# ---------------------------------------------------------------- cursor themes
+def list_cursor_themes():
+    """Installed mouse cursor themes (folders with a cursors/ directory)."""
+    names={}
+    for root in [Path.home()/'.local/share/icons', Path.home()/'.icons', Path('/usr/local/share/icons'), Path('/usr/share/icons')]:
+        try:
+            entries=list(root.iterdir())
+        except Exception:
+            continue
+        for d in entries:
+            if d.name in names or d.name == 'default' or not (d/'cursors').is_dir():
+                continue
+            label=d.name
+            try:
+                m=re.search(r'^\s*Name\s*=\s*(.+)$', (d/'index.theme').read_text(encoding='utf-8', errors='ignore'), re.M)
+                if m: label=m.group(1).strip()
+            except Exception:
+                pass
+            names[d.name]=label
+    return sorted(names.items(), key=lambda item: item[1].casefold())
+
+def current_cursor_theme():
+    for value in (_get_ini_value(Path.home()/'.config/lxqt/session.conf', 'Mouse', 'cursor_theme'),
+                  _get_ini_value(Path.home()/'.config/gtk-3.0/settings.ini', 'Settings', 'gtk-cursor-theme-name'),
+                  _get_ini_value(Path.home()/'.icons/default/index.theme', 'Icon Theme', 'Inherits')):
+        if value:
+            return value
+    return os.environ.get('XCURSOR_THEME', '')
+
+def current_cursor_size():
+    try:
+        return int(_get_ini_value(Path.home()/'.config/lxqt/session.conf', 'Mouse', 'cursor_size') or 24)
+    except ValueError:
+        return 24
+
+def set_cursor_theme(name, size=24):
+    """Use a cursor theme everywhere: LXQt, GTK, X resources and the X
+    default theme. New windows use it at once; the rest after logging in."""
+    name=str(name or '').strip(); size=int(size or 24)
+    if not name:
+        return False
+    try:
+        _set_ini_value(Path.home()/'.config/lxqt/session.conf', 'Mouse', 'cursor_theme', name)
+        _set_ini_value(Path.home()/'.config/lxqt/session.conf', 'Mouse', 'cursor_size', str(size))
+        for gtk in ('gtk-3.0', 'gtk-4.0'):
+            _set_ini_value(Path.home()/'.config'/gtk/'settings.ini', 'Settings', 'gtk-cursor-theme-name', name)
+            _set_ini_value(Path.home()/'.config'/gtk/'settings.ini', 'Settings', 'gtk-cursor-theme-size', str(size))
+        gtk2=Path.home()/'.gtkrc-2.0'
+        lines=[l for l in (gtk2.read_text(encoding='utf-8', errors='ignore').splitlines() if gtk2.exists() else []) if not l.strip().startswith(('gtk-cursor-theme-name', 'gtk-cursor-theme-size'))]
+        lines+= [f'gtk-cursor-theme-name="{name}"', f'gtk-cursor-theme-size={size}']
+        gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+        default=Path.home()/'.icons/default/index.theme'
+        default.parent.mkdir(parents=True, exist_ok=True)
+        default.write_text(f'[Icon Theme]\nName=Default\nComment=Default cursor theme (Eduka-Settings)\nInherits={name}\n', encoding='utf-8')
+        xres=Path.home()/'.Xresources'
+        lines=[l for l in (xres.read_text(encoding='utf-8', errors='ignore').splitlines() if xres.exists() else []) if not l.strip().startswith(('Xcursor.theme', 'Xcursor.size'))]
+        lines+= [f'Xcursor.theme: {name}', f'Xcursor.size: {size}']
+        xres.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+    except Exception:
+        return False
+    if os.environ.get('DISPLAY'):
+        if shutil.which('xrdb'):
+            try:
+                subprocess.run(['xrdb', '-merge', str(Path.home()/'.Xresources')], timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        if shutil.which('xsetroot'):
+            env=dict(child_env(), XCURSOR_THEME=name, XCURSOR_SIZE=str(size))
+            try:
+                subprocess.Popen(['xsetroot', '-cursor_name', 'left_ptr'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+    return True
+
 def set_icon_theme(name):
     """Use an icon theme for the whole desktop: LXQt (file manager, dialogs),
     GTK applications and the Eduka components."""
@@ -604,6 +748,10 @@ DEFAULT_PANEL = {
     "enable_shadows": False,
     "low_resource_mode": True,
     "theme_style": THEME_DEFAULT,
+    "clock_style": "digital",
+    "clock_format": "24h",
+    "notify_seconds": 7,
+    "notify_history": True,
     "reserve_workarea": True,
     "force_window_above_panel": True,
     "taskbar_max_button_width": 175,
@@ -681,7 +829,7 @@ DESKTOP_DIRS = [
     str(Path.home()/'.local/share/flatpak/exports/share/applications'),
 ]
 HIDE_IDS = {
-    'edukasaun-desktop.desktop','eduka-menu-settings.desktop',
+    'edukasaun-desktop.desktop','eduka-menu-settings.desktop','eduka-settings.desktop',
     'eduka-menu.desktop','eduka-panel.desktop','eduka-about.desktop',
     'edukasaun-desktop-menu-open.desktop','eduka-app-registry.desktop','eduka-app-cache.desktop',
     # LXQt pieces that Eduka-Desktop already provides (footer buttons, About,
@@ -787,6 +935,25 @@ def touch_reload(): ensure_dirs(); (RUNTIME_DIR/'reload').write_text(str(time.ti
 def in_eduka_session():
     """True inside an Eduka-Desktop login session (set by eduka-desktop-session)."""
     return bool(os.environ.get('EDUKA_DESKTOP_SESSION'))
+
+def stop_lxqt_module_in_eduka_session(module, process):
+    """Ask lxqt-session to stop one of its modules (Eduka-Desktop sessions only)."""
+    if not in_eduka_session() or shutil.which('pgrep') is None:
+        return False
+    try:
+        if subprocess.run(['pgrep','-x',process], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2).returncode != 0:
+            return False
+    except Exception:
+        return False
+    if shutil.which('dbus-send'):
+        return safe_popen(['dbus-send','--session','--type=method_call','--dest=org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule',f'string:{module}'])
+    if shutil.which('qdbus'):
+        return safe_popen(['qdbus','org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule',module])
+    return False
+
+def stop_lxqt_notifications_in_eduka_session():
+    """Eduka-Panel shows all notifications itself in Eduka-Desktop sessions."""
+    return stop_lxqt_module_in_eduka_session('lxqt-notifications.desktop', 'lxqt-notificationd')
 
 def stop_lxqt_panel_in_eduka_session():
     """Stop lxqt-panel through lxqt-session, only in Eduka-Desktop sessions.
@@ -1602,13 +1769,15 @@ def add_app_to_desktop(app):
     except Exception as e:
         return False, str(e)
 
+_LXQT_SESSION = ['dbus-send','--session','--type=method_call','--print-reply','--dest=org.lxqt.session','/LXQtSession']
 SESSION_COMMANDS = {
-    # lxqt-leave is tried first: it asks for confirmation before shutdown or
-    # restart, so a single misclick in Eduka-Desktop cannot power off a class PC.
+    # Run directly: Eduka asks for confirmation with its own leave screen
+    # (eduka-session-action), so LXQt's plain dialog is never shown.
     'lock': [['lxqt-leave','--lockscreen'], ['loginctl','lock-session'], ['xdg-screensaver','lock']],
-    'logout': [['lxqt-leave','--logout'], ['qdbus','org.lxqt.session','/LXQtSession','logout']],
-    'shutdown': [['lxqt-leave','--shutdown'], ['systemctl','poweroff']],
-    'restart': [['lxqt-leave','--reboot'], ['systemctl','reboot']],
+    'logout': [_LXQT_SESSION+['org.lxqt.session.logout'], ['loginctl','terminate-session', os.environ.get('XDG_SESSION_ID','')]],
+    'shutdown': [_LXQT_SESSION+['org.lxqt.session.powerOff'], ['systemctl','poweroff']],
+    'restart': [_LXQT_SESSION+['org.lxqt.session.reboot'], ['systemctl','reboot']],
+    'suspend': [['systemctl','suspend']],
 }
 
 def session_action(action):
@@ -1618,6 +1787,23 @@ def session_action(action):
     the program is missing, so the executable is checked before it is used.
     """
     for cmd in SESSION_COMMANDS.get(action, []):
-        if shutil.which(cmd[0]) and safe_popen(cmd):
+        if not shutil.which(cmd[0]) or not all(cmd):
+            continue
+        if cmd[0] == 'dbus-send':
+            # Only lxqt-session knows how to end the session cleanly; when it
+            # does not answer, use the next command.
+            try:
+                if subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0:
+                    return True
+            except Exception:
+                pass
+            continue
+        if safe_popen(cmd):
             return True
     return False
+
+def confirm_session_action(action):
+    """Open the Eduka leave screen (lock runs at once)."""
+    if action == 'lock':
+        return session_action('lock')
+    return safe_popen(['eduka-session-action', action])

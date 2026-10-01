@@ -1,5 +1,5 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.16
+Version: 0.9.17
 Section: x11
 Priority: optional
 Architecture: all
@@ -8,10 +8,11 @@ Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
 Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin, pkexec
 Suggests: sddm | lightdm
-Description: Edukasaun Desktop 0.9.16 - Settings redesign, Login Screen settings and notifications
- Edukasaun Desktop, Eduka-Menu, Eduka-Menu Settings, and Eduka-Panel.
- Redesigned Eduka-Menu-Settings with a working Reset to Defaults and
- instant Apply, a Login Screen page for SDDM, the Edukasaun-Dark system
- theme (Orchis dark), smoother Liquid Glass, a refreshed Eduka-Desktop and
- Eduka-Panel, a resizable Action Center, a notification history and a new
- Edukasaun login screen with live session autologin.
+Description: Edukasaun Desktop 0.9.17 - Eduka-Settings, smart Action Center and notifications
+ Edukasaun Desktop, Eduka-Menu, Eduka-Settings and Eduka-Panel.
+ Eduka-Settings configures the whole desktop (theme, icons, cursor, panel,
+ clock, notifications and the SDDM login screen with live preview). The
+ Action Center has a big digital or analog clock with greetings, a smart
+ network tile, a resizable calendar and the session buttons; Eduka-Panel is
+ the notification server. One standard account edukasaun for the live
+ system.

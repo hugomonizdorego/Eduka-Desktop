@@ -1,22 +1,29 @@
 #!/bin/sh
 # Create the standard Edukasaun account: user "edukasaun", password
-# "edukasaun". Run as root. The package does this by itself only while the
-# ISO is built (no personal account exists yet); use this command to add it
-# on another system. Change the password for computers used by many people.
+# "edukasaun", with administrator rights (group sudo), so the same password
+# answers every "Authentication required" prompt. Run as root. The package
+# does this by itself while the ISO is built (no personal account exists
+# yet). After installation the installer creates the owner's own account and
+# the standard account is locked (see live-autologin).
 set -e
 NAME=edukasaun
+MARKER=/var/lib/edukasaun-desktop/default-user
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root: sudo eduka-default-user" >&2
     exit 1
 fi
-if getent passwd "$NAME" >/dev/null 2>&1; then
-    echo "User $NAME already exists."
-    exit 0
-fi
 groups=""
-for g in audio video plugdev netdev bluetooth lpadmin scanner cdrom dip users; do
+for g in sudo audio video plugdev netdev bluetooth lpadmin scanner cdrom dip users; do
     getent group "$g" >/dev/null 2>&1 && groups="${groups:+$groups,}$g"
 done
+mkdir -p "$(dirname "$MARKER")"
+if getent passwd "$NAME" >/dev/null 2>&1; then
+    # Existing standard account: make sure it can answer admin prompts.
+    [ -n "$groups" ] && usermod -a -G "$groups" "$NAME"
+    echo "User $NAME already exists; groups updated."
+    exit 0
+fi
 useradd --create-home --shell /bin/bash --comment "Edukasaun" ${groups:+--groups "$groups"} "$NAME"
 echo "$NAME:$NAME" | chpasswd
-echo "Created user $NAME (password: $NAME)."
+echo "$NAME" > "$MARKER"
+echo "Created user $NAME (password: $NAME, administrator)."

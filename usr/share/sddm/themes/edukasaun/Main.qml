@@ -1,7 +1,7 @@
 // Edukasaun OS login screen for SDDM (0.9.16).
 // Plain QtQuick items only, so it runs on the Qt 5 and the Qt 6 greeter.
 // Settings (theme.conf, overridden by theme.conf.user written by
-// Eduka-Menu Settings → Login Screen):
+// Eduka-Settings → Login Screen):
 //   style=light|dark|glass  accent=#rrggbb  title=…  showClock=true|false
 //   background=/usr/share/Edukasaun/SDDM/Default.png  logo=…  defaultUser=…
 
@@ -22,6 +22,29 @@ Rectangle {
     property bool showClock: String(config.showClock) !== "false"
     property bool busy: false
     property string timeText: ""
+    // Accounts SDDM lists (hidden ones, like the locked live account on an
+    // installed computer, are not in userModel).
+    property var knownUsers: []
+
+    Repeater {
+        model: userModel
+        delegate: Item { Component.onCompleted: root.knownUsers = root.knownUsers.concat([model.name]) }
+    }
+
+    function initialUser() {
+        var last = userModel.lastUser ? String(userModel.lastUser) : ""
+        var wanted = config.defaultUser ? String(config.defaultUser) : ""
+        if (last.length > 0 && knownUsers.indexOf(last) >= 0) return last
+        if (wanted.length > 0 && knownUsers.indexOf(wanted) >= 0) return wanted
+        if (knownUsers.length === 1) return knownUsers[0]
+        return last.length > 0 && knownUsers.length === 0 ? last : ""
+    }
+
+    function setupUser() {
+        if (user.text.length === 0) user.text = initialUser()
+        if (user.text.length > 0) password.forceActiveFocus()
+        else user.forceActiveFocus()
+    }
     property real s: Math.max(0.75, Math.min(1.25, height / 768))
 
     // Colors of each style.
@@ -219,7 +242,6 @@ Rectangle {
                     font.pixelSize: 16 * root.s; color: root.textColor
                     selectionColor: root.accent
                     clip: true
-                    text: userModel.lastUser ? userModel.lastUser : (config.defaultUser ? config.defaultUser : "")
                     KeyNavigation.tab: password
                     Keys.onReturnPressed: password.forceActiveFocus()
                     Keys.onEnterPressed: password.forceActiveFocus()
@@ -396,8 +418,5 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: {
-        if (user.text.length > 0) password.forceActiveFocus()
-        else user.forceActiveFocus()
-    }
+    Component.onCompleted: Qt.callLater(setupUser)
 }

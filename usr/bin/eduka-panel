@@ -4,6 +4,8 @@ from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+from PyQt5.QtDBus import QDBusConnection, QDBusConnectionInterface, QDBusAbstractAdaptor, QDBusMessage
+from PyQt5.QtCore import Q_CLASSINFO
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
 
@@ -44,7 +46,7 @@ def ui_colors():
 
 def popup_qss():
     """Popup look that follows the transparency and theme chosen in
-    Eduka-Menu-Settings (a little more opaque than the panel so text stays
+    Eduka-Settings (a little more opaque than the panel so text stays
     readable), high contrast for vision accessibility."""
     cfg=read_panel_config(); dcfg=read_desktop_config(); ui=ui_colors()
     t=max(0.50, min(1.0, float(cfg.get('transparency', 0.54))))
@@ -234,7 +236,13 @@ def collect_status():
         if state == 'connected':
             if kind == 'wifi': net='wifi'; conn=name
             elif kind == 'ethernet' and net != 'wifi': net='ethernet'; conn=name
-    st.update(net=net, connection=conn, wifi_hw=wifi_hw)
+    st.update(net=net, connection=conn, wifi_hw=wifi_hw, signal=None)
+    if net == 'wifi':
+        o=_run_text(['nmcli','-t','-f','ACTIVE,SIGNAL','device','wifi','list','--rescan','no'])
+        for line in (o or '').splitlines():
+            if line.startswith('yes:'):
+                try: st['signal']=int(line.split(':')[1])
+                except ValueError: pass
     radio=_run_text(['nmcli','-t','radio','all'])
     fields=(radio or '').strip().split(':')
     st['wifi_on']=(fields[1] == 'enabled') if len(fields) >= 2 else None
@@ -262,31 +270,6 @@ class StatusWorker(QThread):
     def run(self):
         try: self.ready.emit(collect_status())
         except Exception: pass
-
-
-def ac_qss():
-    u=ui_colors()
-    return f"""
-QLabel#acTime{{font-size:30px;font-weight:800;color:{u['title']};}}
-QFrame#acGrip{{background:{u['muted']};border-radius:2px;}}
-QFrame#acGripArea:hover QFrame#acGrip{{background:{u['accent']};}}
-QLabel#todayDay{{background:{u['accent']};color:#ffffff;border-radius:27px;font-size:24px;font-weight:800;}}
-QLabel#todayWeekday{{font-size:16px;font-weight:800;color:{u['title']};}}
-QLabel#acDate{{font-size:13px;color:{u['sub']};font-weight:600;}}
-QToolButton#acTile{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:6px 4px;color:{u['text']};font-size:11px;font-weight:700;}}
-QToolButton#acTile:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
-QToolButton#acTile[on="true"]{{background:{u['accent']};color:#ffffff;border:1px solid {u['accent_border']};}}
-QToolButton#acTile[on="true"]:hover{{background:{u['accent_hover']};}}
-QToolButton#acTile:disabled{{background:{u['tile_off']};color:{u['tile_off_text']};border:1px solid {u['btn_border']};}}
-QPushButton#acFooter{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:11px;padding:7px 6px;font-size:12px;font-weight:700;}}
-QPushButton#acFooter:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
-QLabel#calTitle{{font-size:14px;font-weight:800;color:{u['title']};}}
-QToolButton#calNav{{background:transparent;border:1px solid transparent;border-radius:14px;padding:4px;}}
-QToolButton#calNav:hover{{background:{u['cal_hover']};border:1px solid {u['btn_border']};}}
-QPushButton#calToday{{padding:3px 10px;border-radius:11px;font-size:11px;}}
-QCalendarWidget QWidget{{background:{u['cal']};alternate-background-color:{u['cal']};}}
-QCalendarWidget QAbstractItemView{{background:{u['cal']};color:{u['text']};selection-background-color:transparent;selection-color:{u['text']};outline:0;border:0;}}
-"""
 
 
 class ModernCalendar(QCalendarWidget):
@@ -363,6 +346,8 @@ class CalendarCard(QFrame):
 NOTIFY_HISTORY = BASE_CONFIG/'notifications.json'
 NOTIFY_MAX = 40
 PANEL_STATE = BASE_CONFIG/'panel-state.json'
+NOTIFY_PATH = '/org/freedesktop/Notifications'
+NOTIFY_NAME = 'org.freedesktop.Notifications'
 
 def read_panel_state():
     try:
@@ -375,6 +360,9 @@ def save_panel_state(**values):
     data=read_panel_state(); data.update(values)
     try: write_json(PANEL_STATE, data)
     except Exception: pass
+
+def dnd_enabled():
+    return bool(read_panel_state().get('dnd', False))
 
 
 def _dbus_string(chunk):
@@ -389,18 +377,29 @@ def parse_notify_call(block):
     if len(args) < 5:
         return None
     app=_dbus_string(args[0]); icon=_dbus_string(args[2]); summary=_dbus_string(args[3]); body=_dbus_string(args[4])
-    body=re.sub(r'<[^>]+>', '', body).strip()
+    return make_notification(app, icon, summary, body)
+
+def make_notification(app, icon, summary, body):
+    body=re.sub(r'<[^>]+>', '', str(body or '')).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').strip()
+    summary=str(summary or '').strip()
     if not (summary or body):
         return None
-    return {'app': app or 'Application', 'icon': icon, 'summary': summary[:120], 'body': body[:300], 'time': time.time()}
+    return {'app': str(app or '') or 'Application', 'icon': str(icon or ''), 'summary': summary[:120], 'body': body[:300], 'time': time.time()}
+
+def notification_icon(item, size=26):
+    icon=str(item.get('icon') or '')
+    if icon.startswith('file://'):
+        icon=QUrl(icon).toLocalFile()
+    return get_icon(icon or 'preferences-system-notifications', 'dialog-information').pixmap(size, size)
 
 
 class NotificationCenter(QObject):
-    """Keeps a history of desktop notifications.
+    """History of desktop notifications (newest first) and the unread count.
 
-    LXQt's notification daemon still shows the bubbles; Eduka-Panel only
-    listens to the Notify calls on the session bus (dbus-monitor, no extra
-    service) so the user can read missed notifications later."""
+    Normally Eduka-Panel is the notification server itself (see
+    NotificationServer). When another server owns the bus name (e.g. outside
+    an Eduka-Desktop session) the Notify calls are only watched with
+    dbus-monitor so the history stays complete."""
     changed=pyqtSignal()
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -412,10 +411,16 @@ class NotificationCenter(QObject):
         self._buffer=''; self._block=None; self.proc=None
         self._save_timer=QTimer(self); self._save_timer.setSingleShot(True); self._save_timer.timeout.connect(self.save)
         self._flush_timer=QTimer(self); self._flush_timer.setSingleShot(True); self._flush_timer.timeout.connect(self._finish)
-        self.start()
 
-    def start(self):
-        if shutil.which('dbus-monitor') is None or not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
+    def add(self, item):
+        if not item:
+            return
+        self.items.insert(0, item); del self.items[NOTIFY_MAX:]
+        self.unread=min(99, self.unread+1)
+        self._save_timer.start(400); self.changed.emit()
+
+    def start_monitor(self):
+        if self.proc is not None or shutil.which('dbus-monitor') is None or not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
             return
         self.proc=QProcess(self)
         self.proc.setProcessChannelMode(QProcess.SeparateChannels)
@@ -425,6 +430,7 @@ class NotificationCenter(QObject):
     def stop(self):
         if self.proc is not None and self.proc.state() != QProcess.NotRunning:
             self.proc.kill(); self.proc.waitForFinished(500)
+        self.proc=None
 
     def _read(self):
         self._buffer+=bytes(self.proc.readAllStandardOutput()).decode('utf-8', 'replace')
@@ -443,10 +449,7 @@ class NotificationCenter(QObject):
         if self._block is None:
             return
         item=parse_notify_call(self._block); self._block=None
-        if item:
-            self.items.insert(0, item); del self.items[NOTIFY_MAX:]
-            self.unread=min(99, self.unread+1)
-            self._save_timer.start(400); self.changed.emit()
+        self.add(item)
 
     def mark_read(self):
         if self.unread:
@@ -464,6 +467,221 @@ class NotificationCenter(QObject):
         except Exception: pass
 
 
+NOTIFY_INTROSPECTION = '''<interface name="org.freedesktop.Notifications">
+  <method name="Notify">
+    <arg direction="in" type="s" name="app_name"/><arg direction="in" type="u" name="replaces_id"/>
+    <arg direction="in" type="s" name="app_icon"/><arg direction="in" type="s" name="summary"/>
+    <arg direction="in" type="s" name="body"/><arg direction="in" type="as" name="actions"/>
+    <arg direction="in" type="a{sv}" name="hints"/><arg direction="in" type="i" name="expire_timeout"/>
+    <arg direction="out" type="u" name="id"/>
+  </method>
+  <method name="CloseNotification"><arg direction="in" type="u" name="id"/></method>
+  <method name="GetCapabilities"><arg direction="out" type="as" name="capabilities"/></method>
+  <method name="GetServerInformation">
+    <arg direction="out" type="s" name="name"/><arg direction="out" type="s" name="vendor"/>
+    <arg direction="out" type="s" name="version"/><arg direction="out" type="s" name="spec_version"/>
+  </method>
+  <signal name="NotificationClosed"><arg type="u" name="id"/><arg type="u" name="reason"/></signal>
+  <signal name="ActionInvoked"><arg type="u" name="id"/><arg type="s" name="action_key"/></signal>
+</interface>'''
+
+
+class NotificationsAdaptor(QDBusAbstractAdaptor):
+    Q_CLASSINFO('D-Bus Interface', NOTIFY_NAME)
+    Q_CLASSINFO('D-Bus Introspection', NOTIFY_INTROSPECTION)
+    def __init__(self, server):
+        super().__init__(server)
+        self.server=server
+        self.setAutoRelaySignals(False)
+
+    @pyqtSlot(str, 'uint', str, str, str, 'QStringList', 'QVariantMap', int, result='uint')
+    def Notify(self, app_name, replaces_id, app_icon, summary, body, actions, hints, expire_timeout):
+        return self.server.notify(app_name, int(replaces_id), app_icon, summary, body, list(actions), dict(hints or {}), int(expire_timeout))
+
+    @pyqtSlot('uint')
+    def CloseNotification(self, nid):
+        self.server.close_bubble(int(nid), 3)
+
+    @pyqtSlot(result='QStringList')
+    def GetCapabilities(self):
+        return ['body', 'actions', 'icon-static', 'persistence']
+
+    @pyqtSlot(QDBusMessage)
+    def GetServerInformation(self, message):
+        message.setDelayedReply(True)
+        QDBusConnection.sessionBus().send(message.createReply(['Eduka-Panel', 'Edukasaun OS', VERSION, '1.2']))
+
+
+def _uint(value):
+    v=QVariant(int(value)); v.convert(QVariant.UInt)
+    return v
+
+
+class NotificationBubble(QFrame):
+    """One notification on screen, above Eduka-Panel at the right."""
+    WIDTH=360
+    def __init__(self, server, nid, app, icon_item, summary, body, actions, timeout, critical):
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.X11BypassWindowManagerHint)
+        self.server=server; self.nid=nid; self.actions=actions
+        self.setAttribute(Qt.WA_ShowWithoutActivating); self.setAttribute(Qt.WA_DeleteOnClose)
+        composited=compositor_running()
+        if composited: self.setAttribute(Qt.WA_TranslucentBackground)
+        u=ui_colors(); dark=is_dark_theme()
+        card='rgba(44,44,44,242)' if dark else 'rgba(255,255,255,246)'
+        radius=18 if composited else 0
+        self.setStyleSheet(f"""
+            QFrame#bubble{{background:{card};border:1px solid {u['btn_border']};border-radius:{radius}px;}}
+            QFrame#bubble[critical="true"]{{border:1px solid #e5484d;}}
+            QLabel{{background:transparent;color:{u['text']};}}
+            QLabel#bApp{{font-size:11px;font-weight:700;color:{u['sub']};}}
+            QLabel#bSummary{{font-size:13px;font-weight:800;color:{u['title']};}}
+            QLabel#bBody{{font-size:12px;}}
+            QToolButton#bClose{{background:transparent;border:0;border-radius:10px;padding:2px 6px;color:{u['sub']};}}
+            QToolButton#bClose:hover{{background:{u['btn_hover']};color:{u['title']};}}
+            QPushButton{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:10px;padding:5px 10px;font-weight:700;color:{u['text']};}}
+            QPushButton:hover{{border:1px solid {u['accent']};}}
+        """)
+        outer=QVBoxLayout(self); outer.setContentsMargins(*((6,6,6,6) if composited else (0,0,0,0)))
+        self.box=QFrame(); self.box.setObjectName('bubble'); self.box.setProperty('critical', bool(critical)); outer.addWidget(self.box)
+        lay=QHBoxLayout(self.box); lay.setContentsMargins(12,10,8,10); lay.setSpacing(10)
+        pic=QLabel(); pic.setFixedSize(36,36); pic.setPixmap(notification_icon(icon_item, 34)); lay.addWidget(pic, 0, Qt.AlignTop)
+        text=QVBoxLayout(); text.setSpacing(2)
+        head=QHBoxLayout(); a=QLabel(app or 'Notification'); a.setObjectName('bApp'); head.addWidget(a, 1)
+        close=QToolButton(); close.setObjectName('bClose'); close.setText('✕'); close.setCursor(Qt.PointingHandCursor); close.setAccessibleName('Close notification')
+        close.clicked.connect(lambda: self.server.close_bubble(self.nid, 2)); head.addWidget(close)
+        text.addLayout(head)
+        if summary:
+            s=QLabel(summary); s.setObjectName('bSummary'); s.setWordWrap(True); s.setTextFormat(Qt.PlainText); text.addWidget(s)
+        if body:
+            b=QLabel(body if len(body) < 260 else body[:257]+'…'); b.setObjectName('bBody'); b.setWordWrap(True); b.setTextFormat(Qt.PlainText); text.addWidget(b)
+        pairs=[(actions[i], actions[i+1]) for i in range(0, len(actions)-1, 2)]
+        buttons=[(k, l) for k, l in pairs if k != 'default'][:3]
+        if buttons:
+            row=QHBoxLayout(); row.setSpacing(6)
+            for key, label in buttons:
+                btn=QPushButton(label or key); btn.setCursor(Qt.PointingHandCursor)
+                btn.clicked.connect(lambda _=False, k=key: self.server.invoke(self.nid, k)); row.addWidget(btn)
+            row.addStretch(); text.addLayout(row)
+        text.addStretch(1)
+        lay.addLayout(text, 1)
+        self.setFixedWidth(self.WIDTH)
+        self.timer=QTimer(self); self.timer.setSingleShot(True); self.timer.timeout.connect(lambda: self.server.close_bubble(self.nid, 1))
+        self.timeout=timeout
+        if timeout > 0: self.timer.start(timeout)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def enterEvent(self, e):
+        self.timer.stop(); super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        if self.timeout > 0: self.timer.start(2500)
+        super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            keys=self.actions[0::2]
+            if 'default' in keys: self.server.invoke(self.nid, 'default')
+            else: self.server.close_bubble(self.nid, 2)
+        super().mouseReleaseEvent(e)
+
+    def show_animated(self):
+        self.setWindowOpacity(0.0); self.show()
+        self._fade=QPropertyAnimation(self, b'windowOpacity', self); self._fade.setDuration(160)
+        self._fade.setStartValue(0.0); self._fade.setEndValue(1.0); self._fade.start()
+
+
+class NotificationServer(QObject):
+    """Eduka-Panel is the notification server of Eduka-Desktop sessions
+    (org.freedesktop.Notifications). LXQt's notification daemon is stopped,
+    so every notification appears in the Eduka style and goes to the
+    history; Do Not Disturb keeps them silent (urgent ones still show)."""
+    MAX_VISIBLE=3
+    def __init__(self, panel, center):
+        super().__init__(panel)
+        self.panel=panel; self.center=center
+        self.bubbles={}; self.order=[]; self.next_id=1; self.registered=False; self._tries=0
+        self.adaptor=NotificationsAdaptor(self)
+        self.bus=QDBusConnection.sessionBus()
+        if not self.bus.isConnected():
+            return
+        self.bus.registerObject(NOTIFY_PATH, self)
+        self.retry=QTimer(self); self.retry.timeout.connect(self.try_register)
+        self.try_register()
+        if not self.registered:
+            center.start_monitor()
+            if in_eduka_session():
+                stop_lxqt_notifications_in_eduka_session()
+                self.retry.start(1500)
+
+    def try_register(self):
+        self._tries+=1
+        iface=self.bus.interface()
+        iface.registerService(NOTIFY_NAME, QDBusConnectionInterface.ReplaceExistingService, QDBusConnectionInterface.AllowReplacement)
+        owner=iface.serviceOwner(NOTIFY_NAME)
+        self.registered=owner.isValid() and owner.value() == self.bus.baseService()
+        if self.registered:
+            self.retry.stop() if hasattr(self, 'retry') else None
+            self.center.stop()
+        elif self._tries % 4 == 0 and in_eduka_session():
+            stop_lxqt_notifications_in_eduka_session()
+        if self._tries > 40 and hasattr(self, 'retry'):
+            self.retry.stop()
+
+    def notify(self, app, replaces_id, app_icon, summary, body, actions, hints, timeout):
+        nid=replaces_id if replaces_id > 0 else self.next_id
+        if replaces_id <= 0: self.next_id+=1
+        icon=app_icon or str(hints.get('image-path') or hints.get('image_path') or '') or str(hints.get('desktop-entry') or '')
+        try: urgency=int(hints.get('urgency', 1))
+        except Exception: urgency=1
+        item=make_notification(app, icon, summary, body)
+        transient=bool(hints.get('transient', False))
+        cfg=read_panel_config()
+        if item and not transient and cfg.get('notify_history', True):
+            self.center.add(item)
+        if item is None:
+            return nid
+        if dnd_enabled() and urgency < 2:
+            return nid
+        if timeout < 0: timeout=0 if urgency >= 2 else int(max(3, min(30, int(cfg.get('notify_seconds', 7))))*1000)
+        elif timeout > 0: timeout=max(2500, min(30000, timeout))
+        if nid in self.bubbles:
+            self.close_bubble(nid, None)
+        bubble=NotificationBubble(self, nid, item['app'], item, item['summary'], item['body'], actions, timeout, urgency >= 2)
+        self.bubbles[nid]=bubble; self.order.append(nid)
+        while len(self.order) > self.MAX_VISIBLE:
+            self.close_bubble(self.order[0], 1)
+        bubble.adjustSize(); self.layout_bubbles(); bubble.show_animated()
+        return nid
+
+    def layout_bubbles(self):
+        screen=QApplication.primaryScreen().availableGeometry()
+        panel=self.panel
+        bottom=(panel.y()-8) if panel.isVisible() else (screen.bottom()-8)
+        x=screen.right()-NotificationBubble.WIDTH-10
+        for nid in reversed(self.order):
+            b=self.bubbles.get(nid)
+            if b is None: continue
+            h=b.sizeHint().height()
+            b.setGeometry(x, bottom-h, NotificationBubble.WIDTH, h)
+            bottom-=h+4
+
+    def close_bubble(self, nid, reason):
+        b=self.bubbles.pop(nid, None)
+        if nid in self.order: self.order.remove(nid)
+        if b is not None:
+            b.close()
+            self.layout_bubbles()
+        if reason is not None and self.registered:
+            msg=QDBusMessage.createSignal(NOTIFY_PATH, NOTIFY_NAME, 'NotificationClosed')
+            msg.setArguments([_uint(nid), _uint(reason)]); self.bus.send(msg)
+
+    def invoke(self, nid, key):
+        if self.registered:
+            msg=QDBusMessage.createSignal(NOTIFY_PATH, NOTIFY_NAME, 'ActionInvoked')
+            msg.setArguments([_uint(nid), key]); self.bus.send(msg)
+        self.close_bubble(nid, 2)
+
+
 def notification_age(stamp):
     delta=max(0, time.time()-float(stamp or 0))
     if delta < 60: return 'now'
@@ -478,8 +696,7 @@ class NotificationRow(QFrame):
         super().__init__(parent)
         self.setObjectName('notifRow')
         lay=QHBoxLayout(self); lay.setContentsMargins(10,8,6,8); lay.setSpacing(10)
-        pic=QLabel(); pic.setFixedSize(28,28); icon=item.get('icon') or ''
-        pic.setPixmap(get_icon(icon if icon else 'preferences-system-notifications', 'dialog-information').pixmap(26,26)); lay.addWidget(pic, 0, Qt.AlignTop)
+        pic=QLabel(); pic.setFixedSize(28,28); pic.setPixmap(notification_icon(item, 26)); lay.addWidget(pic, 0, Qt.AlignTop)
         text=QVBoxLayout(); text.setSpacing(1)
         head=QHBoxLayout(); head.setSpacing(6)
         app=QLabel(item.get('app','')); app.setObjectName('notifApp'); head.addWidget(app, 1)
@@ -519,12 +736,15 @@ class NotificationPopup(PopupFrame):
         self.box.setFixedWidth(360)
         self.setStyleSheet(self.styleSheet()+notif_qss())
         row, self.pic, self.sub=popup_header('preferences-system-notifications', 'Notifications', '')
+        self.dnd=QPushButton(tr('dnd')); self.dnd.setObjectName('switch'); self.dnd.setCheckable(True); self.dnd.setChecked(dnd_enabled())
+        self.dnd.toggled.connect(lambda on: (save_panel_state(dnd=bool(on)), panel.update_notification_badge()))
+        row.addWidget(self.dnd)
         self.v.addLayout(row)
         self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,4,0); self.list_layout.setSpacing(6)
         self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll.setWidget(self.list_widget)
         self.v.addWidget(self.scroll)
         foot=QHBoxLayout()
-        settings=QPushButton('Settings'); settings.setObjectName('linkButton'); settings.clicked.connect(lambda: (self.close(), launch_app('lxqt-config-notificationd')))
+        settings=QPushButton('Settings'); settings.setObjectName('linkButton'); settings.clicked.connect(lambda: (self.close(), launch_app('eduka-settings --page notifications')))
         self.clear_button=QPushButton('Clear all'); self.clear_button.setObjectName('linkButton'); self.clear_button.clicked.connect(self.center.clear)
         foot.addWidget(settings); foot.addStretch(); foot.addWidget(self.clear_button)
         self.v.addLayout(foot)
@@ -536,10 +756,10 @@ class NotificationPopup(PopupFrame):
             item=self.list_layout.takeAt(0); w=item.widget()
             if w: w.setParent(None); w.deleteLater()
         items=self.center.items
-        self.sub.setText(f'{len(items)} notification{"s" if len(items) != 1 else ""}' if items else 'You are all caught up')
+        self.sub.setText(f'{len(items)} notification{"s" if len(items) != 1 else ""}' if items else tr('no_notif'))
         self.clear_button.setEnabled(bool(items))
         if not items:
-            empty=QLabel('No notifications'); empty.setAlignment(Qt.AlignCenter); empty.setObjectName('popHint'); empty.setMinimumHeight(70)
+            empty=QLabel(tr('no_notif')); empty.setAlignment(Qt.AlignCenter); empty.setObjectName('popHint'); empty.setMinimumHeight(70)
             self.list_layout.addWidget(empty)
         for i, item in enumerate(items[:20]):
             self.list_layout.addWidget(NotificationRow(item, lambda _=False, idx=i: self.center.remove(idx)))
@@ -548,59 +768,196 @@ class NotificationPopup(PopupFrame):
         self.scroll.setFixedHeight(min(380, max(80, self.list_layout.sizeHint().height()+4)))
 
 
+# ---------------------------------------------------------------------------
+# Action Center
+# ---------------------------------------------------------------------------
+
+class AnalogClock(QWidget):
+    """Round clock face drawn with QPainter (no images, very light)."""
+    def __init__(self, size=136, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        u=ui_colors()
+        self.face=qcolor(u['cal']); self.ink=qcolor(u['title']); self.sub=qcolor(u['sub']); self.accent=qcolor(u['accent'])
+
+    def paintEvent(self, e):
+        now=QTime.currentTime()
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        side=min(self.width(), self.height()); p.translate(self.width()/2, self.height()/2); p.scale(side/200.0, side/200.0)
+        p.setPen(QPen(self.accent, 5)); p.setBrush(self.face); p.drawEllipse(QPointF(0,0), 94, 94)
+        for i in range(60):
+            p.save(); p.rotate(i*6)
+            if i % 5 == 0:
+                p.setPen(QPen(self.ink, 4, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0,-80), QPointF(0,-70))
+            else:
+                p.setPen(QPen(self.sub, 1.5, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0,-80), QPointF(0,-76))
+            p.restore()
+        def hand(angle, length, width, color):
+            p.save(); p.rotate(angle); p.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0, 12), QPointF(0, -length)); p.restore()
+        hand(30.0*((now.hour()%12)+now.minute()/60.0), 46, 7, self.ink)
+        hand(6.0*(now.minute()+now.second()/60.0), 66, 5, self.ink)
+        hand(6.0*now.second(), 72, 2, self.accent)
+        p.setPen(Qt.NoPen); p.setBrush(self.accent); p.drawEllipse(QPointF(0,0), 6, 6)
+
+
+class GripBar(QWidget):
+    """Handle at the top of the Action Center. Dragging it down shrinks the
+    Action Center (the month calendar folds away), dragging up grows it."""
+    dragStarted=pyqtSignal(); dragged=pyqtSignal(int); dragFinished=pyqtSignal(int); clicked=pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(16); self.setCursor(Qt.SizeVerCursor)
+        self.setAccessibleName('Resize Action Center'); self._start=None; self._moved=False; self.hot=False
+        u=ui_colors(); self.color=qcolor(u['muted']); self.accent=qcolor(u['accent'])
+
+    def paintEvent(self, e):
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen); p.setBrush(self.accent if (self.hot or self._start is not None) else self.color)
+        w=48; p.drawRoundedRect(QRectF((self.width()-w)/2, 5, w, 5), 2.5, 2.5)
+
+    def enterEvent(self, e): self.hot=True; self.update()
+    def leaveEvent(self, e): self.hot=False; self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._start=e.globalPos().y(); self._moved=False; self.dragStarted.emit(); self.update(); e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._start is not None:
+            dy=e.globalPos().y()-self._start
+            if abs(dy) > 3: self._moved=True
+            self.dragged.emit(dy); e.accept()
+
+    def mouseReleaseEvent(self, e):
+        if self._start is not None:
+            dy=e.globalPos().y()-self._start; self._start=None; self.update()
+            if self._moved: self.dragFinished.emit(dy)
+            else: self.clicked.emit()
+            e.accept()
+
+
+def network_pixmap(kind, led_on=True, size=24, color='#2d4a43', signal=None):
+    """Network picture: Wi-Fi bars, or a LAN port with a small light that
+    is green (blinking) when the cable works and red when offline."""
+    if kind == 'wifi':
+        level='excellent' if (signal or 100) >= 75 else 'good' if signal >= 50 else 'ok' if signal >= 25 else 'weak'
+        icon=get_icon(f'network-wireless-signal-{level}', 'network-wireless')
+        if not icon.isNull():
+            return icon.pixmap(size, size)
+    pix=QPixmap(size*2, size*2); pix.fill(Qt.transparent); pix.setDevicePixelRatio(2.0)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    ink=qcolor(color); s=size/24.0
+    p.setPen(QPen(ink, 1.8*s)); p.setBrush(Qt.NoBrush)
+    if kind == 'wifi-off':
+        # Wi-Fi arcs, dimmed
+        for r in (9, 6, 3):
+            p.drawArc(QRectF(12*s-r*s, 14*s-r*s, 2*r*s, 2*r*s), 45*16, 90*16)
+        p.setBrush(ink); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(12*s, 15*s), 1.6*s, 1.6*s)
+    else:
+        # RJ45 socket: body, latch notch and contacts
+        p.drawRoundedRect(QRectF(3.5*s, 6*s, 17*s, 13*s), 2.5*s, 2.5*s)
+        path=QPainterPath(); path.moveTo(8*s, 19*s); path.lineTo(8*s, 15*s); path.lineTo(16*s, 15*s); path.lineTo(16*s, 19*s)
+        p.drawPath(path)
+        p.setPen(QPen(ink, 1.1*s))
+        for i in range(4):
+            x=8.6*s+i*2.2*s; p.drawLine(QPointF(x, 8.5*s), QPointF(x, 11*s))
+    led={'ethernet': ('#36d27a' if led_on else '#1e6d43'), 'offline': '#e5484d', 'wifi-off': '#e5484d'}.get(kind, '#36d27a')
+    p.setPen(QPen(QColor(255,255,255,200), 1.2*s)); p.setBrush(QColor(led))
+    p.drawEllipse(QPointF(19.5*s, 5.5*s), 3.6*s, 3.6*s)
+    p.end()
+    return pix
+
+
+def ac_qss():
+    u=ui_colors()
+    return f"""
+QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;margin-top:4px;}}
+QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
+QFrame#acClock{{background:{u['cal']};border:1px solid {u['btn_border']};border-radius:18px;}}
+QLabel#acTime{{font-size:46px;font-weight:800;color:{u['title']};}}
+QLabel#acGreeting{{font-size:15px;font-weight:800;color:{u['accent']};}}
+QLabel#acDate{{font-size:13px;color:{u['sub']};font-weight:600;}}
+QToolButton#acTile{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:6px 4px;color:{u['text']};font-size:11px;font-weight:700;}}
+QToolButton#acTile:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
+QToolButton#acTile[on="true"]{{background:{u['accent']};color:#ffffff;border:1px solid {u['accent_border']};}}
+QToolButton#acTile[on="true"]:hover{{background:{u['accent_hover']};}}
+QToolButton#acTile[alert="true"]{{border:1px solid #e5484d;}}
+QToolButton#acTile:disabled{{background:{u['tile_off']};color:{u['tile_off_text']};border:1px solid {u['btn_border']};}}
+QToolButton#acSession{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:6px 2px;color:{u['text']};font-size:11px;font-weight:700;}}
+QToolButton#acSession:hover{{background:{u['accent']};border:1px solid {u['accent']};color:#ffffff;}}
+QToolButton#acSession[danger="true"]:hover{{background:#e5484d;border:1px solid #e5484d;}}
+QLabel#calTitle{{font-size:14px;font-weight:800;color:{u['title']};}}
+QToolButton#calNav{{background:transparent;border:1px solid transparent;border-radius:14px;padding:4px;}}
+QToolButton#calNav:hover{{background:{u['cal_hover']};border:1px solid {u['btn_border']};}}
+QPushButton#calToday{{padding:3px 10px;border-radius:11px;font-size:11px;}}
+QCalendarWidget QWidget{{background:{u['cal']};alternate-background-color:{u['cal']};}}
+QCalendarWidget QAbstractItemView{{background:{u['cal']};color:{u['text']};selection-background-color:transparent;selection-color:{u['text']};outline:0;border:0;}}
+"""
+
+
 class ActionCenter(PopupFrame):
-    """Clock popup: time, quick toggles, sound and brightness, status and calendar."""
+    """Clock popup: big clock with greeting, quick toggles, sound and
+    brightness, notifications, the month calendar and the session buttons."""
     TILES=[
-        ('wifi','Wi-Fi','network-wireless'),
+        ('network','Network','network-wired'),
         ('bluetooth','Bluetooth','bluetooth'),
         ('airplane','Airplane','airplane-mode'),
         ('display','Display','preferences-desktop-display'),
-        ('lock','Lock','system-lock-screen'),
+        ('dnd','Do Not Disturb','notifications-disabled'),
         ('settings','Settings','preferences-system'),
     ]
     def __init__(self, panel):
         super().__init__(panel)
-        self.panel=panel
+        self.panel=panel; self.lang=ui_language()
         self.setAccessibleName('Action Center')
         self.box.setFixedWidth(372)
         self.setStyleSheet(self.styleSheet()+ac_qss()+notif_qss())
-        self.v.setSpacing(8); self.v.setContentsMargins(14,4,14,12)
-        # Resize grip: drag down for the compact Action Center (today's date
-        # instead of the month calendar), drag up for the full one.
-        self.grip=QFrame(); self.grip.setObjectName('acGripArea'); self.grip.setFixedHeight(14); self.grip.setCursor(Qt.SizeVerCursor)
-        self.grip.setToolTip('Drag down for a compact view, up for the calendar'); self.grip.setAccessibleName('Resize Action Center')
-        gl=QHBoxLayout(self.grip); gl.setContentsMargins(0,4,0,4); bar=QFrame(); bar.setObjectName('acGrip'); bar.setFixedSize(44,5); gl.addWidget(bar, 0, Qt.AlignCenter)
-        self.grip.installEventFilter(self); self._drag_y=None
-        self.v.addWidget(self.grip)
-        head=QHBoxLayout(); head.setSpacing(8)
-        texts=QVBoxLayout(); texts.setSpacing(0)
+        self.v.setSpacing(8); self.v.setContentsMargins(14,2,14,12)
+        self.ink='#e0e0e0' if is_dark_theme() else '#2d4a43'
+
+        # Handle row: the grip in the middle, the size chevron at the right.
+        top=QHBoxLayout(); top.setContentsMargins(0,0,0,0); top.addSpacing(26)
+        self.grip=GripBar(); top.addWidget(self.grip, 1)
+        self.mode_button=QToolButton(); self.mode_button.setObjectName('acChevron'); self.mode_button.setFixedSize(26,26); self.mode_button.setIconSize(QSize(11,11)); self.mode_button.setCursor(Qt.PointingHandCursor)
+        self.mode_button.clicked.connect(lambda: self.set_compact(not self.compact, remember=True)); top.addWidget(self.mode_button)
+        self.v.addLayout(top)
+        self.grip.dragStarted.connect(self.drag_start); self.grip.dragged.connect(self.drag_move); self.grip.dragFinished.connect(self.drag_end)
+        self.grip.clicked.connect(lambda: self.set_compact(not self.compact, remember=True))
+
+        # Clock card in the middle: digital or analog, greeting and date.
+        self.clock_card=QFrame(); self.clock_card.setObjectName('acClock')
+        self.ck=QGridLayout(self.clock_card); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
+        self.analog=AnalogClock(132)
         self.time_label=QLabel(); self.time_label.setObjectName('acTime')
+        self.greeting=QLabel(); self.greeting.setObjectName('acGreeting')
         self.date_label=QLabel(); self.date_label.setObjectName('acDate')
-        texts.addWidget(self.time_label); texts.addWidget(self.date_label); head.addLayout(texts, 1)
-        self.mode_button=QToolButton(); self.mode_button.setObjectName('roundIcon'); self.mode_button.setFixedSize(34,34); self.mode_button.setIconSize(QSize(12,12)); self.mode_button.setCursor(Qt.PointingHandCursor)
-        self.mode_button.clicked.connect(lambda: self.set_compact(not self.compact, remember=True)); head.addWidget(self.mode_button, 0, Qt.AlignTop)
-        self.v.addLayout(head)
+        self.date_label.setWordWrap(True); self._dense=None
+        self.clock_card.setContextMenuPolicy(Qt.CustomContextMenu); self.clock_card.customContextMenuRequested.connect(self.clock_menu)
+        self.clock_card.setToolTip('Right-click: analog or digital, 24 or 12 hours')
+        self.v.addWidget(self.clock_card)
+        self.clock_format=clock_settings()[1]
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
-            t=QToolButton(); t.setObjectName('acTile'); t.setText(label); t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system'))
-            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,58)
+            t=QToolButton(); t.setObjectName('acTile'); t.setText(tr('dnd') if key == 'dnd' else label)
+            t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system-notifications' if key == 'dnd' else 'preferences-system'))
+            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,54)
             t.setAccessibleName(label); t.setProperty('on', False); t.setCursor(Qt.PointingHandCursor)
             t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
             t.setContextMenuPolicy(Qt.CustomContextMenu); t.customContextMenuRequested.connect(lambda _pos,k=key: self.tile_settings(k))
             grid.addWidget(t, i//3, i%3); self.tiles[key]=t
         self.v.addLayout(grid)
+        self._led=True
+        self.blink=QTimer(self); self.blink.timeout.connect(self.blink_led)
 
-        # One sound control: the speaker button mutes/unmutes and shows the
-        # state, the slider sets the volume, the chevron opens output
-        # devices and sound settings. Brightness sits directly below it.
+        # One sound control and brightness below it.
         card=QFrame(); card.setObjectName('acCard'); cl=QGridLayout(card); cl.setContentsMargins(10,8,10,10); cl.setHorizontalSpacing(8); cl.setVerticalSpacing(6)
         self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(18,18)); self.mute.setFixedSize(34,34)
         self.mute.setAccessibleName('Mute'); self.mute.setToolTip('Mute / unmute'); self.mute.clicked.connect(self.toggle_mute)
         self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume')
         self.vol_value=QLabel('')
         self.sound_more=QToolButton(); self.sound_more.setObjectName('roundIcon'); self.sound_more.setFixedSize(34,34)
-        self.sound_more.setIcon(QIcon(arrow_icon_path('right', '#e0e0e0' if is_dark_theme() else '#2d4a43'))); self.sound_more.setIconSize(QSize(12,12))
+        self.sound_more.setIcon(QIcon(arrow_icon_path('right', self.ink))); self.sound_more.setIconSize(QSize(12,12))
         self.sound_more.setAccessibleName('Sound output and settings'); self.sound_more.setToolTip('Output device and sound settings'); self.sound_more.clicked.connect(self.sound_menu)
         self.bri_icon=QLabel(); self.bri_icon.setFixedSize(34,34); self.bri_icon.setAlignment(Qt.AlignCenter); self.bri_icon.setPixmap(get_icon('display-brightness','video-display').pixmap(18,18))
         self.bri_slider=QSlider(Qt.Horizontal); self.bri_slider.setRange(5,100); self.bri_slider.setAccessibleName('Screen brightness'); self.bri_value=QLabel('')
@@ -608,16 +965,15 @@ class ActionCenter(PopupFrame):
         cl.addWidget(self.mute,0,0); cl.addWidget(self.vol_slider,0,1); cl.addWidget(self.vol_value,0,2); cl.addWidget(self.sound_more,0,3)
         cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
         self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,4)
-        # Status that normally sits on the panel tray while it is hidden.
-        self.extra_label=QLabel(''); self.extra_label.setObjectName('popHint'); cl.addWidget(self.extra_label,3,0,1,4)
-        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,4,0,1,4)
+        self.battery_label.setObjectName('popHint')
+        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,3,0,1,4)
         self.v.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
         self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
         self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self.update_sound_icon(), self._vol_timer.start(70)))
         self.bri_slider.valueChanged.connect(lambda v: (self.bri_value.setText(f'{v}%'), self._bri_timer.start(90)))
 
-        # Latest notification (the full history opens from the bell).
+        # Latest notification (the full history opens with "All").
         self.notif_card=QFrame(); self.notif_card.setObjectName('acCard'); nl=QHBoxLayout(self.notif_card); nl.setContentsMargins(10,8,8,8); nl.setSpacing(8)
         self.notif_icon=QLabel(); self.notif_icon.setFixedSize(26,26); nl.addWidget(self.notif_icon)
         self.notif_text=QLabel(''); self.notif_text.setWordWrap(True); self.notif_text.setTextFormat(Qt.PlainText); nl.addWidget(self.notif_text, 1)
@@ -625,114 +981,198 @@ class ActionCenter(PopupFrame):
         self.v.addWidget(self.notif_card)
         panel.notifications.changed.connect(self.update_notifications); self.update_notifications()
 
-        self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar
-        self.v.addWidget(self.calendar_card)
-        # Compact mode: only today's date.
-        self.today_card=QFrame(); self.today_card.setObjectName('acCard'); tl=QHBoxLayout(self.today_card); tl.setContentsMargins(14,10,14,10); tl.setSpacing(14)
-        self.today_day=QLabel(''); self.today_day.setObjectName('todayDay'); self.today_day.setAlignment(Qt.AlignCenter); self.today_day.setFixedSize(54,54); tl.addWidget(self.today_day)
-        tt=QVBoxLayout(); tt.setSpacing(1)
-        self.today_weekday=QLabel(''); self.today_weekday.setObjectName('todayWeekday'); self.today_month=QLabel(''); self.today_month.setObjectName('acDate')
-        tt.addWidget(self.today_weekday); tt.addWidget(self.today_month); tl.addLayout(tt, 1)
-        self.v.addWidget(self.today_card)
+        # Month calendar in a holder whose height follows the grip.
+        self.cal_holder=QWidget(); hl=QVBoxLayout(self.cal_holder); hl.setContentsMargins(0,0,0,0)
+        self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar; hl.addWidget(self.calendar_card)
+        self.cal_full=self.calendar_card.sizeHint().height()
+        self.v.addWidget(self.cal_holder)
 
-        foot=QHBoxLayout(); foot.setSpacing(8)
-        for label, icon, handler in [('Network','preferences-system-network',lambda: self.launch('nm-connection-editor')),
-                                     ('Power','system-shutdown',self.power_menu)]:
-            b=QPushButton(get_icon(icon,'preferences-system'), ' '+label); b.setObjectName('acFooter'); b.clicked.connect(handler); foot.addWidget(b)
-            if label == 'Power': self.power_button=b
-        self.v.addLayout(foot)
+        # Session: Lock, Log Out, Restart, Shut Down.
+        session=QHBoxLayout(); session.setSpacing(6)
+        for action in ('lock', 'logout', 'restart', 'shutdown'):
+            b=QToolButton(); b.setObjectName('acSession'); b.setText(tr(action)); b.setIcon(get_icon(SESSION_ICONS[action], 'system-shutdown')); b.setIconSize(QSize(20,20))
+            b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); b.setFixedHeight(52); b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            b.setProperty('danger', action == 'shutdown'); b.setCursor(Qt.PointingHandCursor); b.setAccessibleName(tr(action))
+            b.clicked.connect(lambda _=False, a=action: self.session(a)); session.addWidget(b)
+        self.v.addLayout(session)
+
         self.update_time()
         self.refresh(panel.last_status or {})
         self.compact=None
+        self.apply_clock_style()
         self.set_compact(bool(read_panel_state().get('action_center_compact', False)) or self.too_tall())
 
+    # -------------------------------------------------------------- size
     def too_tall(self):
         """Small screens (1024x600 netbooks) start in compact mode."""
+        return QApplication.primaryScreen().availableGeometry().height() < 640
+
+    def room(self):
         screen=QApplication.primaryScreen().availableGeometry()
-        return screen.height() < 640
+        return self.panel.y()-8-(screen.y()+4)
+
+    def set_clock_layout(self, dense):
+        """Compact view: big clock in the middle. With the month calendar:
+        one row (time left, greeting and date right) so it fits on 768 px."""
+        if dense == self._dense:
+            return
+        self._dense=dense
+        for w in (self.analog, self.time_label, self.greeting, self.date_label):
+            self.ck.removeWidget(w)
+        analog=self.analog.property('wanted') is True
+        if dense:
+            self.analog.setFixedSize(64, 64)
+            big=self.analog if analog else self.time_label
+            self.ck.addWidget(big, 0, 0, 2, 1, Qt.AlignVCenter)
+            self.ck.addWidget(self.greeting, 0, 1, Qt.AlignBottom); self.ck.addWidget(self.date_label, 1, 1, Qt.AlignTop)
+            self.ck.setColumnStretch(1, 1)
+            for w in (self.greeting, self.date_label): w.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self.time_label.setStyleSheet('font-size:34px;')
+        else:
+            self.analog.setFixedSize(132, 132)
+            row=0
+            if analog: self.ck.addWidget(self.analog, row, 0, 1, 2, Qt.AlignHCenter); row+=1
+            self.ck.addWidget(self.time_label, row, 0, 1, 2); self.ck.addWidget(self.greeting, row+1, 0, 1, 2); self.ck.addWidget(self.date_label, row+2, 0, 1, 2)
+            self.ck.setColumnStretch(1, 0)
+            for w in (self.time_label, self.greeting, self.date_label): w.setAlignment(Qt.AlignCenter)
+            self.time_label.setStyleSheet('font-size:22px;' if analog else '')
+        self.analog.setVisible(analog)
+        self.time_label.setVisible(not (analog and dense))
+        self.update_time()
 
     def set_compact(self, compact, remember=False):
         compact=bool(compact)
-        if compact == self.compact:
-            return
-        self._show_compact(compact)
+        self.compact=compact
+        self.set_clock_layout(not compact)
+        self.cal_holder.setMaximumHeight(0 if compact else self.cal_full); self.cal_holder.setMinimumHeight(0 if compact else self.cal_full)
+        self.cal_holder.setVisible(not compact)
+        self.mode_button.setIcon(QIcon(arrow_icon_path('up' if compact else 'down', self.ink)))
+        tip='Show the calendar (drag the handle up)' if compact else 'Smaller: hide the calendar (drag the handle down)'
+        self.mode_button.setToolTip(tip); self.mode_button.setAccessibleName(tip); self.grip.setToolTip(tip)
         if remember:
             save_panel_state(action_center_compact=compact)
         if self.isVisible():
-            self.place()
+            self.place(); QTimer.singleShot(0, self.place)
 
-    def _show_compact(self, compact):
-        self.compact=compact
-        self.calendar_card.setVisible(not compact); self.today_card.setVisible(compact)
-        color='#e0e0e0' if is_dark_theme() else '#2d4a43'
-        self.mode_button.setIcon(QIcon(arrow_icon_path('up' if compact else 'down', color)))
-        self.mode_button.setToolTip('Show the calendar' if compact else 'Compact view (today only)')
-        self.mode_button.setAccessibleName(self.mode_button.toolTip())
+    def drag_start(self):
+        self._drag_from=0 if self.compact else self.cal_full
+        self.set_clock_layout(True)
+        self.cal_holder.setVisible(True)
 
-    def place(self):
+    def drag_move(self, dy):
+        h=max(0, min(self.cal_full, self._drag_from-dy))
+        if self.base_height()+h > self.room():
+            h=max(0, self.room()-self.base_height())
+        self.cal_holder.setMinimumHeight(h); self.cal_holder.setMaximumHeight(h)
+        self.place(check_room=False)
+
+    def drag_end(self, dy):
+        h=self.cal_holder.maximumHeight()
+        self.set_compact(h < self.cal_full/2, remember=True)
+
+    def base_height(self):
+        """Height of the Action Center without the calendar."""
+        return self.sizeHint().height()-self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else self.sizeHint().height()
+
+    def place(self, check_room=True):
         """Keep the bottom edge just above Eduka-Panel and grow upwards."""
         panel=self.panel; screen=QApplication.primaryScreen().availableGeometry()
+        # Layout changes are applied lazily: settle them before measuring.
+        self.ck.activate(); self.v.activate(); self.layout().activate()
         self.box.adjustSize(); self.adjustSize()
-        room=panel.y()-8-(screen.y()+4)
-        if not self.compact and self.sizeHint().height() > room:
-            # Not enough room above the panel for the month: today only.
-            self._show_compact(True); self.box.adjustSize(); self.adjustSize()
+        if check_room and not self.compact and self.sizeHint().height() > self.room():
+            # Not enough room above the panel for the month calendar.
+            self.compact=True; self.cal_holder.setVisible(False); self.cal_holder.setMaximumHeight(0); self.cal_holder.setMinimumHeight(0)
+            self.mode_button.setIcon(QIcon(arrow_icon_path('up', self.ink))); self.set_clock_layout(False)
+            self.ck.activate(); self.v.activate(); self.layout().activate()
+            self.box.adjustSize(); self.adjustSize()
         x=min(panel.x()+panel.width()-self.width(), screen.right()-self.width()-4); x=max(screen.x()+4, x)
-        y=max(screen.y()+4, panel.y()-self.height()-8)
-        self.setGeometry(x, y, self.width(), self.height())
-
-    def eventFilter(self, obj, event):
-        if obj is self.grip:
-            t=event.type()
-            if t == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                self._drag_y=event.globalPos().y(); return True
-            if t == QEvent.MouseMove and self._drag_y is not None:
-                delta=event.globalPos().y()-self._drag_y
-                if delta > 36 and not self.compact:
-                    self.set_compact(True, remember=True); self._drag_y=event.globalPos().y()
-                elif delta < -36 and self.compact:
-                    self.set_compact(False, remember=True); self._drag_y=event.globalPos().y()
-                return True
-            if t == QEvent.MouseButtonRelease:
-                self._drag_y=None; return True
-            if t == QEvent.MouseButtonDblClick:
-                self.set_compact(not self.compact, remember=True); return True
-        return super().eventFilter(obj, event)
+        h=self.sizeHint().height()
+        y=max(screen.y()+4, panel.y()-h-8)
+        self.setGeometry(x, y, self.width(), h)
 
     def wheelEvent(self, e):
-        # Scrolling on the header also switches the size.
-        if self.grip.underMouse() or self.time_label.underMouse():
+        # Scrolling on the clock or the handle also changes the size.
+        if self.grip.underMouse() or self.clock_card.underMouse():
             self.set_compact(e.angleDelta().y() < 0, remember=True); return
         super().wheelEvent(e)
 
-    def update_notifications(self):
-        items=self.panel.notifications.items
-        if items:
-            n=items[0]; text=n.get('summary') or n.get('body') or ''
-            self.notif_text.setText(f"{n.get('app','')}: {text}"[:90] + (f"   (+{len(items)-1})" if len(items) > 1 else ''))
-            self.notif_icon.setPixmap(get_icon(n.get('icon') or 'preferences-system-notifications','dialog-information').pixmap(22,22))
-        else:
-            self.notif_text.setText('No new notifications')
-            self.notif_icon.setPixmap(get_icon('preferences-system-notifications','dialog-information').pixmap(22,22))
-        self.notif_open.setVisible(bool(items))
+    # -------------------------------------------------------------- clock
+    def apply_clock_style(self):
+        style, self.clock_format=clock_settings()
+        self.analog.setProperty('wanted', style == 'analog')
+        dense=self._dense; self._dense=None
+        self.set_clock_layout(bool(dense) if dense is not None else False)
+
+    def clock_menu(self, pos):
+        style, fmt=clock_settings()
+        m=RoundedMenu(self)
+        for label, key, value, current in [('Digital clock','clock_style','digital',style), ('Analog clock','clock_style','analog',style),
+                                           (None,None,None,None), ('24 hours (14:30)','clock_format','24h',fmt), ('12 hours (2:30 PM)','clock_format','12h',fmt)]:
+            if label is None:
+                m.addSeparator(); continue
+            act=m.addAction(label); act.setCheckable(True); act.setChecked(value == current)
+            act.triggered.connect(lambda _=False, k=key, v=value: self.set_clock(k, v))
+        m.addSeparator(); m.addAction(get_icon('preferences-system'), 'Clock settings…', lambda: self.launch('eduka-settings --page panel'))
+        m.exec_(self.clock_card.mapToGlobal(pos))
+
+    def set_clock(self, key, value):
+        save_panel_config({key: value})
+        self.apply_clock_style(); self.panel.update_clock()
+        if self.isVisible(): self.place()
 
     def update_time(self):
         now=QDateTime.currentDateTime(); loc=QLocale()
-        self.time_label.setText(now.toString('HH:mm'))
+        self.time_label.setText(format_clock(now.time(), self.clock_format))
+        self.greeting.setText(f'{greeting_text(now.time().hour(), self.lang)}, {user_display_name()}'.rstrip(', '))
         self.date_label.setText(loc.toString(now.date(), QLocale.LongFormat))
-        if hasattr(self, 'today_day'):
-            self.today_day.setText(str(now.date().day()))
-            self.today_weekday.setText(loc.dayName(now.date().dayOfWeek(), QLocale.LongFormat))
-            self.today_month.setText(loc.toString(now.date(), 'MMMM yyyy'))
+        if self.analog.isVisible(): self.analog.update()
+        if self._dense and self.analog.isVisible():
+            # Analog row: the digital time goes in front of the date.
+            self.date_label.setText(format_clock(now.time(), self.clock_format)+' • '+loc.toString(now.date(), QLocale.LongFormat))
 
+    # -------------------------------------------------------------- tiles
     def set_tile(self, key, on, enabled=True, tip=''):
         t=self.tiles[key]
         if bool(t.property('on')) != bool(on):
             t.setProperty('on', bool(on)); t.style().unpolish(t); t.style().polish(t)
         t.setEnabled(enabled)
         t.setToolTip(tip or t.text())
-        if key in ('wifi','bluetooth','airplane'):
+        if key in ('network','bluetooth','airplane','dnd'):
             t.setAccessibleDescription('On' if on else 'Off')
+
+    def update_network_tile(self, st):
+        net=st.get('net','offline'); t=self.tiles['network']
+        self._net_kind={'wifi':'wifi','ethernet':'ethernet'}.get(net, 'wifi-off' if st.get('wifi_hw') and st.get('wifi_on') else 'offline')
+        self._net_signal=st.get('signal')
+        if net == 'wifi':
+            name=st.get('connection') or 'Wi-Fi'
+            t.setText(name if len(name) <= 13 else name[:12]+'…')
+            tip=f"{tr('net_wifi', self.lang)}: {name}" + (f" ({st.get('signal')}%)" if st.get('signal') else '')
+        elif net == 'ethernet':
+            t.setText('Ethernet'); tip=tr('net_lan', self.lang)
+        else:
+            t.setText(tr('offline', self.lang)); tip=tr('net_off', self.lang)
+        self.set_tile('network', net in ('wifi','ethernet'), True, tip+' — right-click: network settings')
+        t.setAccessibleName(tip)
+        alert=net not in ('wifi','ethernet')
+        if bool(t.property('alert')) != alert:
+            t.setProperty('alert', alert); t.style().unpolish(t); t.style().polish(t)
+        self._led=True; self.paint_network_icon()
+        if self._net_kind == 'ethernet':
+            if not self.blink.isActive(): self.blink.start(600)
+        else:
+            self.blink.stop()
+
+    def paint_network_icon(self):
+        t=self.tiles['network']
+        color='#ffffff' if t.property('on') else self.ink
+        t.setIcon(QIcon(network_pixmap(self._net_kind, self._led, 24, color, self._net_signal)))
+
+    def blink_led(self):
+        if not self.isVisible():
+            self.blink.stop(); return
+        self._led=not self._led; self.paint_network_icon()
 
     def update_sound_icon(self):
         v=self.vol_slider.value(); muted=self.mute.isChecked()
@@ -741,18 +1181,14 @@ class ActionCenter(PopupFrame):
         self.mute.setAccessibleDescription('Muted' if muted else 'Sound on')
 
     def refresh(self, st):
+        self.update_network_tile(st)
         wifi_on=st.get('wifi_on')
-        if st.get('net') == 'wifi': wifi_tip=f"Connected to {st.get('connection')}"
-        elif st.get('net') == 'ethernet': wifi_tip='Ethernet connected'
-        else: wifi_tip='Not connected'
-        self.set_tile('wifi', bool(wifi_on), wifi_on is not None, wifi_tip+' — right-click for network settings')
-        self.tiles['wifi'].setText(st.get('connection')[:14] if st.get('net') == 'wifi' and st.get('connection') else 'Wi-Fi')
         bt_on=st.get('bt_on')
         self.set_tile('bluetooth', bool(bt_on), bool(st.get('bt_hw')) and bt_on is not None, 'Bluetooth — right-click for devices' if st.get('bt_hw') else 'No Bluetooth adapter found')
         self.set_tile('airplane', bool(st.get('airplane')), wifi_on is not None, 'Turn all wireless radios off')
         self.set_tile('display', False, True, 'Monitor and resolution settings')
-        self.set_tile('lock', False, True, 'Lock the screen')
-        self.set_tile('settings', False, True, 'Eduka-Menu Settings — right-click for LXQt Settings')
+        self.set_tile('dnd', dnd_enabled(), True, tr('dnd', self.lang)+': only urgent notifications pop up')
+        self.set_tile('settings', False, True, 'Eduka-Settings — right-click for LXQt Settings')
         vol=st.get('volume')
         self.vol_slider.blockSignals(True); self.vol_slider.setEnabled(vol is not None); self.vol_slider.setValue(int(vol or 0)); self.vol_slider.blockSignals(False)
         self.vol_value.setText(f'{vol}%' if vol is not None else '—')
@@ -766,24 +1202,35 @@ class ActionCenter(PopupFrame):
         self.bri_value.setText(f'{bri}%' if bri is not None else '—')
         self.bri_slider.setToolTip({'backlight':'Screen brightness','software':'Screen brightness (display has no backlight control; adjusted by Eduka)'}.get(method, 'Brightness is not available on this display'))
         bat=st.get('battery')
-        self.battery_label.setText(f"Battery {bat['capacity']}% • {bat['status']}" if bat else 'Power: AC (no battery)')
-        extra=[f"Keyboard {st.get('layout','EN')}"]
-        if st.get('printers'): extra.append('Printer ready')
-        if st.get('net') == 'ethernet': extra.append('Ethernet connected')
-        self.extra_label.setText('  •  '.join(extra))
+        info=[f"Battery {bat['capacity']}% ({bat['status']})" if bat else 'Power: AC', f"Keyboard {st.get('layout','EN')}"]
+        if st.get('printers'): info.append('Printer ready')
+        self.battery_label.setText('  •  '.join(info))
         count=int(self.panel.eus_status.get('count',0) or 0) if self.panel.eus_status else 0
         self.update_button.setVisible(count > 0)
         if count: self.update_button.setText(f'  {count} update{"s" if count != 1 else ""} available'); self.update_button.setIcon(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'))
 
+    def update_notifications(self):
+        items=self.panel.notifications.items
+        if items:
+            n=items[0]; text=n.get('summary') or n.get('body') or ''
+            self.notif_text.setText(f"{n.get('app','')}: {text}"[:90] + (f"   (+{len(items)-1})" if len(items) > 1 else ''))
+            self.notif_icon.setPixmap(notification_icon(n, 22))
+        else:
+            self.notif_text.setText(tr('no_notif', self.lang))
+            self.notif_icon.setPixmap(get_icon('preferences-system-notifications','dialog-information').pixmap(22,22))
+        self.notif_open.setVisible(bool(items))
+
     def launch(self, cmd):
         self.close(); launch_app(cmd)
 
+    def session(self, action):
+        self.close()
+        QTimer.singleShot(120, lambda: confirm_session_action(action))
+
     def tile_clicked(self, key):
         st=self.panel.last_status or {}
-        if key == 'wifi':
-            if not shutil.which('nmcli'):
-                self.launch('nm-connection-editor'); return
-            safe_popen(['nmcli','radio','wifi','off' if st.get('wifi_on') else 'on'])
+        if key == 'network':
+            self.close(); QTimer.singleShot(80, self.panel.network_popup); return
         elif key == 'bluetooth':
             safe_popen(['bluetoothctl','power','off' if st.get('bt_on') else 'on'])
         elif key == 'airplane':
@@ -794,16 +1241,17 @@ class ActionCenter(PopupFrame):
                 if st.get('bt_on'): safe_popen(['bluetoothctl','power','off'])
         elif key == 'display':
             self.launch('lxqt-config-monitor'); return
-        elif key == 'lock':
-            self.close(); session_action('lock'); return
+        elif key == 'dnd':
+            save_panel_state(dnd=not dnd_enabled()); self.set_tile('dnd', dnd_enabled(), True, self.tiles['dnd'].toolTip())
+            self.panel.update_notification_badge(); return
         elif key == 'settings':
-            self.launch('eduka-menu-settings'); return
+            self.launch('eduka-settings'); return
         # Optimistic feedback, then confirm with a fresh status read.
         t=self.tiles[key]; self.set_tile(key, not bool(t.property('on')), t.isEnabled(), t.toolTip())
         QTimer.singleShot(700, self.panel.update_status_icons)
 
     def tile_settings(self, key):
-        cmd={'wifi':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','display':'lxqt-config-monitor','settings':'lxqt-config','lock':'lxqt-config-screensaver'}.get(key)
+        cmd={'network':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','display':'lxqt-config-monitor','settings':'lxqt-config','dnd':'eduka-settings --page notifications'}.get(key)
         if cmd: self.launch(cmd)
 
     def toggle_mute(self, on):
@@ -844,19 +1292,13 @@ class ActionCenter(PopupFrame):
         set_brightness(value, method)
         self.panel.last_status['brightness']=value
 
-    def power_menu(self):
-        m=RoundedMenu(self)
-        m.addAction(get_icon('system-lock-screen'),'Lock Screen', lambda: (self.close(), session_action('lock')))
-        m.addAction(get_icon('system-log-out'),'Logout…', lambda: (self.close(), session_action('logout')))
-        m.addSeparator()
-        m.addAction(get_icon('system-reboot'),'Restart…', lambda: (self.close(), session_action('restart')))
-        m.addAction(get_icon('system-shutdown'),'Shutdown…', lambda: (self.close(), session_action('shutdown')))
-        m.exec_(self.power_button.mapToGlobal(QPoint(0,-m.sizeHint().height()-4)))
-
     def hideEvent(self, e):
+        self.blink.stop()
         self.panel._action_center_closed_at=time.monotonic()
         self.panel.set_tray_compact(False)
         super().hideEvent(e)
+
+SESSION_ICONS = {'lock': 'system-lock-screen', 'logout': 'system-log-out', 'restart': 'system-reboot', 'shutdown': 'system-shutdown'}
 
 
 def _nm_split(line):
@@ -1094,6 +1536,8 @@ class EdukaPanel(QWidget):
         self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
         self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
         QApplication.instance().aboutToQuit.connect(self.notifications.stop)
+        # Eduka-Panel shows every notification itself (LXQt's daemon is stopped).
+        self.notify_server=NotificationServer(self, self.notifications)
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
@@ -1107,6 +1551,7 @@ class EdukaPanel(QWidget):
         # Eduka-Panel replaces lxqt-panel, but only in Eduka-Desktop sessions.
         QTimer.singleShot(2500, stop_lxqt_panel_in_eduka_session)
         QTimer.singleShot(9000, stop_lxqt_panel_in_eduka_session)
+        QTimer.singleShot(2500, stop_lxqt_notifications_in_eduka_session)
         QTimer.singleShot(500, lambda: safe_popen(['eduka-app-cache','--warm']))
         QTimer.singleShot(900, lambda: safe_popen(['eduka-menu','--daemon']))
     def build_ui(self):
@@ -1178,7 +1623,9 @@ class EdukaPanel(QWidget):
         icon_theme_setup(force=True)
         for kind, icon in (('files','system-file-manager'),('terminal','utilities-terminal')):
             if kind in self.quick_launchers: self.quick_launchers[kind].setIcon(get_icon(icon))
-        self.update_notification_badge()
+        self.update_notification_badge(); self.update_clock()
+        if self.action_center is not None and self.action_center.isVisible():
+            self.action_center.lang=ui_language(); self.action_center.apply_clock_style()
         app=QApplication.instance()
         if app is not None and app.styleSheet() != tooltip_qss():
             app.setStyleSheet(tooltip_qss())
@@ -1461,7 +1908,7 @@ class EdukaPanel(QWidget):
     def panel_context(self, pos):
         m=self._context_menu_style(RoundedMenu(self))
         m.addAction(get_icon('start-here'), 'Open Edukasaun Desktop', self.toggle_menu)
-        m.addAction(get_icon('preferences-system'), 'Eduka-Menu Settings', lambda: launch_app('eduka-menu-settings'))
+        m.addAction(get_icon('preferences-system'), 'Eduka-Settings', lambda: launch_app('eduka-settings'))
         m.addSeparator()
         m.addAction(get_icon('view-refresh'), 'Reload Panel', lambda: (self.load_config(), self.update_tasks(), self.update_status_icons()))
         m.addAction(get_icon('view-refresh'), 'Rebuild App Cache', lambda: safe_popen(['eduka-app-cache','--warm']))
@@ -1488,7 +1935,7 @@ class EdukaPanel(QWidget):
         self.panel_context(pos)
     def update_clock(self):
         now=QDateTime.currentDateTime()
-        text=now.toString('HH:mm\ndd/MM/yyyy')
+        text=format_clock(now.time(), clock_settings()[1])+'\n'+now.toString('dd/MM/yyyy')
         if self.clock.text() != text:
             self.clock.setText(text)
         if self.action_center is not None and self.action_center.isVisible():
@@ -1562,7 +2009,7 @@ class EdukaPanel(QWidget):
         )
         if any(window_type in ewmh for window_type in non_task_types):
             return False
-        settings_task=any(x in low for x in ['eduka-menu-settings','eduka menu settings'])
+        settings_task=any(x in low for x in ['eduka-menu-settings','eduka menu settings','eduka-settings','eduka settings'])
         helper_words=['eduka-panel','eduka-menu','eduka-desktop','edukasaun desktop','lxqt-panel','eduka-about','qterminal dropdown','screen locker','xscreensaver','desktop manager','desktop icons']
         if not settings_task and any(x in low for x in helper_words):
             return False
@@ -1974,9 +2421,12 @@ class EdukaPanel(QWidget):
         if self.lang.text() != text: self.lang.setText(text)
         self.lang.setToolTip(f'Keyboard layout: {text}'); self.lang.setAccessibleName(f'Keyboard layout {text}')
         net=st.get('net','offline')
-        nicon={'wifi':'network-wireless','ethernet':'network-wired'}.get(net,'network-offline')
-        tip={'wifi':'Wi-Fi connected'+(f": {st.get('connection')}" if st.get('connection') else ''),'ethernet':'Ethernet connected'}.get(net,'Offline')
-        self.net.setIcon(get_icon(nicon,'network-transmit-receive')); self.net.setToolTip(tip); self.net.setAccessibleName('Network: '+tip); self.net.setText(' '+tip.split(':')[0].replace(' connected','') if self.hearing_accessibility else '')
+        kind={'wifi':'wifi','ethernet':'ethernet'}.get(net, 'wifi-off' if st.get('wifi_hw') and st.get('wifi_on') else 'offline')
+        tip={'wifi':tr('net_wifi')+(f": {st.get('connection')}" if st.get('connection') else ''),'ethernet':tr('net_lan')}.get(net, tr('net_off'))
+        ink='#e0e0e0' if is_dark_theme() else '#183c35'
+        size=self.net.iconSize().width() if self.net.iconSize().width() > 0 else 22
+        self.net.setIcon(QIcon(network_pixmap(kind, True, size, ink, st.get('signal')))); self.net.setToolTip(tip); self.net.setAccessibleName(tip)
+        self.net.setText((' '+(st.get('connection') if net == 'wifi' else 'LAN' if net == 'ethernet' else tr('offline'))) if self.hearing_accessibility else '')
         info=st.get('battery'); self.battery.setVisible(info is not None)
         if info:
             status=str(info['status']).lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery')); self.battery.setText(f" {info['capacity']}%")
@@ -2043,7 +2493,17 @@ class EdukaPanel(QWidget):
         """Bell icon with an accent dot and count while notifications are unread."""
         count=self.notifications.unread
         size=self.notif.iconSize() if self.notif.iconSize().width() > 0 else QSize(22,22)
-        base=get_icon('preferences-system-notifications','dialog-information').pixmap(size)
+        dnd=dnd_enabled()
+        base=get_icon('notifications-disabled' if dnd else 'preferences-system-notifications','preferences-system-notifications').pixmap(size)
+        if base.isNull():
+            base=QPixmap(size); base.fill(Qt.transparent)
+        if dnd:
+            # Do Not Disturb: a diagonal line over the bell when the icon
+            # theme has no "notifications-disabled" picture.
+            if not QIcon.hasThemeIcon('notifications-disabled'):
+                base=QPixmap(base); painter=QPainter(base); painter.setRenderHint(QPainter.Antialiasing)
+                w=base.width()/base.devicePixelRatio(); painter.setPen(QPen(QColor('#e5484d'), max(2.0, w/10), Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(QPointF(w*0.15, w*0.85), QPointF(w*0.85, w*0.15)); painter.end()
         if count:
             pix=QPixmap(base); painter=QPainter(pix); painter.setRenderHint(QPainter.Antialiasing)
             d=max(9, int(size.width()*0.55)); r=QRectF(pix.width()/pix.devicePixelRatio()-d, 0, d, d)
@@ -2054,6 +2514,7 @@ class EdukaPanel(QWidget):
         else:
             self.notif.setIcon(QIcon(base))
         label=f'{count} unread notification{"s" if count != 1 else ""}' if count else 'Notifications'
+        if dnd: label+=' — '+tr('dnd')
         self.notif.setToolTip(label); self.notif.setAccessibleName(label)
         if self.hearing_accessibility:
             self.notif.setText(f' {count} new' if count else ' Alerts')

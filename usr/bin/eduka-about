@@ -51,19 +51,16 @@ class AboutDialog(QDialog):
           <tr><td><b>Eduka-Desktop</b></td><td>{VERSION}</td><td>Start menu and application launcher</td></tr>
           <tr><td><b>Eduka-Panel</b></td><td>{VERSION}</td><td>Panel, taskbar and status controls</td></tr>
           <tr><td><b>Eduka-Menu</b></td><td>{VERSION}</td><td>Launcher button and toggle bridge</td></tr>
-          <tr><td><b>Eduka-Menu-Settings</b></td><td>{VERSION}</td><td>Configuration center</td></tr>
+          <tr><td><b>Eduka-Settings</b></td><td>{VERSION}</td><td>Configuration center</td></tr>
         </table>
 
         <h3>Version {VERSION}</h3>
         <ul>
-          <li>Grid/List applications and categories receive randomized soft-glow colors for each desktop session.</li>
-          <li>Opaque pastel hover rendering removes the black cursor-hover glitch.</li>
-          <li>Appearance offers Eduka-Default-Theme and an optional Liquid Glass theme for capable hardware.</li>
-          <li>Eduka-Menu Settings is a single, minimizable taskbar window instead of opening duplicate dialogs.</li>
-          <li>Eduka-Panel reads the Eduka Update System v1 status and shows its update-available icon.</li>
-          <li>Fullscreen and overlapping maximized applications on small screens take priority over Eduka-Panel.</li>
-          <li>Panel transparency remains 0.54 and desktop transparency remains 0.51.</li>
-          <li>The stable taskbar toggle and adaptive large-monitor Grid behavior are preserved.</li>
+          <li>Eduka-Settings (formerly Eduka-Menu Settings) configures Eduka-Desktop, Eduka-Panel, notifications, the cursor and the login screen.</li>
+          <li>The Action Center has a big digital or analog clock with a greeting in your language, a smart network tile and Lock, Log Out, Restart and Shut Down.</li>
+          <li>Drag the handle at the top of the Action Center to show or hide the month calendar.</li>
+          <li>Eduka-Panel shows every notification of the desktop, with history and Do Not Disturb.</li>
+          <li>The login screen follows Eduka-Settings right away, with a live preview.</li>
         </ul>
 
         <p><b>Developer:</b> Hugo Moniz do Rego<br>

@@ -71,6 +71,19 @@ if [ -f /etc/sddm.conf ] && grep -q '^[[:space:]]*Current=' /etc/sddm.conf; then
     sed -i 's/^[[:space:]]*Current=.*/Current=edukasaun/' /etc/sddm.conf
 fi
 mkdir -p /usr/share/Edukasaun/SDDM
+if [ -d /etc/sddm.conf.d ] || command -v sddm >/dev/null 2>&1; then
+    mkdir -p /etc/sddm.conf.d
+    printf '# Edukasaun OS: use the Edukasaun login screen (read last).\n[Theme]\nCurrent=edukasaun\n' > /etc/sddm.conf.d/zz-edukasaun-theme.conf
+fi
+# SDDM 0.21 with only the Qt 6 greeter loads a theme only with QtVersion=6;
+# the Edukasaun theme runs on both greeters.
+meta=/usr/share/sddm/themes/edukasaun/metadata.desktop
+if [ -f "$meta" ]; then
+    sed -i '/^QtVersion=/d' "$meta"
+    if command -v sddm-greeter-qt6 >/dev/null 2>&1 && ! command -v sddm-greeter >/dev/null 2>&1; then
+        echo 'QtVersion=6' >> "$meta"
+    fi
+fi
 
 # --- Live session autologin ---------------------------------------------
 # The service only acts when booted with boot=live; on installed systems it
@@ -85,11 +98,22 @@ fi
 # Only while the ISO is built: no personal account exists yet (the Cubic
 # chroot). An installed computer with its own users is never changed; there
 # 'sudo eduka-default-user' adds the account on request.
-if ! getent passwd edukasaun >/dev/null 2>&1; then
-    human=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" {print $1; exit}')
-    if [ -z "$human" ]; then
-        eduka-default-user >/dev/null 2>&1 || true
-    fi
+# The live system uses this account too (live-config would otherwise add
+# a second user "user"), and it is an administrator so the polkit password
+# prompt asks for "edukasaun" instead of root.
+human=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" && $1 != "edukasaun" {print $1; exit}')
+if [ -z "$human" ]; then
+    eduka-default-user >/dev/null 2>&1 || true
+    # Accounts made by 0.9.15/0.9.16 have no marker yet.
+    getent passwd edukasaun >/dev/null 2>&1 && { mkdir -p /var/lib/edukasaun-desktop; echo edukasaun > /var/lib/edukasaun-desktop/default-user; }
+    mkdir -p /etc/live/config.conf.d
+    cat > /etc/live/config.conf.d/90-edukasaun.conf <<'CONF'
+# Edukasaun OS: the live session uses the standard account edukasaun.
+LIVE_USERNAME="edukasaun"
+LIVE_USER_FULLNAME="Edukasaun"
+CONF
+elif getent passwd edukasaun >/dev/null 2>&1 && [ -f /var/lib/edukasaun-desktop/default-user ]; then
+    eduka-default-user >/dev/null 2>&1 || true
 fi
 
 # SDDM has no "default session" option; it preselects the session stored in

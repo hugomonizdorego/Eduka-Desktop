@@ -1,7 +1,7 @@
 # Eduka-Desktop
 
 Edukasaun Desktop Suite: Eduka-Desktop (start menu), Eduka-Panel and
-Eduka-Menu-Settings for Edukasaun OS (Debian 13 Trixie, LXQt).
+Eduka-Settings (formerly Eduka-Menu Settings) for Edukasaun OS (Debian 13 Trixie, LXQt).
 
 ## Build the .deb
 
@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.16_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.17_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.16_all.deb
+   rm ./edukasaun-desktop-menu_0.9.17_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -62,7 +62,7 @@ and other greeters.
 - Background: put any picture at **`/usr/share/Edukasaun/SDDM/Default.png`**.
   Logo: `/usr/share/Edukasaun/Logo/Edukasaun Logo.png`. Both paths are set in
   `/usr/share/sddm/themes/edukasaun/theme.conf`.
-- **Eduka-Menu Settings → Login Screen** changes the style (follow the desktop
+- **Eduka-Settings → Login Screen** changes the style (follow the desktop
   theme, light, dark, glass), accent color, title, clock, background, logo,
   pre-filled user and automatic login. It runs
   `pkexec /usr/lib/edukasaun-desktop/eduka-sddm-apply` (polkit action
@@ -77,9 +77,17 @@ and other greeters.
   so the live session opens Eduka-Desktop directly. On installed systems it
   removes its file again.
 - Standard account `edukasaun` / password `edukasaun`: created by the package
-  while the ISO is built (when no personal account exists). On another system:
-  `sudo eduka-default-user`. The account has no administrator (sudo) rights;
-  change the password on shared computers with `passwd`.
+  while the ISO is built (when no personal account exists), with administrator
+  rights (group `sudo`), so polkit prompts ask for this password and not for
+  root. `/etc/live/config.conf.d/90-edukasaun.conf` makes live-config use the
+  same account. On another system: `sudo eduka-default-user`.
+- After installation the installer creates the owner's account. At the next
+  boot `eduka-live-autologin.service` locks `edukasaun` and hides it from SDDM
+  (`/etc/sddm.conf.d/30-eduka-hide-live-user.conf`); its files are kept.
+- Saving the Login Screen page also writes `/etc/sddm.conf.d/zz-edukasaun-theme.conf`
+  (read last) and adds `QtVersion=6` to the theme when only the Qt 6 greeter
+  exists. Administrators save without a password prompt
+  (`/usr/share/polkit-1/rules.d/50-edukasaun-desktop.rules`).
 
 ## Window manager and transparency
 
@@ -109,15 +117,26 @@ and other greeters.
 
 ## Notifications
 
-LXQt's notification daemon shows the bubbles. Eduka-Panel listens to the
-`org.freedesktop.Notifications.Notify` calls with `dbus-monitor` and keeps the
-last 40 in `~/.config/eduka-desktop/notifications.json` (bell badge, history
-popup, latest entry in the Action Center).
+In Eduka-Desktop sessions Eduka-Panel owns `org.freedesktop.Notifications`
+and draws the bubbles itself; lxqt-notificationd is stopped through
+lxqt-session (`stopModule lxqt-notifications.desktop`). The last 40 are kept in
+`~/.config/eduka-desktop/notifications.json`; Do Not Disturb is stored in
+`~/.config/eduka-desktop/panel-state.json`. When another server owns the name
+(outside Eduka-Desktop) Eduka-Panel only records the calls with `dbus-monitor`.
+
+## Action Center and leave screen
+
+- Clock: `clock_style` (`digital`/`analog`) and `clock_format` (`24h`/`12h`) in
+  the panel settings; greetings follow the Eduka-Settings language.
+- The handle at the top shows or hides the month calendar (remembered in
+  `panel-state.json`).
+- `eduka-session-action lock|logout|restart|shutdown` shows the Eduka leave
+  screen; `--now` runs the action directly (lxqt-session D-Bus, then systemd).
 
 ## Repairing an account used with 0.9.12
 
 0.9.12 started LXQt without its defaults. If an account still asks for a
-window manager or looks unthemed, run **Eduka-Menu Settings → Maintenance →
+window manager or looks unthemed, run **Eduka-Settings → Maintenance →
 Repair LXQt theme and session** (or `eduka-lxqt-repair`) and log in again.
 Accounts created after installing 0.9.13 or later are not affected.
 

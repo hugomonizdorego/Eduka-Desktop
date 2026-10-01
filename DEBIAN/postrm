@@ -7,9 +7,10 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
         deb-systemd-helper purge eduka-live-autologin.service >/dev/null 2>&1 || true
     fi
     rm -f /etc/sddm.conf.d/zz-eduka-live-autologin.conf /etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf
-    # Written by Eduka-Menu Settings → Login Screen; useless without the
+    # Written by Eduka-Settings → Login Screen; useless without the
     # theme and the Eduka-Desktop session.
-    rm -f /usr/share/sddm/themes/edukasaun/theme.conf.user /etc/sddm.conf.d/20-eduka-autologin.conf
+    rm -f /usr/share/sddm/themes/edukasaun/theme.conf.user /etc/sddm.conf.d/20-eduka-autologin.conf \
+        /etc/sddm.conf.d/zz-edukasaun-theme.conf
     rmdir --ignore-fail-on-non-empty /usr/share/sddm/themes/edukasaun 2>/dev/null || true
     rm -rf /usr/lib/edukasaun-desktop/__pycache__
     rmdir --ignore-fail-on-non-empty /usr/lib/edukasaun-desktop 2>/dev/null || true
@@ -17,7 +18,9 @@ fi
 if [ "$1" = purge ]; then
     # The chosen login logo is a copy; Default.png is kept (it may be the
     # administrator's own picture).
-    rm -f /usr/share/Edukasaun/SDDM/Logo.png
+    rm -f /usr/share/Edukasaun/SDDM/Logo.png /etc/live/config.conf.d/90-edukasaun.conf \
+        /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user
+    rmdir --ignore-fail-on-non-empty /var/lib/edukasaun-desktop 2>/dev/null || true
 fi
 if [ "$1" = remove ] || [ "$1" = purge ] || [ "$1" = abort-install ]; then
     for entry in \

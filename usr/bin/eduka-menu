@@ -75,7 +75,7 @@ def app_highlight_color(app, selected_category='All', position=None):
     return colors[(position + category_index + PALETTE['offset']) % len(colors)]
 
 # Surface opacity for tiles and the category list, derived from the
-# Eduka-Desktop transparency chosen in Eduka-Menu-Settings (0.45-1.0).
+# Eduka-Desktop transparency chosen in Eduka-Settings (0.45-1.0).
 # Tiles stay more opaque than the background so names remain readable.
 SURFACE = {'alpha': 205}
 
@@ -440,14 +440,9 @@ class EdukaMenu(QWidget):
         return QIcon(pix)
 
     def update_greeting(self):
-        hour=QTime.currentTime().hour()
-        part='Good morning' if 4 <= hour < 12 else 'Good afternoon' if hour < 18 else 'Good evening'
-        try:
-            import pwd
-            name=(pwd.getpwuid(os.getuid()).pw_gecos.split(',')[0] or pwd.getpwuid(os.getuid()).pw_name).strip()
-        except Exception:
-            name=os.environ.get('USER','')
-        self.greeting.setText(f'{part}, {name.split()[0].capitalize()}' if name else part)
+        # Selamat pagi / siang / sore / malam in the chosen language.
+        part=greeting_text(QTime.currentTime().hour()); name=user_display_name()
+        self.greeting.setText(f'{part}, {name}' if name else part)
 
     def category_entries(self):
         # Favorites are shown only in the right-side Favorites panel, not as a duplicated category.
@@ -502,20 +497,17 @@ class EdukaMenu(QWidget):
         body.addWidget(self.side)
         # Footer: places on the left, round session buttons on the right.
         foot=QHBoxLayout(); foot.setSpacing(8); main.addLayout(foot)
-        for label, icon, cmd in [('File Manager','system-file-manager','pcmanfm-qt'),('Terminal','utilities-terminal','qterminal'),('Settings','preferences-system','eduka-menu-settings')]:
+        for label, icon, cmd in [('File Manager','system-file-manager','pcmanfm-qt'),('Terminal','utilities-terminal','qterminal'),('Settings','preferences-system','eduka-settings')]:
             b=QPushButton(' '+label); b.setObjectName('footChip'); b.setIcon(get_icon(icon)); b.setIconSize(QSize(20,20))
             b.setAccessibleName(label); b.setFocusPolicy(Qt.StrongFocus)
             b.clicked.connect(lambda _,c=cmd: (self.hide_menu(force=True), launch_app(c)))
             foot.addWidget(b)
         foot.addStretch(1)
-        for label, icon, cmd in [('About','help-about','eduka-about'),('Lock Screen','system-lock-screen','eduka-session-action lock'),('Logout','system-log-out','eduka-session-action logout'),('Restart','system-reboot','eduka-session-action restart'),('Shut Down','system-shutdown','eduka-session-action shutdown')]:
-            b=QPushButton(); b.setObjectName('powerShutdown' if label == 'Shut Down' else 'powerButton'); b.setIcon(get_icon(icon)); b.setIconSize(QSize(20,20)); b.setFixedSize(40,40)
-            b.setToolTip(label); b.setAccessibleName(label); b.setFocusPolicy(Qt.StrongFocus)
-            if label == 'About':
-                b.clicked.connect(self.open_about)
-            else:
-                b.clicked.connect(lambda _,c=cmd: (self.hide_menu(force=True), launch_app(c)))
-            foot.addWidget(b)
+        # Lock, Log Out, Restart and Shut Down live in the Action Center
+        # (clock on Eduka-Panel); only About stays here, in the corner.
+        about=QPushButton(' About'); about.setObjectName('aboutChip'); about.setIcon(get_icon('help-about')); about.setIconSize(QSize(18,18))
+        about.setAccessibleName('About Edukasaun Desktop'); about.setFocusPolicy(Qt.StrongFocus); about.clicked.connect(self.open_about)
+        foot.addWidget(about)
         self.base_qss=DARK_QSS + """
             QFrame#contentCard{background:transparent;border:1px solid rgba(220,235,230,58);border-radius:18px;}
             QFrame#sideCard{background:rgba(255,255,255,108);border:1px solid rgba(220,235,230,150);border-radius:18px;}
@@ -541,8 +533,7 @@ class EdukaMenu(QWidget):
             QPushButton#closeButton{background:rgba(233,84,84,30);color:#d03c3c;border:0;border-radius:19px;font-weight:900;padding:0;}
             QPushButton#closeButton:hover{background:#e95454;color:white;}
             QPushButton#footChip{border-radius:16px;padding:8px 14px;}
-            QPushButton#powerButton,QPushButton#powerShutdown{border-radius:20px;padding:0;}
-            QPushButton#powerShutdown:hover{background:rgba(233,84,84,40);border:1px solid #e95454;}
+            QPushButton#aboutChip{border-radius:16px;padding:8px 14px;}
         """
         # apply_visual_settings() sets the one window stylesheet (base + theme);
         # setting base_qss first as well left Qt with stale theme rules.
@@ -673,7 +664,7 @@ class EdukaMenu(QWidget):
                 'About Edukasaun Desktop',
                 f'Edukasaun Desktop Suite {VERSION}\n\n'
                 'Eduka-Desktop, Eduka-Panel, Eduka-Menu and '
-                'Eduka-Menu-Settings\n\nDeveloper: Hugo Moniz do Rego'
+                'Eduka-Settings\n\nDeveloper: Hugo Moniz do Rego'
             )
 
     def position(self):
@@ -811,7 +802,7 @@ class EdukaMenu(QWidget):
         m.addAction(get_icon('view-list-details'), 'List View', lambda: self.set_layout('List'))
         m.addSeparator()
         m.addAction(get_icon('view-refresh'), 'Refresh Applications', lambda: (setattr(self, 'apps', load_apps(force=True)), self.rebuild_categories(preserve=True), self.refresh_apps()))
-        m.addAction(get_icon('preferences-system'), 'Eduka-Menu Settings', lambda: launch_app('eduka-menu-settings'))
+        m.addAction(get_icon('preferences-system'), 'Eduka-Settings', lambda: launch_app('eduka-settings'))
         try:
             sender = self.sender()
             m.exec_(sender.mapToGlobal(pos) if hasattr(sender, 'mapToGlobal') else self.mapToGlobal(pos))
@@ -969,7 +960,7 @@ class EdukaMenu(QWidget):
         except Exception: pass
 
     def reload_style(self, reset=False):
-        """Re-read every setting written by Eduka-Menu Settings and apply it
+        """Re-read every setting written by Eduka-Settings and apply it
         right away: theme, icon theme, size, layout and default section.
         With reset=True the remembered search, colors and category are
         dropped too, so Eduka-Desktop looks exactly like a fresh install."""

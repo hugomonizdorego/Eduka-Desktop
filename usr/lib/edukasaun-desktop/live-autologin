@@ -9,6 +9,22 @@ LIGHTDM_FILE=/etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf
 
 if ! grep -qw "boot=live" "$CMDLINE" 2>/dev/null; then
     rm -f "$SDDM_FILE" "$LIGHTDM_FILE"
+    # Installed system: the installer created the owner's account. The
+    # standard live account edukasaun/edukasaun (copied from the live image)
+    # is locked and hidden from the login screen; its files are kept.
+    MARKER="${EDUKA_DEFAULT_MARKER:-/var/lib/edukasaun-desktop/default-user}"
+    HIDE=/etc/sddm.conf.d/30-eduka-hide-live-user.conf
+    if [ -f "$MARKER" ] && getent passwd edukasaun >/dev/null 2>&1; then
+        other=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" && $1 != "edukasaun" {print $1; exit}')
+        if [ -n "$other" ]; then
+            usermod -L -e 1 edukasaun 2>/dev/null || true
+            mkdir -p /etc/sddm.conf.d
+            printf '# edukasaun is the live account; %s owns this computer.\n[Users]\nHideUsers=edukasaun\n' "$other" > "$HIDE"
+            if grep -qs '^User=edukasaun$' /etc/sddm.conf.d/20-eduka-autologin.conf; then
+                rm -f /etc/sddm.conf.d/20-eduka-autologin.conf
+            fi
+        fi
+    fi
     exit 0
 fi
 
@@ -24,6 +40,10 @@ if [ -z "$user" ]; then
         value=$(sed -n 's/^[[:space:]]*LIVE_USERNAME=["'"'"']\{0,1\}\([^"'"'"']*\).*/\1/p' "$conf" | tail -n1)
         [ -n "$value" ] && user="$value"
     done
+fi
+# Edukasaun OS has one live account: edukasaun.
+if [ -z "$user" ] && getent passwd edukasaun >/dev/null 2>&1; then
+    user=edukasaun
 fi
 [ -n "$user" ] || user=user
 if ! getent passwd "$user" >/dev/null 2>&1; then
