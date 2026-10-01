@@ -88,16 +88,39 @@ def _mix(rgb, amount):
     """Blend a color toward white; amount=1 keeps the color, 0 gives white."""
     return tuple(255 - int((255 - value) * amount) for value in rgb)
 
+def _mix_dark(rgb, amount, base=(44, 44, 44)):
+    """Blend a color toward the Edukasaun-Dark surface."""
+    return tuple(int(b + (value - b) * amount) for value, b in zip(rgb, base))
+
+UI = {'dark': False}
+
+def random_accent(exclude=None):
+    """A new random palette color, never the one a tile shows right now."""
+    choices=[c for c in CATEGORY_HIGHLIGHT_COLORS if c != exclude] or list(CATEGORY_HIGHLIGHT_COLORS)
+    return _RNG.choice(choices)
+
 class CategoryDelegate(QStyledItemDelegate):
     """Lightweight custom painter for the category list.
     Each category is drawn as a small rounded block. Hover uses a subtle
     rainbow accent so text stays readable and the effect remains cheap for
     low-RAM computers.
     """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.row_colors={}
+
+    def color_for(self, row):
+        return self.row_colors.get(row) or category_color(row)
+
+    def rerandomize(self, row):
+        """Each time the pointer comes back to a category it gets a new color."""
+        self.row_colors[row]=random_accent(self.color_for(row))
+
     def paint(self, painter, option, index):
         painter.save()
         rect = option.rect.adjusted(4, 3, -4, -3)
-        accent = QColor(*category_color(index.row()))
+        accent = QColor(*self.color_for(index.row()))
+        dark = UI['dark']
         selected = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
         high_contrast = bool(option.widget.property('accessibilityMode')) if option.widget else False
@@ -108,6 +131,16 @@ class CategoryDelegate(QStyledItemDelegate):
             bg.setColorAt(1, QColor(max(0, accent.red()-20), max(0, accent.green()-20), max(0, accent.blue()-20)))
             border = QColor(255, 255, 255, 90)
             text_color = QColor(18, 35, 31) if accent.lightness() > 145 else QColor(255, 255, 255)
+        elif dark and not high_contrast:
+            bg = QColor(56, 56, 56, max(150, SURFACE['alpha'] - 30))
+            border = QColor(accent.red(), accent.green(), accent.blue(), 90)
+            text_color = QColor(255, 255, 255, 225)
+            if hover:
+                deep=QColor(*_mix_dark((accent.red(), accent.green(), accent.blue()), 0.42))
+                bg = QLinearGradient(rect.topLeft(), rect.bottomRight())
+                bg.setColorAt(0, QColor(60, 60, 60)); bg.setColorAt(0.5, deep); bg.setColorAt(1, QColor(52, 52, 52))
+                border = QColor(accent.red(), accent.green(), accent.blue(), 230)
+                text_color = QColor(255, 255, 255)
         else:
             bg = QColor(255, 255, 255, 252 if high_contrast else max(120, SURFACE['alpha'] - 40))
             border = QColor(70, 93, 87, 220) if high_contrast else QColor(accent.red(), accent.green(), accent.blue(), 70)
@@ -165,7 +198,7 @@ class AppButton(QToolButton):
         self.setText(app.get('name','Application'))
         self.setIcon(get_icon(app.get('icon')))
         self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.setToolTip(app.get('name','Application'))
+        # No tooltip: the name is already written on the tile.
         self.setAccessibleName(app.get('name','Application'))
         self.setAccessibleDescription('Open application')
         self.setFocusPolicy(Qt.StrongFocus)
@@ -187,6 +220,14 @@ class AppButton(QToolButton):
         a=SURFACE['alpha']
         if self._high_contrast:
             base=f'background:white;border:2px solid rgba(55,75,70,235);'
+        elif UI['dark']:
+            dr,dg,db=_mix_dark(self._accent, 0.16); hr,hg,hb=_mix_dark(self._accent, 0.45)
+            self.setStyleSheet(f"""
+            QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(58,58,58,{a}),stop:1 rgba({dr},{dg},{db},{max(0,a-12)}));border:2px solid rgba({r},{g},{b},90);border-radius:16px;padding:8px;color:rgba(255,255,255,225);font-weight:800;}}
+            QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 rgb(62,62,62),stop:0.5 rgb({hr},{hg},{hb}),stop:1 rgb(52,52,52));border:2px solid rgb({r},{g},{b});color:#ffffff;font-weight:900;}}
+            QToolButton:pressed{{background:rgb({hr},{hg},{hb});border:2px solid rgb({r},{g},{b});color:#ffffff;}}
+            """)
+            return
         else:
             base=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba({tr},{tg},{tb},{max(0,a-12)}));'
                   f'border:2px solid rgba({r},{g},{b},70);')
@@ -202,6 +243,9 @@ class AppButton(QToolButton):
         self._apply_style()
 
     def enterEvent(self, event):
+        # Every time the pointer comes back the tile shows a new color.
+        if not self._high_contrast:
+            self.set_accent(random_accent(self._accent))
         # A short dwell prevents fast pointer movement from queueing a rush of
         # Orca announcements while preserving normal pointer response.
         if self._orca_enabled:
@@ -270,6 +314,16 @@ class AppListItem(QFrame):
         base_alpha=255 if self._high_contrast else SURFACE['alpha']
         border='rgba(55,75,70,235)' if self._high_contrast else f'rgba({r},{g},{b},60)'
         stripe='#344d47' if self._high_contrast else f'rgb({r},{g},{b})'
+        if UI['dark'] and not self._high_contrast:
+            hr,hg,hb=_mix_dark(self._accent, 0.40)
+            self.setStyleSheet(f"""
+            QFrame#appListItem{{border-radius:14px;background:rgba(56,56,56,{base_alpha});border:2px solid rgba({r},{g},{b},80);border-left:6px solid {stripe};}}
+            QFrame#appListItem QLabel#appName{{color:rgba(255,255,255,230);font-weight:900;font-size:13px;}}
+            QFrame#appListItem QLabel#appDetails{{color:rgba(255,255,255,150);font-size:11px;font-weight:600;}}
+            QFrame#appListItem:hover,QFrame#appListItem:focus{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgb(60,60,60),stop:0.5 rgb({hr},{hg},{hb}),stop:1 rgb(52,52,52));border:2px solid rgb({r},{g},{b});border-left:6px solid rgb({r},{g},{b});}}
+            QFrame#appListItem:hover QLabel#appName,QFrame#appListItem:focus QLabel#appName{{color:#ffffff;}}
+            """)
+            return
         self.setStyleSheet(f"""
             QFrame#appListItem{{border-radius:14px;background:rgba(255,255,255,{base_alpha});border:2px solid {border};border-left:6px solid {stripe};}}
             QFrame#appListItem QLabel#appName{{color:#10231e;font-weight:900;font-size:13px;}}
@@ -285,6 +339,8 @@ class AppListItem(QFrame):
         self._apply_style()
 
     def enterEvent(self, event):
+        if not self._high_contrast:
+            self.set_accent(random_accent(self._accent))
         if self._orca_enabled:
             QTimer.singleShot(320, self._focus_for_orca)
         super().enterEvent(event)
@@ -382,8 +438,10 @@ class EdukaMenu(QWidget):
         main=QVBoxLayout(self.bg); main.setContentsMargins(18,14,18,14); main.setSpacing(12)
         hdr=QHBoxLayout(); hdr.setSpacing(12)
         logo=QLabel(); logo.setPixmap(get_icon('/usr/share/Edukasaun/Logo/Edukasaun Logo.png', START_ICON).pixmap(42,42)); hdr.addWidget(logo)
-        title=QLabel(f"<b style='font-size:15px;color:#1f2d2a'>EDUKA-DESKTOP</b><br><span style='color:#60736e'>Edukasaun OS • Codename Kameli • {VERSION}</span>")
-        hdr.addWidget(title)
+        brand=QVBoxLayout(); brand.setSpacing(0)
+        brand_title=QLabel('EDUKA-DESKTOP'); brand_title.setObjectName('brandTitle')
+        brand_sub=QLabel(f'Edukasaun OS • Codename Kameli • {VERSION}'); brand_sub.setObjectName('brandSub')
+        brand.addWidget(brand_title); brand.addWidget(brand_sub); hdr.addLayout(brand)
         self.search=QLineEdit(); self.search.setPlaceholderText('Search applications...')
         self.search.setAccessibleName('Search applications')
         self.search.setAccessibleDescription('Type an application name or category')
@@ -401,7 +459,7 @@ class EdukaMenu(QWidget):
         hdr.addWidget(close); main.addLayout(hdr)
         body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
         self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.cats.setAccessibleName('Application categories')
-        self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True)
+        self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True); self.cats.viewport().installEventFilter(self); self._hover_row=None
         self._orca_hover_item=None
         self.orca_hover_timer=QTimer(self); self.orca_hover_timer.setSingleShot(True); self.orca_hover_timer.timeout.connect(self._focus_hovered_category)
         for name,icon,_ in self.category_entries():
@@ -430,9 +488,19 @@ class EdukaMenu(QWidget):
             QScrollArea,QScrollArea>QWidget>QWidget{background:transparent;border:0;} QToolButton,QPushButton{border-bottom:1px solid rgba(160,190,180,80);}
             QListWidget#categoryList{border:1px solid rgba(205,228,220,210);background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(247,253,250,215),stop:1 rgba(225,242,235,190));border-radius:16px;outline:0;padding:6px;color:#1f2d2a;}
             QLabel#sectionTitle{color:#1f2d2a;font-size:14px;font-weight:800;}
+            QLabel#brandTitle{color:#1f2d2a;font-size:15px;font-weight:900;}
+            QLabel#brandSub{color:#60736e;}
+            QLabel#mutedText,QLabel#emptyText{color:#60736e;}
+            QLabel#emptyText{font-size:16px;padding:40px;}
+            QLabel#mutedSmall{color:#60736e;font-size:11px;}
+            QLabel#infoTitle{font-weight:900;color:#1f2d2a;font-size:14px;margin-top:8px;}
+            QLabel#infoKey{color:#536a64;font-weight:800;}
+            QLabel#infoValue{color:#1f2d2a;font-weight:650;}
+            QFrame#sysInfoCard{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,225),stop:1 rgba(236,248,242,205));border:1px solid rgba(200,226,216,220);border-radius:14px;}
             QLabel{color:#1f2d2a;}
         """
-        self.setStyleSheet(self.base_qss)
+        # apply_visual_settings() sets the one window stylesheet (base + theme);
+        # setting base_qss first as well left Qt with stale theme rules.
         self.apply_visual_settings()
         for button in self.findChildren(QPushButton):
             button.installEventFilter(self)
@@ -441,14 +509,19 @@ class EdukaMenu(QWidget):
         dcfg = getattr(self, 'desktop_cfg', read_desktop_config())
         accessibility=bool(dcfg.get('visual_accessibility', False))
         composited=getattr(self, '_composited', True)
-        liquid=effective_theme(dcfg.get('theme_style')) == THEME_LIQUID and composited
+        theme=effective_theme(dcfg.get('theme_style'))
+        liquid=theme == THEME_LIQUID and composited
+        dark=theme == THEME_DARK and not accessibility
+        UI['dark']=dark
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
         if accessibility or not composited:
             alpha=1.0 if not composited else 0.98
         bg_alpha = int(alpha * 255)
         radius = 22 if composited else 0
-        if liquid and not accessibility:
+        if dark:
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{bg_alpha});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
+        elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
         else:
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,253,250,{bg_alpha});border:1px solid rgba(220,235,230,230);border-radius:{radius}px;}} QLabel{{color:#1f2d2a;}}')
@@ -470,7 +543,29 @@ class EdukaMenu(QWidget):
                 'QPushButton{'+liquid_glass_surface(1.3, 12, 1)+'}'
                 'QPushButton:hover{background:rgba(255,255,255,230);}'
             ) if liquid and not accessibility else ''
-            self.setStyleSheet(self.base_qss + liquid_qss + accessibility_qss)
+            dark_qss = (
+                'QLineEdit{background:rgba(56,56,56,235);border:1px solid rgba(255,255,255,40);color:#ffffff;selection-background-color:#26A69A;}'
+                'QLineEdit:focus{border:1px solid #4DB6AC;background:#383838;}'
+                'QPushButton{background:rgba(255,255,255,20);color:rgba(255,255,255,225);border:1px solid rgba(255,255,255,30);}'
+                'QPushButton:hover{background:rgba(255,255,255,40);border:1px solid #4DB6AC;}'
+                'QPushButton:pressed{background:rgba(77,182,172,60);}'
+                'QToolButton{background:rgba(255,255,255,20);color:#ffffff;border:1px solid rgba(255,255,255,30);}'
+                'QFrame#contentCard{background:transparent;border:1px solid rgba(255,255,255,26);}'
+                'QFrame#sideCard{background:rgba(56,56,56,170);border:1px solid rgba(255,255,255,30);}'
+                'QListWidget#categoryList{background:rgba(33,33,33,170);border:1px solid rgba(255,255,255,30);}'
+                'QScrollBar:vertical{background:rgba(255,255,255,20);}'
+                'QScrollBar::handle:vertical{background:rgba(77,182,172,150);}'
+                'QLabel{color:rgba(255,255,255,222);}'
+                'QLabel#sectionTitle,QLabel#brandTitle,QLabel#infoTitle,QLabel#infoValue{color:#ffffff;}'
+                'QLabel#brandSub,QLabel#mutedText,QLabel#mutedSmall,QLabel#emptyText,QLabel#infoKey{color:rgba(255,255,255,153);}'
+                'QFrame#sysInfoCard{background:rgba(66,66,66,200);border:1px solid rgba(255,255,255,30);}'
+            ) if dark else ''
+            # The application stylesheet (tooltips) must change before the
+            # window stylesheet; the other order leaves window rules stale.
+            app=QApplication.instance()
+            if app is not None and app.styleSheet() != tooltip_qss():
+                app.setStyleSheet(tooltip_qss())
+            self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
         # The drop shadow re-renders the whole window on every repaint; only
         # when the user asked for shadows and a compositor can show them.
@@ -494,6 +589,13 @@ class EdukaMenu(QWidget):
             pass
 
     def category_hovered(self, item):
+        row=self.cats.row(item)
+        if row != getattr(self, '_hover_row', None):
+            self._hover_row=row
+            self.cats.itemDelegate().rerandomize(row); self.cats.viewport().update()
+        self._orca_category_hover(item)
+
+    def _orca_category_hover(self, item):
         if bool(getattr(self, 'desktop_cfg', {}).get('orca_enabled', False)):
             self._orca_hover_item=item
             self.orca_hover_timer.start(320)
@@ -506,6 +608,8 @@ class EdukaMenu(QWidget):
             self.cats.setCurrentItem(item)
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.Leave and hasattr(self, 'cats') and obj is self.cats.viewport():
+            self._hover_row=None
         if event.type() == QEvent.Enter and isinstance(obj, QAbstractButton):
             if bool(getattr(self, 'desktop_cfg', {}).get('orca_enabled', False)):
                 QTimer.singleShot(320, lambda w=obj: w.setFocus(Qt.MouseFocusReason) if w.underMouse() else None)
@@ -572,6 +676,8 @@ class EdukaMenu(QWidget):
         self.cats.setCurrentRow(0)
 
     def change_category(self):
+        if getattr(self, '_built', False) and self.cats.currentRow() >= 0:
+            self.cats.itemDelegate().rerandomize(self.cats.currentRow())
         if not getattr(self, '_built', False): return
         item=self.cats.currentItem(); self.current_category=item.text().strip() if item else 'All'
         self.desktop_cfg['last_category']=self.current_category
@@ -617,7 +723,7 @@ class EdukaMenu(QWidget):
         fav_apps=[a for a in fav_apps if a]
         if not fav_apps:
             lab=QLabel('No favorites yet. Right-click an app and choose Add to Favorites.')
-            lab.setWordWrap(True); lab.setStyleSheet('color:#60736e;')
+            lab.setWordWrap(True); lab.setObjectName('mutedText')
             self.side_layout.addWidget(lab)
         for app in fav_apps[:MAX_FAVORITES]:
             btn=QPushButton(' '+app.get('name','Application')[:23])
@@ -629,23 +735,23 @@ class EdukaMenu(QWidget):
             self.side_layout.addWidget(btn)
         if len(fav_apps) > MAX_FAVORITES:
             note=QLabel('Only 5 favorites are shown to keep the launcher clean.')
-            note.setWordWrap(True); note.setStyleSheet('color:#60736e;font-size:11px;')
+            note.setWordWrap(True); note.setObjectName('mutedSmall')
             self.side_layout.addWidget(note)
 
         # Keep System Information fixed at the bottom of the right column.
         self.side_layout.addStretch(1)
         info_title=QLabel('ⓘ  System Information')
-        info_title.setStyleSheet('font-weight:900;color:#1f2d2a;font-size:14px;margin-top:8px;')
+        info_title.setObjectName('infoTitle')
         self.side_layout.addWidget(info_title)
         di=distro_info()
         info=QFrame(); info.setObjectName('sysInfoCard')
         grid=QGridLayout(info); grid.setContentsMargins(10,8,10,8); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(7)
         rows=[('OS:', di['os']), ('Version:', di['version']), ('Codename:', di['codename']), ('Base OS:', di['base']), ('Desktop:', di['desktop'])]
         for r,(k,v) in enumerate(rows):
-            lk=QLabel(k); lk.setStyleSheet('color:#536a64;font-weight:800;')
-            lv=QLabel(str(v)); lv.setWordWrap(True); lv.setStyleSheet('color:#1f2d2a;font-weight:650;')
+            lk=QLabel(k); lk.setObjectName('infoKey')
+            lv=QLabel(str(v)); lv.setWordWrap(True); lv.setObjectName('infoValue')
             grid.addWidget(lk,r,0,Qt.AlignTop); grid.addWidget(lv,r,1)
-        info.setStyleSheet('QFrame#sysInfoCard{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,225),stop:1 rgba(236,248,242,205));border:1px solid rgba(200,226,216,220);border-radius:14px;}')
+        # Card look comes from the window stylesheet (light or Edukasaun-Dark).
         self.side_layout.addWidget(info)
 
     def desktop_context(self, pos):
@@ -689,7 +795,7 @@ class EdukaMenu(QWidget):
 
     def refresh_apps(self):
         if self._loading_apps and not self.apps:
-            self.clear_apps(); lab=QLabel('Loading applications...'); lab.setAlignment(Qt.AlignCenter); lab.setStyleSheet('color:#60736e;font-size:16px;padding:40px;'); self.stack_layout.addWidget(lab); return
+            self.clear_apps(); lab=QLabel('Loading applications...'); lab.setAlignment(Qt.AlignCenter); lab.setObjectName('emptyText'); self.stack_layout.addWidget(lab); return
         self.clear_apps()
         query=self.search.text().strip() if hasattr(self,'search') else ''
         # Searching always covers every application, not only the selected category.
@@ -703,7 +809,7 @@ class EdukaMenu(QWidget):
         registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
         if not apps:
             empty=QLabel('No applications found' if not self._loading_apps else 'Loading applications...')
-            empty.setAlignment(Qt.AlignCenter); empty.setStyleSheet('color:#60736e;font-size:16px;padding:40px;')
+            empty.setAlignment(Qt.AlignCenter); empty.setObjectName('emptyText')
             self.stack_layout.addWidget(empty); self.refresh_side(); return
         if self.layout_mode=='Grid':
             grid=QGridLayout(); grid.setContentsMargins(0,0,0,0); self.stack_layout.addLayout(grid)
@@ -819,6 +925,7 @@ class EdukaMenu(QWidget):
         if self.isVisible():
             return
         reshuffle_palette()
+        self.cats.itemDelegate().row_colors.clear(); self._hover_row=None
         self.cats.viewport().update()
         category='All' if self.search.text().strip() else self.current_category
         tiles=[w for w in self.content.findChildren(QWidget) if isinstance(w, (AppButton, AppListItem)) and w.parent() is self.content]
@@ -872,7 +979,7 @@ def start_daemon(start_visible=False):
         send_menu_command('show' if start_visible else 'toggle')
         return 0
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); app.setStyleSheet(TOOLTIP_QSS); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
+    app=QApplication(sys.argv); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
     ret=app.exec_()
     try: fcntl.flock(lock_file, fcntl.LOCK_UN)
     except Exception: pass

@@ -2,6 +2,12 @@
 set -e
 # Give the other login sessions (LXQt, Openbox, labwc, ...) back when
 # Eduka-Desktop is removed.
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper purge eduka-live-autologin.service >/dev/null 2>&1 || true
+    fi
+    rm -f /etc/sddm.conf.d/zz-eduka-live-autologin.conf /etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf
+fi
 if [ "$1" = remove ] || [ "$1" = purge ] || [ "$1" = abort-install ]; then
     for entry in \
         /usr/share/xsessions/lxqt.desktop \

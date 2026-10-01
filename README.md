@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.14_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.15_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.14_all.deb
+   rm ./edukasaun-desktop-menu_0.9.15_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -55,6 +55,22 @@ and other greeters.
 - `eduka-desktop-session` must **never** export `XDG_CONFIG_DIRS`: `startlxqt`
   only adds LXQt's default configuration when that variable is unset.
 
+## Login screen, live session and accounts
+
+- SDDM theme `edukasaun` (`/usr/share/sddm/themes/edukasaun`), selected by
+  `/etc/sddm.conf.d/10-edukasaun.conf`.
+- Background: put any picture at **`/usr/share/Edukasaun/SDDM/Default.png`**.
+  Logo: `/usr/share/Edukasaun/Logo/Edukasaun Logo.png`. Both paths are set in
+  `/usr/share/sddm/themes/edukasaun/theme.conf`.
+- Live boot (`boot=live`): `eduka-live-autologin.service` writes an SDDM and
+  LightDM autologin for the live user before the login screen starts, so the
+  live session opens Eduka-Desktop directly. On installed systems it removes
+  that file again.
+- Standard account `edukasaun` / password `edukasaun`: created by the package
+  while the ISO is built (when no personal account exists). On another system:
+  `sudo eduka-default-user`. The account has no administrator (sudo) rights;
+  change the password on shared computers with `passwd`.
+
 ## Window manager and transparency
 
 - LXQt asks for a window manager when `window_manager` is empty. The package
@@ -71,7 +87,7 @@ and other greeters.
 0.9.12 started LXQt without its defaults. If an account still asks for a
 window manager or looks unthemed, run **Eduka-Menu Settings → Maintenance →
 Repair LXQt theme and session** (or `eduka-lxqt-repair`) and log in again.
-Accounts created after installing 0.9.14 are not affected.
+Accounts created after installing 0.9.15 are not affected.
 
 ## Release checklist
 

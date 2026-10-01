@@ -49,6 +49,31 @@ QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}
 QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}
 """
 
+SETTINGS_QSS_DARK = """
+QDialog{background:#2c2c2c;color:rgba(255,255,255,222);}
+QFrame#mainCard{background:#2c2c2c;border:1px solid rgba(255,255,255,30);}
+QListWidget#navList{background:#212121;border:1px solid rgba(255,255,255,24);color:rgba(255,255,255,222);}
+QListWidget#navList::item{color:rgba(255,255,255,200);}
+QListWidget#navList::item:selected{background:#26A69A;color:white;}
+QListWidget#navList::item:hover{background:rgba(255,255,255,24);}
+QLabel{color:rgba(255,255,255,222);}
+QLabel#pageTitle{color:#ffffff;}
+QLabel#pageHint,QLabel#fieldHint{color:rgba(255,255,255,150);}
+QLabel#statusLabel{color:#80CBC4;}
+QGroupBox{color:#ffffff;border:1px solid rgba(255,255,255,30);background:rgba(255,255,255,8);}
+QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{background:#383838;color:#ffffff;border:1px solid rgba(255,255,255,40);}
+QLineEdit:focus,QComboBox:focus,QSpinBox:focus,QDoubleSpinBox:focus{border:1px solid #4DB6AC;}
+QComboBox QAbstractItemView{background:#383838;color:#ffffff;selection-background-color:#26A69A;border:1px solid rgba(255,255,255,40);}
+QCheckBox{color:rgba(255,255,255,222);}
+QPushButton{background:rgba(255,255,255,20);color:rgba(255,255,255,230);border:1px solid rgba(255,255,255,30);}
+QPushButton:hover{background:rgba(255,255,255,40);border:1px solid #4DB6AC;}
+QPushButton#resetButton{background:rgba(255,193,7,30);color:#FFE082;border:1px solid rgba(255,193,7,80);}
+QSlider::groove:horizontal{background:rgba(255,255,255,45);}
+QSlider::sub-page:horizontal{background:#26A69A;}
+QSlider::handle:horizontal{border:2px solid #26A69A;}
+QToolTip{background:#383838;color:#ffffff;border:1px solid rgba(255,255,255,40);}
+"""
+
 class Page(QWidget):
     def __init__(self, title, hint=''):
         super().__init__()
@@ -75,7 +100,7 @@ class Settings(QDialog):
         for edit in self.findChildren(QLineEdit):
             rounded_text_context_menu(edit)
         self.load_values()
-        self.setStyleSheet(SETTINGS_QSS)
+        self.apply_theme_style()
         self.status_timer=QTimer(self); self.status_timer.setSingleShot(True); self.status_timer.timeout.connect(lambda: self.status.setText(''))
 
     def build(self):
@@ -84,7 +109,7 @@ class Settings(QDialog):
         main=QVBoxLayout(card); main.setContentsMargins(14,12,14,12); main.setSpacing(10)
         header=QHBoxLayout(); header.setSpacing(10)
         logo=QLabel(); logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(42,42)); header.addWidget(logo)
-        title=QLabel(f"<b style='font-size:20px;color:#102c27'>Eduka-Menu Settings</b> <span style='font-size:13px;color:#00875f;font-weight:800'>{VERSION}</span><br><span style='color:#536a64'>One place to configure Eduka-Desktop, Eduka-Menu and Eduka-Panel</span>")
+        title=QLabel(); self.header_title=title
         header.addWidget(title,1)
         main.addLayout(header)
 
@@ -131,14 +156,20 @@ class Settings(QDialog):
     def page_appearance(self):
         p=Page('Appearance', 'Choose the Eduka visual style and tune panel or desktop transparency.')
         f=QFormLayout(); f.setSpacing(9); f.setLabelAlignment(Qt.AlignRight)
-        self.theme=QComboBox(); self.theme.addItems([THEME_DEFAULT, THEME_LIQUID]); f.addRow('Visual theme:', self.theme)
+        self.theme=QComboBox(); self.theme.addItems(THEMES); f.addRow('Visual theme:', self.theme)
         # Ranges match what Eduka-Panel (0.50) and Eduka-Desktop (0.45) accept.
         self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.50,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Panel opacity:', self.panel_trans)
         self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Desktop opacity:', self.desktop_trans)
         self.low=QCheckBox('Low resource mode for 512MB RAM / old CPU'); f.addRow('', self.low)
         self.shadow=QCheckBox('Enable Eduka-Desktop shadows'); f.addRow('', self.shadow)
-        hint=QLabel('Icons follow LXQt Appearance Configuration automatically. Change Papirus/Breeze/etc. in LXQt Appearance.'); hint.setWordWrap(True); hint.setObjectName('fieldHint'); f.addRow('Icon theme:', hint)
-        glass_hint=QLabel('Liquid Glass adds translucent glass layers, colored tint, bright rims, compositor blur hints and deeper shadows. Eduka-Default-Theme remains the lightweight option.'); glass_hint.setWordWrap(True); glass_hint.setObjectName('fieldHint'); f.addRow('Theme details:', glass_hint)
+        # Any installed icon theme can be chosen; it is used by the whole
+        # desktop (LXQt, GTK apps, Eduka-Panel and Eduka-Desktop).
+        self.icon_theme=QComboBox(); self.icon_theme.setAccessibleName('Icon theme')
+        for name, label in list_icon_themes():
+            self.icon_theme.addItem(label if label == name else f'{label}  ({name})', name)
+        f.addRow('Icon theme:', self.icon_theme)
+        hint=QLabel('Changes the icons of the whole desktop. Install more icon themes (e.g. papirus-icon-theme) to get more choices.'); hint.setWordWrap(True); hint.setObjectName('fieldHint'); f.addRow('', hint)
+        glass_hint=QLabel('Eduka-Default-Theme: light and lightweight. Liquid Glass: clear glass with bright rims (needs a compositor, falls back automatically). Edukasaun-Dark: dark theme with Orchis dark colors.'); glass_hint.setWordWrap(True); glass_hint.setObjectName('fieldHint'); f.addRow('Theme details:', glass_hint)
         self.theme.currentTextChanged.connect(self.theme_changed)
         p.v.addLayout(f); p.v.addStretch(); return p
 
@@ -219,7 +250,7 @@ class Settings(QDialog):
         self.icon=QLineEdit(); self.icon.setPlaceholderText(START_ICON); self.icon.setMinimumWidth(120); browse=QPushButton('Browse…'); browse.clicked.connect(self.browse_icon); default_icon=QPushButton('Default'); default_icon.setToolTip('Use the Edukasaun start icon'); default_icon.clicked.connect(lambda: self.icon.setText(START_ICON))
         row=QHBoxLayout(); row.addWidget(self.icon,1); row.addWidget(browse); row.addWidget(default_icon); f.addRow('Button icon:', row)
         self.show_text=QCheckBox('Show text beside icon'); f.addRow('', self.show_text)
-        self.icon_size=QSpinBox(); self.icon_size.setRange(16,64); self.icon_size.setSuffix(' px'); self.icon_size.setFixedWidth(96)
+        self.icon_size=QSpinBox(); self.icon_size.setRange(16,64); self.icon_size.setSuffix(' px'); self.icon_size.setFixedWidth(118)
         self.icon_slider=QSlider(Qt.Horizontal); self.icon_slider.setRange(16,64); self.icon_slider.setAccessibleName('Button icon size')
         self.icon_slider.valueChanged.connect(self.icon_size.setValue); self.icon_size.valueChanged.connect(self.icon_slider.setValue)
         size_row=QHBoxLayout(); size_row.addWidget(self.icon_slider,1); size_row.addWidget(self.icon_size); f.addRow('Button icon size:', size_row)
@@ -302,8 +333,14 @@ class Settings(QDialog):
         self.preview.setIcon(get_icon(icon, 'start-here')); self.preview.setIconSize(size)
         self.preview_strip.setFixedHeight(panel_h)
         radius=max(12, int(panel_h/2.3)); btn_radius=max(10, int(panel_h/2.7))
-        self.preview_strip.setStyleSheet(f'QFrame#previewStrip{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #d9ede6);border:1px solid #cfe3dc;border-radius:{radius}px;}}'
-                                         f'QPushButton#previewButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #e1f3ec);border:1px solid #b9d7cd;border-radius:{btn_radius}px;padding:2px 12px;font-weight:700;color:#183c35;}}')
+        if is_dark_theme():
+            strip_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #343434,stop:1 #212121)'; strip_border='rgba(255,255,255,40)'
+            btn_bg='rgba(255,255,255,20)'; btn_border='rgba(255,255,255,32)'; btn_text='#ffffff'
+        else:
+            strip_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #d9ede6)'; strip_border='#cfe3dc'
+            btn_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #e1f3ec)'; btn_border='#b9d7cd'; btn_text='#183c35'
+        self.preview_strip.setStyleSheet(f'QFrame#previewStrip{{background:{strip_bg};border:1px solid {strip_border};border-radius:{radius}px;}}'
+                                         f'QPushButton#previewButton{{background:{btn_bg};border:1px solid {btn_border};border-radius:{btn_radius}px;padding:2px 12px;font-weight:700;color:{btn_text};}}')
         info=f'Shown at {size.width()}×{size.height()} px on a {panel_h} px panel.'
         if requested > usable:
             info+=f' Larger than {usable} px needs a taller panel (Behavior → Panel height).'
@@ -313,6 +350,15 @@ class Settings(QDialog):
                 info=f'Picture {real.width()}×{real.height()} px. '+info
         self.preview_info.setText(info)
 
+    def apply_theme_style(self):
+        """Settings follows the Eduka theme too; arrows are drawn for the
+        spin boxes and combo boxes in both looks."""
+        dark=is_dark_theme()
+        self.setStyleSheet(SETTINGS_QSS + (SETTINGS_QSS_DARK if dark else '') + arrow_qss(dark))
+        if hasattr(self, 'header_title'):
+            main, accent, sub = ('#ffffff', '#4DB6AC', 'rgba(255,255,255,0.65)') if dark else ('#102c27', '#00875f', '#536a64')
+            self.header_title.setText(f"<b style='font-size:20px;color:{main}'>Eduka-Menu Settings</b> <span style='font-size:13px;color:{accent};font-weight:800'>{VERSION}</span><br><span style='color:{sub}'>One place to configure Eduka-Desktop, Eduka-Menu and Eduka-Panel</span>")
+
     def load_values(self):
         """Fill every control from the saved configuration."""
         panel, desktop, menu = self.panel, self.desktop, self.menu
@@ -321,6 +367,10 @@ class Settings(QDialog):
         self.default_section.setCurrentText(desktop.get('last_category','Edukasaun'))
         theme=normalize_theme_style(desktop.get('theme_style'))
         self.theme.blockSignals(True); self.theme.setCurrentText(theme); self.theme.blockSignals(False)
+        current_icons=icon_theme_setup(force=True)
+        idx=self.icon_theme.findData(current_icons)
+        if idx >= 0: self.icon_theme.setCurrentIndex(idx)
+        self._initial_icon_theme=self.icon_theme.currentData()
         self._liquid_confirmed = theme == THEME_LIQUID
         self.panel_trans.setValue(float(panel.get('transparency',0.54)))
         self.desktop_trans.setValue(float(desktop.get('transparency',0.51)))
@@ -374,6 +424,11 @@ class Settings(QDialog):
         save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
         self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
         set_menu_daemon_autostart(self.start_login.isChecked())
+        chosen_icons=self.icon_theme.currentData()
+        if chosen_icons and chosen_icons != getattr(self, '_initial_icon_theme', None):
+            if set_icon_theme(chosen_icons):
+                self._initial_icon_theme=chosen_icons
+        self.apply_theme_style(); self.update_preview()
         ok, message = self.sync_orca(desktop)
         icon_theme_setup(force=True); send_menu_command('reload-style')
         if not ok:

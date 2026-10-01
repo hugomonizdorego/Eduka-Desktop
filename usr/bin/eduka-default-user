@@ -1,0 +1,22 @@
+#!/bin/sh
+# Create the standard Edukasaun account: user "edukasaun", password
+# "edukasaun". Run as root. The package does this by itself only while the
+# ISO is built (no personal account exists yet); use this command to add it
+# on another system. Change the password for computers used by many people.
+set -e
+NAME=edukasaun
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run as root: sudo eduka-default-user" >&2
+    exit 1
+fi
+if getent passwd "$NAME" >/dev/null 2>&1; then
+    echo "User $NAME already exists."
+    exit 0
+fi
+groups=""
+for g in audio video plugdev netdev bluetooth lpadmin scanner cdrom dip users; do
+    getent group "$g" >/dev/null 2>&1 && groups="${groups:+$groups,}$g"
+done
+useradd --create-home --shell /bin/bash --comment "Edukasaun" ${groups:+--groups "$groups"} "$NAME"
+echo "$NAME:$NAME" | chpasswd
+echo "Created user $NAME (password: $NAME)."

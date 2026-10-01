@@ -1,5 +1,5 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.14
+Version: 0.9.15
 Section: x11
 Priority: optional
 Architecture: all
@@ -8,9 +8,10 @@ Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
 Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin
 Suggests: sddm | lightdm
-Description: Edukasaun Desktop 0.9.14 - Transparency, Liquid Glass and Login Fix
+Description: Edukasaun Desktop 0.9.15 - Action Center, Edukasaun-Dark and Login Screen
  Edukasaun Desktop, Eduka-Menu, Eduka-Menu Settings, and Eduka-Panel.
- Restores the transparent theme by making sure a compositor runs (xfwm4,
- KWin or picom) and by drawing a clean opaque look instead of black when none
- does, stabilises Liquid Glass, stops LXQt from asking for a window manager
- and leaves Eduka-Desktop as the only session on SDDM and LightDM.
+ One sound control and working brightness in the Action Center, a modern
+ calendar, visible spin box arrows, random hover colors in Eduka-Desktop,
+ the Edukasaun-Dark theme (Orchis dark colors), free icon theme choice, an
+ Edukasaun SDDM login theme, live session autologin and the standard
+ edukasaun account for new images.

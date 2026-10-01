@@ -7,50 +7,92 @@ from PyQt5.QtGui import *
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
 
+LIGHT_UI = {
+    'text': '#1f2d2a', 'title': '#10231e', 'sub': '#536a64',
+    'btn_bg': 'rgba(255,255,255,200)', 'btn_border': 'rgba(0,120,90,45)', 'btn_hover': '#ffffff',
+    'accent': '#00a879', 'accent_hover': '#00b683', 'accent_border': '#00946b',
+    'switch_off': '#d9e4e0', 'switch_off_text': '#40534e',
+    'row_hover': 'rgba(255,255,255,235)', 'row_active': 'rgba(0,168,121,40)',
+    'field': 'rgba(255,255,255,230)', 'groove': '#dfeee9', 'groove_off': '#c9d6d2',
+    'tile': '#eef6f2', 'tile_off': '#f3f6f5', 'tile_off_text': '#9aa9a5',
+    'cal': '#ffffff', 'cal_hover': '#e3f3ed', 'muted': '#a9b8b3', 'weekend': '#c0533a',
+    'scroll': 'rgba(0,168,121,110)',
+}
+# Edukasaun-Dark: Orchis dark surfaces and teal accent (see eduka_common.DARK).
+DARK_UI = {
+    'text': 'rgba(255,255,255,222)', 'title': '#ffffff', 'sub': 'rgba(255,255,255,153)',
+    'btn_bg': 'rgba(255,255,255,18)', 'btn_border': 'rgba(255,255,255,30)', 'btn_hover': 'rgba(255,255,255,40)',
+    'accent': '#26A69A', 'accent_hover': '#4DB6AC', 'accent_border': '#4DB6AC',
+    'switch_off': 'rgba(255,255,255,40)', 'switch_off_text': 'rgba(255,255,255,170)',
+    'row_hover': 'rgba(255,255,255,24)', 'row_active': 'rgba(77,182,172,55)',
+    'field': '#383838', 'groove': 'rgba(255,255,255,45)', 'groove_off': 'rgba(255,255,255,25)',
+    'tile': 'rgba(255,255,255,16)', 'tile_off': 'rgba(255,255,255,6)', 'tile_off_text': 'rgba(255,255,255,90)',
+    'cal': '#383838', 'cal_hover': 'rgba(255,255,255,30)', 'muted': 'rgba(255,255,255,80)', 'weekend': '#EF9A9A',
+    'scroll': 'rgba(77,182,172,140)',
+}
+
+def qcolor(value):
+    """QColor from '#rrggbb' or 'rgba(r,g,b,a)' (QColor cannot parse rgba())."""
+    m=re.match(r'rgba?\((\d+),(\d+),(\d+)(?:,(\d+))?\)', str(value).replace(' ',''))
+    if m:
+        r,g,b,a=m.groups(); return QColor(int(r),int(g),int(b),int(a) if a is not None else 255)
+    return QColor(value)
+
+def ui_colors():
+    return DARK_UI if is_dark_theme() else LIGHT_UI
+
+
 def popup_qss():
     """Popup look that follows the transparency and theme chosen in
     Eduka-Menu-Settings (a little more opaque than the panel so text stays
     readable), high contrast for vision accessibility."""
-    cfg=read_panel_config(); dcfg=read_desktop_config()
+    cfg=read_panel_config(); dcfg=read_desktop_config(); ui=ui_colors()
+    t=max(0.50, min(1.0, float(cfg.get('transparency', 0.54))))
+    a=int(255*max(0.80, min(0.97, t+0.36))); c=min(255, a+14)
+    theme=effective_theme(dcfg.get('theme_style'))
     if dcfg.get('visual_accessibility', False):
         box='background:#ffffff;border:2px solid #344d47;'
         card='background:#ffffff;border:2px solid #344d47;'
-    else:
-        t=max(0.50, min(1.0, float(cfg.get('transparency', 0.54))))
-        a=int(255*max(0.80, min(0.97, t+0.36))); c=min(255, a+14)
-        if effective_theme(cfg.get('theme_style')) == THEME_LIQUID:
-            # Popups need more opacity than the panel to stay readable.
-            box=liquid_glass_surface(1.55, 18, 1).replace('border-radius:18px;','')
-        else:
-            box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(236,248,242,{a}));'
-                 'border:1px solid rgba(255,255,255,220);')
+    elif theme == THEME_DARK:
+        box=f'background:rgba(44,44,44,{a});border:1px solid rgba(255,255,255,40);'
+        card=f'background:rgba(56,56,56,{c});border:1px solid rgba(255,255,255,22);'
+    elif theme == THEME_LIQUID:
+        # Popups need more opacity than the panel to stay readable.
+        box=liquid_glass_surface(1.55, 18, 1).replace('border-radius:18px;','')
         card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
+    else:
+        box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(236,248,242,{a}));'
+             'border:1px solid rgba(255,255,255,220);')
+        card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
+    u=ui
     return ('QFrame#popupBox{'+box+'border-radius:18px;}'
             'QFrame#acCard{'+card+'border-radius:14px;}'
-            'QLabel{color:#1f2d2a;font-size:13px;background:transparent;}'
-            'QLabel#popTitle{font-size:15px;font-weight:800;color:#10231e;}'
-            'QLabel#popSub{font-size:12px;color:#536a64;}'
-            'QLabel#popHint{font-size:11px;color:#536a64;}'
-            'QPushButton{border:1px solid rgba(0,120,90,45);border-radius:11px;padding:7px 10px;background:rgba(255,255,255,200);color:#1f2d2a;font-weight:700;}'
-            'QPushButton:hover{background:#ffffff;border:1px solid #00a879;}'
-            'QPushButton#switch{min-width:52px;padding:5px 8px;border-radius:13px;background:#d9e4e0;color:#40534e;}'
-            'QPushButton#switch:checked{background:#00a879;color:#ffffff;border:1px solid #00946b;}'
+            f'QLabel{{color:{u["text"]};font-size:13px;background:transparent;}}'
+            f'QLabel#popTitle{{font-size:15px;font-weight:800;color:{u["title"]};}}'
+            f'QLabel#popSub{{font-size:12px;color:{u["sub"]};}}'
+            f'QLabel#popHint{{font-size:11px;color:{u["sub"]};}}'
+            f'QPushButton{{border:1px solid {u["btn_border"]};border-radius:11px;padding:7px 10px;background:{u["btn_bg"]};color:{u["text"]};font-weight:700;}}'
+            f'QPushButton:hover{{background:{u["btn_hover"]};border:1px solid {u["accent"]};}}'
+            f'QPushButton#switch{{min-width:52px;padding:5px 8px;border-radius:13px;background:{u["switch_off"]};color:{u["switch_off_text"]};}}'
+            f'QPushButton#switch:checked{{background:{u["accent"]};color:#ffffff;border:1px solid {u["accent_border"]};}}'
             'QPushButton#netRow{text-align:left;padding:8px 10px;border-radius:12px;background:transparent;border:1px solid transparent;}'
-            'QPushButton#netRow:hover{background:rgba(255,255,255,235);border:1px solid rgba(0,168,121,120);}'
-            'QPushButton#netRow[active="true"]{background:rgba(0,168,121,40);border:1px solid rgba(0,168,121,150);}'
-            'QToolButton#roundIcon{background:rgba(255,255,255,200);border:1px solid rgba(0,120,90,45);border-radius:17px;padding:5px;}'
-            'QToolButton#roundIcon:hover{background:#ffffff;border:1px solid #00a879;}'
-            'QToolButton#roundIcon:checked{background:#00a879;border:1px solid #00946b;}'
-            'QComboBox{background:rgba(255,255,255,230);border:1px solid rgba(0,120,90,45);border-radius:10px;padding:5px 8px;color:#1f2d2a;}'
+            f'QPushButton#netRow:hover{{background:{u["row_hover"]};border:1px solid {u["accent"]};}}'
+            f'QPushButton#netRow[active="true"]{{background:{u["row_active"]};border:1px solid {u["accent"]};}}'
+            f'QToolButton#roundIcon{{background:{u["btn_bg"]};border:1px solid {u["btn_border"]};border-radius:16px;padding:5px;}}'
+            f'QToolButton#roundIcon:hover{{background:{u["btn_hover"]};border:1px solid {u["accent"]};}}'
+            f'QToolButton#roundIcon:checked{{background:{u["accent"]};border:1px solid {u["accent_border"]};}}'
+            f'QComboBox{{background:{u["field"]};border:1px solid {u["btn_border"]};border-radius:10px;padding:5px 8px;color:{u["text"]};}}'
+            f'QComboBox QAbstractItemView{{background:{u["cal"]};color:{u["text"]};selection-background-color:{u["accent"]};selection-color:#ffffff;border:1px solid {u["btn_border"]};outline:0;}}'
             'QScrollArea,QScrollArea>QWidget>QWidget{background:transparent;border:0;}'
             'QScrollBar:vertical{background:transparent;width:8px;margin:2px;}'
-            'QScrollBar::handle:vertical{background:rgba(0,168,121,110);border-radius:4px;min-height:24px;}'
+            f'QScrollBar::handle:vertical{{background:{u["scroll"]};border-radius:4px;min-height:24px;}}'
             'QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}'
-            'QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}'
-            'QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}'
-            'QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}'
-            'QSlider::sub-page:horizontal:disabled{background:#c9d6d2;}'
-            'QSlider::handle:horizontal:disabled{border:2px solid #b8c6c2;}')
+            f'QSlider::groove:horizontal{{height:6px;border-radius:3px;background:{u["groove"]};}}'
+            f'QSlider::sub-page:horizontal{{background:{u["accent"]};border-radius:3px;}}'
+            f'QSlider::handle:horizontal{{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid {u["accent"]};}}'
+            f'QSlider::sub-page:horizontal:disabled{{background:{u["groove_off"]};}}'
+            f'QSlider::handle:horizontal:disabled{{border:2px solid {u["groove_off"]};}}'
+            + arrow_qss())
 
 
 def popup_header(icon, title, subtitle=''):
@@ -107,21 +149,76 @@ def battery_info():
         except Exception: pass
     return None
 
+
+# --- Brightness ---------------------------------------------------------------
+# Laptops: the backlight (brightnessctl, xbacklight). Desktops, projectors and
+# virtual machines (VirtualBox) have no backlight: there Eduka dims the picture
+# with xrandr (software brightness), never below 30 % so the screen stays usable.
+BRIGHTNESS_STATE = PANEL_CONFIG_DIR/'brightness.json'
+SOFTWARE_BRIGHTNESS_MIN = 30
+
 def backlight_device():
     for d in sorted(Path('/sys/class/backlight').glob('*')):
         if (d/'brightness').exists() and (d/'max_brightness').exists():
             return d
     return None
 
+def xrandr_outputs():
+    out=_run_text(['xrandr','--verbose','--current'], timeout=3)
+    outputs=[]; current=None
+    for line in (out or '').splitlines():
+        m=re.match(r'^(\S+) connected', line)
+        if m:
+            current={'name': m.group(1), 'brightness': 1.0}; outputs.append(current); continue
+        if line and not line[0].isspace():
+            current=None; continue
+        b=re.match(r'\s+Brightness:\s*([0-9.]+)', line)
+        if current is not None and b:
+            # Some drivers report 0.0 before anything was set; that means 100 %.
+            current['brightness']=float(b.group(1)) or 1.0
+    return outputs
+
 def read_brightness():
+    """Return (percent, method); method is 'backlight', 'software' or None."""
     d=backlight_device()
-    if d is None:
-        return None
+    if d is not None:
+        try:
+            cur=int((d/'brightness').read_text().strip()); mx=int((d/'max_brightness').read_text().strip())
+            if mx > 0:
+                return int(round(cur*100/mx)), 'backlight'
+        except Exception:
+            pass
+    outputs=xrandr_outputs()
+    if outputs:
+        return max(SOFTWARE_BRIGHTNESS_MIN, min(100, int(round(outputs[0]['brightness']*100)))), 'software'
+    return None, None
+
+def set_brightness(value, method):
+    value=max(1, min(100, int(value)))
+    if method == 'backlight':
+        if shutil.which('brightnessctl'):
+            return safe_popen(['brightnessctl','-q','set',f'{value}%'])
+        if shutil.which('xbacklight'):
+            return safe_popen(['xbacklight','-set',str(value)])
+    value=max(SOFTWARE_BRIGHTNESS_MIN, value)
+    ok=False
+    for out in xrandr_outputs():
+        ok=safe_popen(['xrandr','--output',out['name'],'--brightness',f'{value/100:.2f}']) or ok
     try:
-        cur=int((d/'brightness').read_text().strip()); mx=int((d/'max_brightness').read_text().strip())
-        return int(round(cur*100/mx)) if mx > 0 else None
+        write_json(BRIGHTNESS_STATE, {'software': value})
     except Exception:
-        return None
+        pass
+    return ok
+
+def restore_software_brightness():
+    """xrandr brightness is lost at logout; re-apply the user's last value."""
+    try:
+        value=int(read_json(BRIGHTNESS_STATE, {'software': 100}).get('software', 100))
+    except Exception:
+        return
+    if value < 100 and backlight_device() is None and shutil.which('xrandr'):
+        set_brightness(value, 'software')
+
 
 def collect_status():
     """Gather tray/Action Center state. Runs in a worker thread."""
@@ -154,7 +251,7 @@ def collect_status():
     o=_run_text(['lpstat','-p']); st['printers']=bool((o or '').strip())
     o=_run_text(['setxkbmap','-query']); m=re.search(r'^layout:\s*([^\s,]+)', o or '', re.M)
     st['layout']=(m.group(1) if m else 'en')[:3].upper()
-    st['brightness']=read_brightness()
+    st['brightness'], st['brightness_method']=read_brightness()
     st['battery']=battery_info()
     return st
 
@@ -167,39 +264,105 @@ class StatusWorker(QThread):
         except Exception: pass
 
 
-AC_QSS = """
-QLabel#acTime{font-size:30px;font-weight:800;color:#10231e;}
-QLabel#acDate{font-size:13px;color:#536a64;font-weight:600;}
-QToolButton#acTile{background:#eef6f2;border:1px solid rgba(0,120,90,45);border-radius:14px;padding:6px 4px;color:#1f2d2a;font-size:11px;font-weight:700;}
-QToolButton#acTile:hover{background:#ffffff;border:1px solid #00a879;}
-QToolButton#acTile[on="true"]{background:#00a879;color:#ffffff;border:1px solid #00946b;}
-QToolButton#acTile[on="true"]:hover{background:#00b683;}
-QToolButton#acTile:disabled{background:#f3f6f5;color:#9aa9a5;border:1px solid rgba(0,0,0,18);}
-QSlider::groove:horizontal{height:6px;border-radius:3px;background:#dfeee9;}
-QSlider::sub-page:horizontal{background:#00a879;border-radius:3px;}
-QSlider::handle:horizontal{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid #00a879;}
-QSlider::sub-page:horizontal:disabled{background:#c9d6d2;}
-QSlider::handle:horizontal:disabled{border:2px solid #b8c6c2;}
-QPushButton#acFooter{background:#eef6f2;border:1px solid rgba(0,120,90,45);border-radius:11px;padding:7px 6px;font-size:12px;font-weight:700;}
-QPushButton#acFooter:hover{background:#ffffff;border:1px solid #00a879;}
-QCalendarWidget QWidget{background:#ffffff;alternate-background-color:#ffffff;}
-QCalendarWidget QWidget#qt_calendar_navigationbar{background:#ffffff;border-top-left-radius:10px;border-top-right-radius:10px;}
-QCalendarWidget QToolButton{background:transparent;color:#1f2d2a;border:0;border-radius:8px;padding:4px 8px;font-weight:800;}
-QCalendarWidget QToolButton:hover{background:#e3f3ed;}
-QCalendarWidget QToolButton::menu-indicator{image:none;}
-QCalendarWidget QSpinBox{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:6px;}
-QCalendarWidget QAbstractItemView{background:#ffffff;color:#1f2d2a;selection-background-color:#00a879;selection-color:white;outline:0;border:0;}
-QCalendarWidget QAbstractItemView:disabled{color:#a7b5b1;}
+def ac_qss():
+    u=ui_colors()
+    return f"""
+QLabel#acTime{{font-size:30px;font-weight:800;color:{u['title']};}}
+QLabel#acDate{{font-size:13px;color:{u['sub']};font-weight:600;}}
+QToolButton#acTile{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:6px 4px;color:{u['text']};font-size:11px;font-weight:700;}}
+QToolButton#acTile:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
+QToolButton#acTile[on="true"]{{background:{u['accent']};color:#ffffff;border:1px solid {u['accent_border']};}}
+QToolButton#acTile[on="true"]:hover{{background:{u['accent_hover']};}}
+QToolButton#acTile:disabled{{background:{u['tile_off']};color:{u['tile_off_text']};border:1px solid {u['btn_border']};}}
+QPushButton#acFooter{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:11px;padding:7px 6px;font-size:12px;font-weight:700;}}
+QPushButton#acFooter:hover{{background:{u['btn_hover']};border:1px solid {u['accent']};}}
+QLabel#calTitle{{font-size:14px;font-weight:800;color:{u['title']};}}
+QToolButton#calNav{{background:transparent;border:1px solid transparent;border-radius:14px;padding:4px;}}
+QToolButton#calNav:hover{{background:{u['cal_hover']};border:1px solid {u['btn_border']};}}
+QPushButton#calToday{{padding:3px 10px;border-radius:11px;font-size:11px;}}
+QCalendarWidget QWidget{{background:{u['cal']};alternate-background-color:{u['cal']};}}
+QCalendarWidget QAbstractItemView{{background:{u['cal']};color:{u['text']};selection-background-color:transparent;selection-color:{u['text']};outline:0;border:0;}}
 """
 
 
+class ModernCalendar(QCalendarWidget):
+    """Flat, rounded calendar: today as an accent circle, the selected day as
+    a ring, days of other months faded, compact weekday initials."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setNavigationBarVisible(False)
+        self.setGridVisible(False)
+        self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.setHorizontalHeaderFormat(QCalendarWidget.ShortDayNames)
+        self.setSelectedDate(QDate.currentDate())
+        u=ui_colors()
+        self._accent=qcolor(u['accent']); self._text=qcolor(u['text']); self._muted=qcolor(u['muted']); self._weekend=qcolor(u['weekend'])
+        header=QTextCharFormat(); header.setForeground(qcolor(u['sub']))
+        f=header.font(); f.setPointSizeF(max(7.0, f.pointSizeF()*0.9 if f.pointSizeF() > 0 else 8.5)); header.setFont(f)
+        self.setHeaderTextFormat(header)
+        for day in (Qt.Saturday, Qt.Sunday):
+            weekend=QTextCharFormat(); weekend.setForeground(self._weekend); self.setWeekdayTextFormat(day, weekend)
+        for view in self.findChildren(QAbstractItemView):
+            view.setMouseTracking(True)
+
+    def paintCell(self, painter, rect, date):
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        in_month = date.month() == self.monthShown()
+        today = date == QDate.currentDate()
+        selected = date == self.selectedDate() and not today
+        size=min(rect.width(), rect.height())-6
+        circle=QRectF(rect.center().x()-size/2+0.5, rect.center().y()-size/2+0.5, size, size)
+        color=self._text
+        if not in_month:
+            color=self._muted
+        elif date.dayOfWeek() in (6, 7):
+            color=self._weekend
+        font=painter.font()
+        if today:
+            painter.setPen(Qt.NoPen); painter.setBrush(self._accent); painter.drawEllipse(circle)
+            color=QColor('#ffffff'); font.setBold(True)
+        elif selected:
+            painter.setPen(QPen(self._accent, 1.6)); painter.setBrush(Qt.NoBrush); painter.drawEllipse(circle)
+            font.setBold(True)
+        painter.setFont(font); painter.setPen(color)
+        painter.drawText(rect, Qt.AlignCenter, str(date.day()))
+        painter.restore()
+
+
+class CalendarCard(QFrame):
+    """Calendar with a modern header: month title, today button, chevrons."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName('acCard')
+        lay=QVBoxLayout(self); lay.setContentsMargins(10,8,10,6); lay.setSpacing(4)
+        head=QHBoxLayout(); head.setSpacing(4)
+        self.title=QLabel(''); self.title.setObjectName('calTitle'); head.addWidget(self.title, 1)
+        today=QPushButton('Today'); today.setObjectName('calToday'); today.setCursor(Qt.PointingHandCursor); head.addWidget(today)
+        color='#e0e0e0' if is_dark_theme() else '#2d4a43'
+        self.prev=QToolButton(); self.prev.setObjectName('calNav'); self.prev.setIcon(QIcon(arrow_icon_path('left', color))); self.prev.setAccessibleName('Previous month')
+        self.next=QToolButton(); self.next.setObjectName('calNav'); self.next.setIcon(QIcon(arrow_icon_path('right', color))); self.next.setAccessibleName('Next month')
+        for b in (self.prev, self.next): b.setIconSize(QSize(14,14)); b.setCursor(Qt.PointingHandCursor); head.addWidget(b)
+        lay.addLayout(head)
+        self.calendar=ModernCalendar(); self.calendar.setFixedHeight(200); lay.addWidget(self.calendar)
+        self.prev.clicked.connect(self.calendar.showPreviousMonth)
+        self.next.clicked.connect(self.calendar.showNextMonth)
+        today.clicked.connect(lambda: (self.calendar.setSelectedDate(QDate.currentDate()), self.calendar.showToday()))
+        self.calendar.currentPageChanged.connect(lambda *_: self.update_title())
+        self.update_title()
+
+    def update_title(self):
+        page=QDate(self.calendar.yearShown(), self.calendar.monthShown(), 1)
+        self.title.setText(QLocale().toString(page, 'MMMM yyyy'))
+
+
 class ActionCenter(PopupFrame):
-    """Clock popup: time, quick toggles, sliders, battery and calendar."""
+    """Clock popup: time, quick toggles, sound and brightness, status and calendar."""
     TILES=[
         ('wifi','Wi-Fi','network-wireless'),
         ('bluetooth','Bluetooth','bluetooth'),
         ('airplane','Airplane','airplane-mode'),
-        ('mute','Mute','audio-volume-muted'),
+        ('display','Display','preferences-desktop-display'),
         ('lock','Lock','system-lock-screen'),
         ('settings','Settings','preferences-system'),
     ]
@@ -208,7 +371,7 @@ class ActionCenter(PopupFrame):
         self.panel=panel
         self.setAccessibleName('Action Center')
         self.box.setFixedWidth(372)
-        self.setStyleSheet(self.styleSheet()+AC_QSS)
+        self.setStyleSheet(self.styleSheet()+ac_qss())
         self.v.setSpacing(10)
         head=QVBoxLayout(); head.setSpacing(0)
         self.time_label=QLabel(); self.time_label.setObjectName('acTime')
@@ -217,7 +380,7 @@ class ActionCenter(PopupFrame):
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
-            t=QToolButton(); t.setObjectName('acTile'); t.setText(label); t.setIcon(get_icon(icon,'preferences-system'))
+            t=QToolButton(); t.setObjectName('acTile'); t.setText(label); t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system'))
             t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,64)
             t.setAccessibleName(label); t.setProperty('on', False); t.setCursor(Qt.PointingHandCursor)
             t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
@@ -225,37 +388,37 @@ class ActionCenter(PopupFrame):
             grid.addWidget(t, i//3, i%3); self.tiles[key]=t
         self.v.addLayout(grid)
 
-        card=QFrame(); card.setObjectName('acCard'); cl=QGridLayout(card); cl.setContentsMargins(12,10,12,10); cl.setHorizontalSpacing(10); cl.setVerticalSpacing(8)
-        self.vol_icon=QLabel(); self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume'); self.vol_value=QLabel('')
-        self.bri_icon=QLabel(); self.bri_icon.setPixmap(get_icon('display-brightness','video-display').pixmap(20,20))
+        # One sound control: the speaker button mutes/unmutes and shows the
+        # state, the slider sets the volume, the chevron opens output
+        # devices and sound settings. Brightness sits directly below it.
+        card=QFrame(); card.setObjectName('acCard'); cl=QGridLayout(card); cl.setContentsMargins(10,8,10,10); cl.setHorizontalSpacing(8); cl.setVerticalSpacing(6)
+        self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(18,18)); self.mute.setFixedSize(34,34)
+        self.mute.setAccessibleName('Mute'); self.mute.setToolTip('Mute / unmute'); self.mute.clicked.connect(self.toggle_mute)
+        self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume')
+        self.vol_value=QLabel('')
+        self.sound_more=QToolButton(); self.sound_more.setObjectName('roundIcon'); self.sound_more.setFixedSize(34,34)
+        self.sound_more.setIcon(QIcon(arrow_icon_path('right', '#e0e0e0' if is_dark_theme() else '#2d4a43'))); self.sound_more.setIconSize(QSize(12,12))
+        self.sound_more.setAccessibleName('Sound output and settings'); self.sound_more.setToolTip('Output device and sound settings'); self.sound_more.clicked.connect(self.sound_menu)
+        self.bri_icon=QLabel(); self.bri_icon.setFixedSize(34,34); self.bri_icon.setAlignment(Qt.AlignCenter); self.bri_icon.setPixmap(get_icon('display-brightness','video-display').pixmap(18,18))
         self.bri_slider=QSlider(Qt.Horizontal); self.bri_slider.setRange(5,100); self.bri_slider.setAccessibleName('Screen brightness'); self.bri_value=QLabel('')
         for w in (self.vol_value, self.bri_value): w.setFixedWidth(40); w.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
-        cl.addWidget(self.vol_icon,0,0); cl.addWidget(self.vol_slider,0,1); cl.addWidget(self.vol_value,0,2)
+        cl.addWidget(self.mute,0,0); cl.addWidget(self.vol_slider,0,1); cl.addWidget(self.vol_value,0,2); cl.addWidget(self.sound_more,0,3)
         cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
-        self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,3)
+        self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,4)
         # Status that normally sits on the panel tray while it is hidden.
-        self.extra_label=QLabel(''); self.extra_label.setObjectName('popHint'); cl.addWidget(self.extra_label,3,0,1,3)
-        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,4,0,1,3)
+        self.extra_label=QLabel(''); self.extra_label.setObjectName('popHint'); cl.addWidget(self.extra_label,3,0,1,4)
+        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,4,0,1,4)
         self.v.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
         self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
-        self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self._vol_timer.start(70)))
+        self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self.update_sound_icon(), self._vol_timer.start(70)))
         self.bri_slider.valueChanged.connect(lambda v: (self.bri_value.setText(f'{v}%'), self._bri_timer.start(90)))
 
-        self.calendar=QCalendarWidget(); self.calendar.setGridVisible(False); self.calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
-        self.calendar.setSelectedDate(QDate.currentDate()); self.calendar.setFixedHeight(215)
-        weekend=QTextCharFormat(); weekend.setForeground(QColor('#c0533a'))
-        for day in (Qt.Saturday, Qt.Sunday): self.calendar.setWeekdayTextFormat(day, weekend)
-        header=QTextCharFormat(); header.setForeground(QColor('#536a64'))
-        self.calendar.setHeaderTextFormat(header)
-        cal_card=QFrame(); cal_card.setObjectName('acCard'); cal_l=QVBoxLayout(cal_card); cal_l.setContentsMargins(6,6,6,6); cal_l.addWidget(self.calendar)
-        self.v.addWidget(cal_card)
-        for menu in self.calendar.findChildren(QMenu):
-            round_menu(menu)
+        self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar
+        self.v.addWidget(self.calendar_card)
 
         foot=QHBoxLayout(); foot.setSpacing(8)
         for label, icon, handler in [('Network','preferences-system-network',lambda: self.launch('nm-connection-editor')),
-                                     ('Sound','audio-volume-high',lambda: self.launch('pavucontrol-qt')),
                                      ('Power','system-shutdown',self.power_menu)]:
             b=QPushButton(get_icon(icon,'preferences-system'), ' '+label); b.setObjectName('acFooter'); b.clicked.connect(handler); foot.addWidget(b)
             if label == 'Power': self.power_button=b
@@ -274,8 +437,14 @@ class ActionCenter(PopupFrame):
             t.setProperty('on', bool(on)); t.style().unpolish(t); t.style().polish(t)
         t.setEnabled(enabled)
         t.setToolTip(tip or t.text())
-        if key in ('wifi','bluetooth','airplane','mute'):
+        if key in ('wifi','bluetooth','airplane'):
             t.setAccessibleDescription('On' if on else 'Off')
+
+    def update_sound_icon(self):
+        v=self.vol_slider.value(); muted=self.mute.isChecked()
+        name='audio-volume-muted' if muted or v == 0 else ('audio-volume-low' if v < 34 else 'audio-volume-medium' if v < 67 else 'audio-volume-high')
+        self.mute.setIcon(get_icon(name,'audio-volume-high'))
+        self.mute.setAccessibleDescription('Muted' if muted else 'Sound on')
 
     def refresh(self, st):
         wifi_on=st.get('wifi_on')
@@ -287,17 +456,21 @@ class ActionCenter(PopupFrame):
         bt_on=st.get('bt_on')
         self.set_tile('bluetooth', bool(bt_on), bool(st.get('bt_hw')) and bt_on is not None, 'Bluetooth — right-click for devices' if st.get('bt_hw') else 'No Bluetooth adapter found')
         self.set_tile('airplane', bool(st.get('airplane')), wifi_on is not None, 'Turn all wireless radios off')
-        self.set_tile('mute', bool(st.get('muted')), st.get('volume') is not None, 'Mute sound — right-click for sound settings')
+        self.set_tile('display', False, True, 'Monitor and resolution settings')
         self.set_tile('lock', False, True, 'Lock the screen')
         self.set_tile('settings', False, True, 'Eduka-Menu Settings — right-click for LXQt Settings')
         vol=st.get('volume')
         self.vol_slider.blockSignals(True); self.vol_slider.setEnabled(vol is not None); self.vol_slider.setValue(int(vol or 0)); self.vol_slider.blockSignals(False)
         self.vol_value.setText(f'{vol}%' if vol is not None else '—')
-        self.vol_icon.setPixmap(get_icon('audio-volume-muted' if st.get('muted') else 'audio-volume-high','audio-volume-medium').pixmap(20,20))
-        bri=st.get('brightness')
-        self.bri_slider.blockSignals(True); self.bri_slider.setEnabled(bri is not None); self.bri_slider.setValue(int(bri or 100)); self.bri_slider.blockSignals(False)
+        self.mute.blockSignals(True); self.mute.setChecked(bool(st.get('muted'))); self.mute.setEnabled(vol is not None); self.mute.blockSignals(False)
+        self.update_sound_icon()
+        bri=st.get('brightness'); method=st.get('brightness_method')
+        self.bri_slider.blockSignals(True)
+        self.bri_slider.setMinimum(SOFTWARE_BRIGHTNESS_MIN if method == 'software' else 5)
+        self.bri_slider.setEnabled(bri is not None); self.bri_slider.setValue(int(bri or 100))
+        self.bri_slider.blockSignals(False)
         self.bri_value.setText(f'{bri}%' if bri is not None else '—')
-        self.bri_slider.setToolTip('Screen brightness' if bri is not None else 'This display does not report a backlight')
+        self.bri_slider.setToolTip({'backlight':'Screen brightness','software':'Screen brightness (display has no backlight control; adjusted by Eduka)'}.get(method, 'Brightness is not available on this display'))
         bat=st.get('battery')
         self.battery_label.setText(f"Battery {bat['capacity']}% • {bat['status']}" if bat else 'Power: AC (no battery)')
         extra=[f"Keyboard {st.get('layout','EN')}"]
@@ -325,8 +498,8 @@ class ActionCenter(PopupFrame):
             else:
                 safe_popen(['nmcli','radio','all','off'])
                 if st.get('bt_on'): safe_popen(['bluetoothctl','power','off'])
-        elif key == 'mute':
-            safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','toggle'])
+        elif key == 'display':
+            self.launch('lxqt-config-monitor'); return
         elif key == 'lock':
             self.close(); session_action('lock'); return
         elif key == 'settings':
@@ -336,8 +509,34 @@ class ActionCenter(PopupFrame):
         QTimer.singleShot(700, self.panel.update_status_icons)
 
     def tile_settings(self, key):
-        cmd={'wifi':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','mute':'pavucontrol-qt','settings':'lxqt-config','lock':'lxqt-config-screensaver'}.get(key)
+        cmd={'wifi':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','display':'lxqt-config-monitor','settings':'lxqt-config','lock':'lxqt-config-screensaver'}.get(key)
         if cmd: self.launch(cmd)
+
+    def toggle_mute(self, on):
+        safe_popen(['pactl','set-sink-mute','@DEFAULT_SINK@','1' if on else '0'])
+        self.panel.last_status['muted']=bool(on); self.update_sound_icon()
+        QTimer.singleShot(400, self.panel.update_status_icons)
+
+    def sound_menu(self):
+        m=RoundedMenu(self)
+        sinks=[]; current=None
+        for line in (_run_text(['pactl','list','short','sinks'], timeout=2) or '').splitlines():
+            parts=line.split('\t')
+            if len(parts) >= 2: sinks.append(parts[1])
+        default=(_run_text(['pactl','get-default-sink']) or '').strip()
+        names={}
+        for line in (_run_text(['pactl','list','sinks'], timeout=3) or '').splitlines():
+            line=line.strip()
+            if line.startswith('Name:'): current=line.split(':',1)[1].strip()
+            elif line.startswith('Description:') and current: names[current]=line.split(':',1)[1].strip()
+        if sinks:
+            header=m.addAction('Output'); header.setEnabled(False)
+            for sink in sinks:
+                act=m.addAction(names.get(sink, sink)); act.setCheckable(True); act.setChecked(sink == default)
+                act.triggered.connect(lambda _=False, s=sink: (safe_popen(['pactl','set-default-sink',s]), QTimer.singleShot(400, self.panel.update_status_icons)))
+            m.addSeparator()
+        m.addAction(get_icon('preferences-desktop-sound','audio-card'),'Sound Settings…', lambda: self.launch('pavucontrol-qt'))
+        m.exec_(self.sound_more.mapToGlobal(QPoint(self.sound_more.width(), 0)))
 
     def apply_volume(self):
         value=self.vol_slider.value()
@@ -347,10 +546,9 @@ class ActionCenter(PopupFrame):
 
     def apply_brightness(self):
         value=self.bri_slider.value()
-        if shutil.which('brightnessctl'):
-            safe_popen(['brightnessctl','-q','set',f'{value}%'])
-        elif shutil.which('xbacklight'):
-            safe_popen(['xbacklight','-set',str(value)])
+        method=(self.panel.last_status or {}).get('brightness_method') or 'software'
+        set_brightness(value, method)
+        self.panel.last_status['brightness']=value
 
     def power_menu(self):
         m=RoundedMenu(self)
@@ -605,6 +803,8 @@ class EdukaPanel(QWidget):
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
         self.workarea_timer=QTimer(self); self.workarea_timer.timeout.connect(self.enforce_window_space); self.workarea_timer.start(1400)
         self.start_window_spy()
+        # Software brightness (no backlight) is lost at logout: re-apply it.
+        QTimer.singleShot(1500, restore_software_brightness)
         # Openbox has no compositor: start picom so transparency works.
         QTimer.singleShot(0, ensure_compositor)
         self._compositor_watch=watch_compositor(self, before_restart=self.stop_window_spy, initial=self._composited)
@@ -674,12 +874,15 @@ class EdukaPanel(QWidget):
 
     def reload_from_watcher(self):
         icon_theme_setup(force=True)
+        app=QApplication.instance()
+        if app is not None and app.styleSheet() != tooltip_qss():
+            app.setStyleSheet(tooltip_qss())
         self.load_config()
         self.update_tasks()
         self.update_status_icons()
     def load_config(self):
         icon_theme_setup(force=True); cfg=read_panel_config(); self.current_cfg=cfg
-        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); liquid=effective_theme(cfg.get('theme_style')) == THEME_LIQUID and self._composited
+        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); theme=effective_theme(cfg.get('theme_style')); liquid=theme == THEME_LIQUID and self._composited; dark=theme == THEME_DARK
         h=max(34, min(58, int(cfg.get('height',40)))); icon_size=max(18, min(42, int(cfg.get('icon_size',24))))
         width=max(45, min(100, int(cfg.get('width_percent',96)))); alpha=max(0.50, min(1.0, float(cfg.get('transparency',0.54))))
         if high_contrast or not self._composited: alpha=1.0
@@ -695,6 +898,18 @@ class EdukaPanel(QWidget):
         QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{11 if h < 46 else 12}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
         if high_contrast:
             self.bg.setStyleSheet(self.bg.styleSheet()+'''QPushButton#startButton,QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#taskButton,QPushButton#batteryButton,QPushButton#clockButton{background:white;color:#101817;border:2px solid #344d47;font-weight:900;} QLabel#langLabel{color:#101817;background:white;border:2px solid #344d47;border-radius:7px;font-weight:900;} QFrame#trayGroup{background:white;border:2px solid #344d47;}''')
+        elif dark:
+            # Edukasaun-Dark: Orchis dark surfaces with the teal accent.
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(52,52,52,{bg_alpha}),stop:1 rgba(33,33,33,{bg_alpha}));border:1px solid rgba(255,255,255,40);border-bottom:1px solid rgba(0,0,0,90);border-radius:{radius}px;}}
+            QPushButton#startButton,QPushButton#taskButton{{background:rgba(255,255,255,20);border:1px solid rgba(255,255,255,32);color:rgba(255,255,255,230);}}
+            QPushButton#startButton:hover,QPushButton#taskButton:hover{{background:rgba(255,255,255,40);border:1px solid #4DB6AC;}}
+            QPushButton#taskButton[activeTask="true"]{{background:rgba(77,182,172,55);border:1px solid #4DB6AC;border-bottom:3px solid #4DB6AC;}}
+            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{background:transparent;border:0;color:rgba(255,255,255,230);}}
+            QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,30);}}
+            QFrame#trayGroup{{background:rgba(255,255,255,16);border:1px solid rgba(255,255,255,30);}}
+            QPushButton#batteryButton{{background:rgba(77,182,172,50);color:#B2DFDB;}}
+            QLabel#langLabel{{color:rgba(255,255,255,230);}}
+            QPushButton#desktopButton{{border-left:1px solid rgba(255,255,255,50);}}''')
         elif liquid:
             glass=liquid_glass_surface(alpha/0.54, radius, 1)
             pill=liquid_glass_surface(1.15, max(12,int(h/2.7)), 1)
@@ -1557,6 +1772,6 @@ if __name__ == '__main__':
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); app.setStyleSheet(TOOLTIP_QSS); icon_theme_setup(); panel=EdukaPanel()
+    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
     if not panel._fullscreen_hidden: panel.show()
     registry_update('panel', {'pid': os.getpid(), 'running': True}); sys.exit(app.exec_())

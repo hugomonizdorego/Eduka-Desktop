@@ -5,12 +5,29 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.14"
+VERSION = "0.9.15"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
 THEME_LIQUID = "Liquid Glass"
+THEME_DARK = "Edukasaun-Dark"
+THEMES = [THEME_DEFAULT, THEME_LIQUID, THEME_DARK]
+
+# Edukasaun-Dark: colors from the Orchis dark theme by vinceliuice
+# (github.com/vinceliuice/Orchis-theme, GPL-3.0): grey 900/800 surfaces,
+# white text at 87 %/60 % and the Orchis teal-300/400 accent.
+DARK = {
+    'base': (33, 33, 33),        # Orchis grey-900 #212121
+    'surface': (44, 44, 44),     # Orchis dark window background
+    'card': (56, 56, 56),
+    'raised': (66, 66, 66),      # Orchis grey-800 #424242
+    'border': 'rgba(255,255,255,30)',
+    'text': 'rgba(255,255,255,222)',
+    'text2': 'rgba(255,255,255,153)',
+    'accent': '#4DB6AC',         # Orchis teal-300
+    'accent_dark': '#26A69A',    # Orchis teal-400
+}
 # Internal registry/build name is Eduka-Desktop. The visible OS name stays "Edukasaun Desktop".
 BASE_CONFIG = Path.home()/".config"/"eduka-desktop"
 LEGACY_BASE_CONFIG = Path.home()/".config"/"edukasaun-desktop"
@@ -183,7 +200,125 @@ def liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
             f'border:{rim}px solid rgba(255,255,255,{a(200)});border-bottom:{rim}px solid rgba(255,255,255,{a(110)});'
             f'border-radius:{radius}px;')
 
-TOOLTIP_QSS = 'QToolTip{background:#10231e;color:#ffffff;border:0;padding:5px 8px;border-radius:6px;}'
+TOOLTIP_QSS = 'QToolTip{background:#fbfefc;color:#1f2d2a;border:1px solid rgba(0,120,90,70);padding:5px 8px;border-radius:8px;}'
+TOOLTIP_QSS_DARK = 'QToolTip{background:#383838;color:#ffffff;border:1px solid rgba(255,255,255,40);padding:5px 8px;border-radius:8px;}'
+
+def tooltip_qss():
+    return TOOLTIP_QSS_DARK if is_dark_theme() else TOOLTIP_QSS
+
+MENU_QSS_DARK = """
+QMenu{background:#2c2c2c;color:#ffffff;border:1px solid rgba(255,255,255,40);border-radius:14px;padding:6px 5px;}
+QMenu::item{background:transparent;padding:7px 28px 7px 10px;margin:1px 2px;border-radius:9px;color:rgba(255,255,255,222);}
+QMenu::item:selected{background:#26A69A;color:#ffffff;}
+QMenu::item:disabled{color:rgba(255,255,255,90);background:transparent;}
+QMenu::icon{padding-left:6px;}
+QMenu::separator{height:1px;background:rgba(255,255,255,30);margin:5px 12px;}
+QMenu::indicator{width:14px;height:14px;padding-left:6px;}
+QMenu::right-arrow{width:8px;height:8px;margin-right:8px;}
+"""
+
+# --- Arrows for spin boxes and combo boxes --------------------------------
+# A stylesheet on QSpinBox/QComboBox replaces the native arrows; without an
+# image they disappear. Small SVG chevrons are written once to the cache.
+_ARROW_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">'
+              '<path d="{d}" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+_ARROW_PATHS = {'up': 'M2.5 7.8 6 4.2 9.5 7.8', 'down': 'M2.5 4.2 6 7.8 9.5 4.2',
+                'left': 'M7.8 2.5 4.2 6 7.8 9.5', 'right': 'M4.2 2.5 7.8 6 4.2 9.5'}
+
+def arrow_icon_path(direction, color='#2d4a43'):
+    folder=CACHE_DIR/'ui'
+    path=folder/f"arrow-{direction}-{color.strip('#')}.svg"
+    if not path.exists():
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(_ARROW_SVG.format(d=_ARROW_PATHS[direction], c=color), encoding='utf-8')
+        except Exception:
+            pass
+    return str(path)
+
+def arrow_qss(dark=None):
+    """Up/down arrows for spin boxes and the drop-down arrow for combo boxes."""
+    dark=is_dark_theme() if dark is None else dark
+    color='#e0e0e0' if dark else '#2d4a43'
+    hover='rgba(255,255,255,30)' if dark else 'rgba(0,168,121,40)'
+    up=arrow_icon_path('up', color); down=arrow_icon_path('down', color)
+    return (
+        'QSpinBox,QDoubleSpinBox{padding-right:28px;}'
+        'QSpinBox::up-button,QDoubleSpinBox::up-button{subcontrol-origin:border;subcontrol-position:top right;width:24px;border:0;border-top-right-radius:9px;background:transparent;}'
+        'QSpinBox::down-button,QDoubleSpinBox::down-button{subcontrol-origin:border;subcontrol-position:bottom right;width:24px;border:0;border-bottom-right-radius:9px;background:transparent;}'
+        f'QSpinBox::up-button:hover,QDoubleSpinBox::up-button:hover,QSpinBox::down-button:hover,QDoubleSpinBox::down-button:hover{{background:{hover};}}'
+        f'QSpinBox::up-arrow,QDoubleSpinBox::up-arrow{{image:url("{up}");width:12px;height:12px;}}'
+        f'QSpinBox::down-arrow,QDoubleSpinBox::down-arrow{{image:url("{down}");width:12px;height:12px;}}'
+        'QComboBox{padding-right:28px;}'
+        'QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:center right;width:26px;border:0;background:transparent;}'
+        f'QComboBox::down-arrow{{image:url("{down}");width:12px;height:12px;}}'
+        f'QComboBox::down-arrow:on{{image:url("{up}");}}'
+    )
+
+# --- Icon themes -------------------------------------------------------------
+def list_icon_themes():
+    """Installed icon themes that contain icons (cursor-only themes skipped)."""
+    names={}
+    for root in [Path.home()/'.local/share/icons', Path.home()/'.icons', Path('/usr/local/share/icons'), Path('/usr/share/icons')]:
+        try:
+            entries=list(root.iterdir())
+        except Exception:
+            continue
+        for d in entries:
+            index=d/'index.theme'
+            if d.name in names or d.name.casefold() == 'default' or not index.is_file():
+                continue
+            try:
+                text=index.read_text(encoding='utf-8', errors='ignore')
+            except Exception:
+                continue
+            if re.search(r'^\s*Directories\s*=\s*\S', text, re.M) is None:
+                continue
+            if re.search(r'^\s*Hidden\s*=\s*true', text, re.M | re.I):
+                continue
+            label=re.search(r'^\s*Name\s*=\s*(.+)$', text, re.M)
+            names[d.name]=(label.group(1).strip() if label else d.name)
+    return sorted(names.items(), key=lambda item: item[1].casefold())
+
+def _set_ini_value(path, section, key, value):
+    path=Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    lines=path.read_text(encoding='utf-8', errors='ignore').splitlines() if path.exists() else []
+    out=[]; in_section=False; done=False; seen_section=False
+    for line in lines:
+        stripped=line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            if in_section and not done:
+                out.append(f'{key}={value}'); done=True
+            in_section = stripped == f'[{section}]'
+            seen_section = seen_section or in_section
+        elif in_section and re.match(r'\s*%s\s*=' % re.escape(key), line):
+            if not done:
+                out.append(f'{key}={value}'); done=True
+            continue
+        out.append(line)
+    if not done:
+        if not seen_section:
+            if out and out[-1].strip():
+                out.append('')
+            out.append(f'[{section}]')
+        out.append(f'{key}={value}')
+    tmp=path.with_suffix(path.suffix+'.eduka-tmp')
+    tmp.write_text('\n'.join(out)+'\n', encoding='utf-8'); os.replace(tmp, path)
+
+def set_icon_theme(name):
+    """Use an icon theme for the whole desktop: LXQt (file manager, dialogs),
+    GTK applications and the Eduka components."""
+    name=str(name or '').strip()
+    if not name:
+        return False
+    try:
+        _set_ini_value(Path.home()/'.config/lxqt/lxqt.conf', 'General', 'icon_theme', name)
+        for gtk in ('gtk-3.0', 'gtk-4.0'):
+            _set_ini_value(Path.home()/'.config'/gtk/'settings.ini', 'Settings', 'gtk-icon-theme-name', name)
+    except Exception:
+        return False
+    icon_theme_setup(force=True); touch_reload()
+    return True
 
 def round_menu(menu):
     """Give any QMenu (also Qt's built-in ones) smooth rounded corners.
@@ -191,12 +326,13 @@ def round_menu(menu):
     Without a compositor the menu stays an opaque window with a small radius,
     so no black corners appear.
     """
+    qss=MENU_QSS_DARK if is_dark_theme() else MENU_QSS
     if compositor_running():
         menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
-        menu.setStyleSheet(MENU_QSS)
+        menu.setStyleSheet(qss)
     else:
-        menu.setStyleSheet(MENU_QSS.replace('border-radius:14px', 'border-radius:0px'))
+        menu.setStyleSheet(qss.replace('border-radius:14px', 'border-radius:0px'))
     return menu
 
 class RoundedMenu(QMenu):
@@ -373,8 +509,22 @@ def panel_config_path(): return PANEL_CONFIG_DIR/'settings.json'
 def menu_config_path(): return MENU_CONFIG_DIR/'settings.json'
 def desktop_config_path(): return DESKTOP_CONFIG_DIR/'settings.json'
 def normalize_theme_style(value):
-    """Map retired 0.9.x theme names to the two supported themes."""
-    return THEME_LIQUID if str(value or '').strip().casefold() == THEME_LIQUID.casefold() else THEME_DEFAULT
+    """Map stored or retired theme names to Eduka-Default-Theme, Liquid Glass or Edukasaun-Dark."""
+    text=str(value or '').strip().casefold()
+    for theme in THEMES:
+        if text == theme.casefold():
+            return theme
+    return THEME_DEFAULT
+
+def current_theme():
+    """Theme in effect for Eduka components right now."""
+    try:
+        return effective_theme(read_desktop_config().get('theme_style'))
+    except Exception:
+        return THEME_DEFAULT
+
+def is_dark_theme():
+    return current_theme() == THEME_DARK
 def read_panel_config():
     data=read_json(panel_config_path(), DEFAULT_PANEL)
     changed=False

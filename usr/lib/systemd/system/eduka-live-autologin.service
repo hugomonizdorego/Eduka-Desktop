@@ -1,0 +1,12 @@
+[Unit]
+Description=Eduka-Desktop: log the live session in automatically
+Documentation=file:///usr/share/edukasaun-desktop/doc/HISTORY.txt
+After=live-config.service local-fs.target
+Before=display-manager.service sddm.service lightdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/edukasaun-desktop/live-autologin
+
+[Install]
+WantedBy=graphical.target

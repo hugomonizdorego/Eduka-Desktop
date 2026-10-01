@@ -64,6 +64,34 @@ if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
     done
 fi
 
+# --- Login screen theme -------------------------------------------------
+# /etc/sddm.conf is read after /etc/sddm.conf.d; point a theme set there to
+# the Edukasaun theme as well.
+if [ -f /etc/sddm.conf ] && grep -q '^[[:space:]]*Current=' /etc/sddm.conf; then
+    sed -i 's/^[[:space:]]*Current=.*/Current=edukasaun/' /etc/sddm.conf
+fi
+mkdir -p /usr/share/Edukasaun/SDDM
+
+# --- Live session autologin ---------------------------------------------
+# The service only acts when booted with boot=live; on installed systems it
+# removes any live autologin file so the login screen asks for a password.
+if command -v deb-systemd-helper >/dev/null 2>&1; then
+    deb-systemd-helper enable eduka-live-autologin.service >/dev/null 2>&1 || true
+elif command -v systemctl >/dev/null 2>&1; then
+    systemctl enable eduka-live-autologin.service >/dev/null 2>&1 || true
+fi
+
+# --- Standard account edukasaun / edukasaun --------------------------------
+# Only while the ISO is built: no personal account exists yet (the Cubic
+# chroot). An installed computer with its own users is never changed; there
+# 'sudo eduka-default-user' adds the account on request.
+if ! getent passwd edukasaun >/dev/null 2>&1; then
+    human=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" {print $1; exit}')
+    if [ -z "$human" ]; then
+        eduka-default-user >/dev/null 2>&1 || true
+    fi
+fi
+
 # SDDM has no "default session" option; it preselects the session stored in
 # its state file. Preselect Eduka-Desktop (X11) when nothing is stored, when
 # the stored session was removed, or when it is the plain LXQt session.
