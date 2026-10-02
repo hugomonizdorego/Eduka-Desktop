@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Eduka-Transparan
+Comment=Edukasaun OS dark glass theme after Transparent-Shell-Theme by mrbrownstone07 (window borders); GTK applications use Edukasaun-Dark
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Edukasaun-Dark
+MetacityTheme=Eduka-Transparan
+ButtonLayout=:minimize,maximize,close

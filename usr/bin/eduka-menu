@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, os, time, json, fcntl, random
+import sys, os, time, json, fcntl, random, math
 from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
@@ -92,7 +92,66 @@ def _mix_dark(rgb, amount, base=(44, 44, 44)):
     """Blend a color toward the Edukasaun-Dark surface."""
     return tuple(int(b + (value - b) * amount) for value, b in zip(rgb, base))
 
-UI = {'dark': False}
+UI = {'dark': False, 'low': False, 'trans': False}
+FX = {'hover': 'none', 'launch': 'none'}   # Eduka-Settings → Effects (strong computers only)
+
+
+class EffectsOverlay(QWidget):
+    """Draws the launch effects (bubbles, ripple, zoom, bounce, confetti)
+    over Eduka-Desktop. Transparent for the mouse; it only paints while an
+    effect runs (about half a second) and then stops its timer."""
+    DURATION=0.55
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents); self.setAttribute(Qt.WA_NoSystemBackground)
+        self.timer=QTimer(self); self.timer.timeout.connect(self.update)
+        self.kind=None; self.done=None; self.hide()
+
+    def play(self, kind, center, pixmap, accent, done):
+        self.kind=kind; self.center=QPointF(center); self.pix=pixmap; self.accent=QColor(*accent); self.done=done
+        self.start=time.monotonic(); rng=_RNG
+        self.parts=[(rng.uniform(0, 2*math.pi), rng.uniform(60, 190), rng.uniform(5, 15), rng.uniform(0, 0.25), rng.choice(PALETTE['colors']))
+                    for _ in range(18 if kind in ('bubble', 'confetti') else 0)]
+        self.setGeometry(self.parent().rect()); self.raise_(); self.show(); self.timer.start(16)
+
+    def paintEvent(self, e):
+        if self.kind is None:
+            return
+        t=(time.monotonic()-self.start)/self.DURATION
+        if t >= 1.0:
+            self.timer.stop(); self.hide(); kind=self.kind; self.kind=None
+            if self.done: self.done()
+            return
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); c=self.center
+        ease=1-(1-t)**3
+        if self.kind == 'bubble':
+            for ang, dist, size, delay, col in self.parts:
+                k=max(0.0, min(1.0, (t-delay)/(1-delay)))
+                if k <= 0: continue
+                pos=QPointF(c.x()+math.cos(ang)*dist*0.6*k, c.y()-dist*k+math.sin(ang)*14)
+                r=size*(0.6+0.8*k); a=int(200*(1-k))
+                p.setPen(QPen(QColor(255,255,255,a), 1.4)); p.setBrush(QColor(col[0], col[1], col[2], int(a*0.45)))
+                p.drawEllipse(pos, r, r)
+                p.setPen(Qt.NoPen); p.setBrush(QColor(255,255,255,int(a*0.8))); p.drawEllipse(QPointF(pos.x()-r*0.35, pos.y()-r*0.35), r*0.22, r*0.22)
+        elif self.kind == 'confetti':
+            for ang, dist, size, delay, col in self.parts:
+                k=max(0.0, min(1.0, (t-delay)/(1-delay)))
+                pos=QPointF(c.x()+math.cos(ang)*dist*k, c.y()+math.sin(ang)*dist*k*0.7+120*k*k)
+                p.save(); p.translate(pos); p.rotate(ang*57+720*k)
+                p.setPen(Qt.NoPen); p.setBrush(QColor(col[0], col[1], col[2], int(255*(1-k)))); p.drawRect(QRectF(-size/2, -size/4, size, size/2)); p.restore()
+        elif self.kind == 'ripple':
+            for i in range(3):
+                k=max(0.0, min(1.0, ease*1.2-i*0.18))
+                r=24+k*150; a=int(220*(1-k))
+                p.setPen(QPen(QColor(self.accent.red(), self.accent.green(), self.accent.blue(), a), 3-i*0.6)); p.setBrush(Qt.NoBrush); p.drawEllipse(c, r, r)
+        if self.kind in ('zoom-in', 'zoom-out', 'bounce', 'ripple', 'bubble') and self.pix is not None and not self.pix.isNull():
+            if self.kind == 'zoom-in': scale=1+2.2*ease; a=1-t
+            elif self.kind == 'zoom-out': scale=max(0.05, 1-ease); a=1-t*0.6
+            elif self.kind == 'bounce': scale=1+0.35*abs(math.sin(t*math.pi*2.5))*(1-t); a=1.0
+            else: scale=1+0.25*math.sin(t*math.pi); a=1-t
+            w=self.pix.width()*scale/self.pix.devicePixelRatio(); h=self.pix.height()*scale/self.pix.devicePixelRatio()
+            p.setOpacity(max(0.0, min(1.0, a))); p.drawPixmap(QRectF(c.x()-w/2, c.y()-h/2, w, h), self.pix, QRectF(self.pix.rect()))
+
 
 def random_accent(exclude=None):
     """A new random palette color, never the one a tile shows right now."""
@@ -107,7 +166,7 @@ class CategoryDelegate(QStyledItemDelegate):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.row_colors={}
+        self.row_colors={}; self.phase={}
 
     def color_for(self, row):
         return self.row_colors.get(row) or category_color(row)
@@ -119,18 +178,30 @@ class CategoryDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         painter.save()
         rect = option.rect.adjusted(4, 3, -4, -3)
+        wave=math.sin(math.pi*self.phase.get(index.row(), 0.0))   # 0..1..0 while a hover effect runs
         accent = QColor(*self.color_for(index.row()))
         dark = UI['dark']
         selected = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
         high_contrast = bool(option.widget.property('accessibilityMode')) if option.widget else False
 
-        if selected:
+        if selected and UI['low'] and not high_contrast:
+            bg = QColor('#315bef'); border = QColor('#315bef'); text_color = QColor('#ffffff')
+        elif selected:
             bg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             bg.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue()))
             bg.setColorAt(1, QColor(max(0, accent.red()-20), max(0, accent.green()-20), max(0, accent.blue()-20)))
             border = QColor(255, 255, 255, 90)
             text_color = QColor(18, 35, 31) if accent.lightness() > 145 else QColor(255, 255, 255)
+        elif UI['low'] and not high_contrast:
+            # Eduka-Low-Theme: flat Yaru-remix colors.
+            bg = QColor('#eef2fe') if hover else QColor('#ffffff')
+            border = QColor('#315bef') if hover else QColor('#e0e0e0')
+            text_color = QColor('#3d3d3d')
+        elif UI['trans'] and not high_contrast:
+            bg = QColor(217, 217, 217, 40 if hover else 18)
+            border = QColor(accent.red(), accent.green(), accent.blue(), 200) if hover else QColor(255, 255, 255, 18)
+            text_color = QColor(242, 242, 242)
         elif dark and not high_contrast:
             bg = QColor(56, 56, 56, max(150, SURFACE['alpha'] - 30))
             border = QColor(accent.red(), accent.green(), accent.blue(), 90)
@@ -155,12 +226,17 @@ class CategoryDelegate(QStyledItemDelegate):
                 text_color = QColor(20, 38, 34)
 
         painter.setRenderHint(QPainter.Antialiasing, True)
+        if wave and FX['hover'] == 'glow':
+            glow=QColor(accent); glow.setAlpha(int(110*wave)); painter.setPen(QPen(glow, 5)); painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(QRectF(rect).adjusted(-1.5, -1.5, 1.5, 1.5), 13, 13)
         painter.setBrush(QBrush(bg))
         painter.setPen(QPen(border, 1))
-        painter.drawRoundedRect(rect, 12, 12)
+        painter.drawRoundedRect(rect, 6 if UI['low'] else 12, 6 if UI['low'] else 12)
+        lift=int(round(-4*wave)) if FX['hover'] == 'wave' else 0
+        shift=int(round(10*wave)) if FX['hover'] == 'slide' else (int(round(3*wave)) if FX['hover'] == 'wave' else 0)
 
-        icon_rect = QRect(rect.left() + 12, rect.top() + (rect.height() - 24) // 2, 24, 24)
-        if not selected and not high_contrast:
+        icon_rect = QRect(rect.left() + 12 + shift//2, rect.top() + (rect.height() - 24) // 2 + lift, 24, 24)
+        if not selected and not high_contrast and not UI['low']:
             # Colored badge behind each category icon: the whole list shows
             # the session palette, not only the selected row.
             badge = icon_rect.adjusted(-5, -5, 5, 5)
@@ -181,7 +257,7 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.setPen(text_color)
         font = painter.font(); font.setBold(True); font.setPointSize(max(9, font.pointSize()))
         painter.setFont(font)
-        text_rect = QRect(icon_rect.right() + 14, rect.top(), rect.width() - 54, rect.height())
+        text_rect = QRect(icon_rect.right() + 14 + shift//2, rect.top(), rect.width() - 54, rect.height())
         painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
         painter.restore()
 
@@ -220,6 +296,20 @@ class AppButton(QToolButton):
         a=SURFACE['alpha']
         if self._high_contrast:
             base=f'background:white;border:2px solid rgba(55,75,70,235);'
+        elif UI['low']:
+            self.setStyleSheet("""
+            QToolButton{background:#ffffff;border:1px solid #dcdcdc;border-radius:8px;padding:8px;color:#3d3d3d;font-weight:700;}
+            QToolButton:hover,QToolButton:focus{background:#eef2fe;border:1px solid #315bef;color:#181818;}
+            QToolButton:pressed{background:#d9e2fd;border:1px solid #315bef;}
+            """)
+            return
+        elif UI['trans']:
+            self.setStyleSheet(f"""
+            QToolButton{{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);border-radius:15px;padding:8px;color:rgba(242,242,242,235);font-weight:800;}}
+            QToolButton:hover,QToolButton:focus{{background:rgba(217,217,217,40);border:1px solid rgb({r},{g},{b});color:#ffffff;}}
+            QToolButton:pressed{{background:rgba(217,217,217,60);}}
+            """)
+            return
         elif UI['dark']:
             dr,dg,db=_mix_dark(self._accent, 0.16); hr,hg,hb=_mix_dark(self._accent, 0.45)
             self.setStyleSheet(f"""
@@ -261,8 +351,7 @@ class AppButton(QToolButton):
         if getattr(win, '_launching', False):
             return
         win._launching = True
-        win.hide_menu(force=True)
-        QTimer.singleShot(35, lambda: (launch_app(self.app.get('exec',''), self.app.get('name','')), setattr(win, '_launching', False)))
+        win.launch_app_with_effect(self.app, self)
 
     def ctx(self, pos):
         m = RoundedMenu(self)
@@ -314,6 +403,22 @@ class AppListItem(QFrame):
         base_alpha=255 if self._high_contrast else SURFACE['alpha']
         border='rgba(55,75,70,235)' if self._high_contrast else f'rgba({r},{g},{b},60)'
         stripe='#344d47' if self._high_contrast else f'rgb({r},{g},{b})'
+        if UI['low'] and not self._high_contrast:
+            self.setStyleSheet("""
+            QFrame#appListItem{border-radius:6px;background:#ffffff;border:1px solid #dcdcdc;border-left:4px solid #315bef;}
+            QFrame#appListItem QLabel#appName{color:#181818;font-weight:800;font-size:13px;}
+            QFrame#appListItem QLabel#appDetails{color:#5d5d5d;font-size:11px;}
+            QFrame#appListItem:hover,QFrame#appListItem:focus{background:#eef2fe;border:1px solid #315bef;border-left:4px solid #315bef;}
+            """)
+            return
+        if UI['trans'] and not self._high_contrast:
+            self.setStyleSheet(f"""
+            QFrame#appListItem{{border-radius:15px;background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);border-left:5px solid {stripe};}}
+            QFrame#appListItem QLabel#appName{{color:rgba(242,242,242,240);font-weight:900;font-size:13px;}}
+            QFrame#appListItem QLabel#appDetails{{color:rgba(242,242,242,160);font-size:11px;}}
+            QFrame#appListItem:hover,QFrame#appListItem:focus{{background:rgba(217,217,217,40);border:1px solid rgb({r},{g},{b});border-left:5px solid rgb({r},{g},{b});}}
+            """)
+            return
         if UI['dark'] and not self._high_contrast:
             hr,hg,hb=_mix_dark(self._accent, 0.40)
             self.setStyleSheet(f"""
@@ -376,8 +481,7 @@ class AppListItem(QFrame):
             return
         win._launching = True
         registry_update('desktop', {'last_launch': self.app.get('name',''), 'launching': True, 'layout': 'List', 'version': VERSION})
-        win.hide_menu(force=True)
-        QTimer.singleShot(55, lambda: (launch_app(self.app.get('exec',''), self.app.get('name','')), setattr(win, '_launching', False), registry_update('desktop', {'launching': False})))
+        win.launch_app_with_effect(self.app, self)
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton:
@@ -535,6 +639,7 @@ class EdukaMenu(QWidget):
             QPushButton#footChip{border-radius:16px;padding:8px 14px;}
             QPushButton#aboutChip{border-radius:16px;padding:8px 14px;}
         """
+        self.fx=EffectsOverlay(self)
         # apply_visual_settings() sets the one window stylesheet (base + theme);
         # setting base_qss first as well left Qt with stale theme rules.
         self.apply_visual_settings()
@@ -547,15 +652,22 @@ class EdukaMenu(QWidget):
         composited=getattr(self, '_composited', True)
         theme=effective_theme(dcfg.get('theme_style'))
         liquid=theme == THEME_LIQUID and composited
-        dark=theme == THEME_DARK and not accessibility
-        UI['dark']=dark
+        dark=theme in DARK_THEMES and not accessibility
+        low=theme == THEME_LOW and not accessibility
+        trans=theme == THEME_TRANSPARENT and composited and not accessibility
+        UI['dark']=dark; UI['low']=low; UI['trans']=trans
+        fx=effects_settings(); FX['hover']=fx['hover']; FX['launch']=fx['launch']
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
-        if accessibility or not composited:
-            alpha=1.0 if not composited else 0.98
+        if accessibility or not composited or low:
+            alpha=1.0 if (not composited or low) else 0.98
         bg_alpha = int(alpha * 255)
         radius = 22 if composited else 0
-        if dark:
+        if low:
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:#f7f7f7;border:1px solid #d0d0d0;border-radius:{min(radius, 10)}px;}} QLabel{{color:#3d3d3d;}}')
+        elif trans:
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(26,26,26,{max(150, min(242, int(bg_alpha*1.15)))});border:1px solid rgba(255,255,255,18);border-radius:{radius}px;}} QLabel{{color:rgba(242,242,242,235);}}')
+        elif dark:
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{bg_alpha});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
         elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
@@ -600,12 +712,37 @@ class EdukaMenu(QWidget):
                 'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:#26A69A;color:white;border:1px solid #26A69A;}'
                 'QPushButton#closeButton{background:rgba(239,154,154,30);color:#EF9A9A;}'
             ) if dark else ''
+            low_qss = (
+                'QLineEdit{background:#ffffff;border:1px solid #cfcfcf;border-radius:8px;color:#3d3d3d;selection-background-color:#315bef;}'
+                'QLineEdit:focus{border:1px solid #315bef;}'
+                'QPushButton{background:#ececec;border:1px solid #d6d6d6;border-radius:8px;color:#3d3d3d;}'
+                'QPushButton:hover{background:#e3e9fd;border:1px solid #315bef;}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:#315bef;color:white;border:1px solid #315bef;}'
+                'QFrame#contentCard{background:#ffffff;border:1px solid #dcdcdc;border-radius:8px;}'
+                'QFrame#sideCard{background:#ffffff;border:1px solid #dcdcdc;border-radius:8px;}'
+                'QListWidget#categoryList{background:#f2f2f2;border:1px solid #dcdcdc;border-radius:8px;}'
+                'QFrame#sysInfoCard{background:#f7f7f7;border:1px solid #e0e0e0;border-radius:6px;}'
+                'QScrollBar::handle:vertical{background:#aea79f;}'
+                'QLabel#brandTitle,QLabel#sectionTitle,QLabel#infoTitle{color:#181818;}'
+            ) if low else ''
+            trans_qss = (
+                'QLineEdit{background:rgba(217,217,217,22);border:1px solid rgba(255,255,255,26);color:#f2f2f2;border-radius:15px;}'
+                'QLineEdit:focus{border:1px solid rgba(242,242,242,150);background:rgba(217,217,217,32);}'
+                'QPushButton{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);color:rgba(242,242,242,235);}'
+                'QPushButton:hover{background:rgba(217,217,217,40);border:1px solid rgba(255,255,255,40);}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:rgba(242,242,242,230);color:#1a1a1a;border:1px solid rgba(242,242,242,230);}'
+                'QFrame#contentCard{background:transparent;border:1px solid rgba(255,255,255,14);border-radius:15px;}'
+                'QFrame#sideCard{background:rgba(217,217,217,14);border:1px solid rgba(255,255,255,16);border-radius:15px;}'
+                'QListWidget#categoryList{background:rgba(217,217,217,10);border:1px solid rgba(255,255,255,14);border-radius:15px;}'
+                'QFrame#sysInfoCard{background:rgba(217,217,217,18);border:1px solid rgba(255,255,255,14);}'
+                'QScrollBar::handle:vertical{background:rgba(242,242,242,90);}'
+            ) if trans else ''
             # The application stylesheet (tooltips) must change before the
             # window stylesheet; the other order leaves window rules stale.
             app=QApplication.instance()
             if app is not None and app.styleSheet() != tooltip_qss():
                 app.setStyleSheet(tooltip_qss())
-            self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + accessibility_qss)
+            self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
         # The drop shadow re-renders the whole window on every repaint; only
         # when the user asked for shadows and a compositor can show them.
@@ -628,11 +765,41 @@ class EdukaMenu(QWidget):
         except Exception:
             pass
 
+    def launch_app_with_effect(self, app, widget):
+        """Start the application at once; play the chosen launch effect over
+        Eduka-Desktop and close it when the effect has finished."""
+        def start():
+            launch_app(app.get('exec',''), app.get('name','')); self._launching=False
+            registry_update('desktop', {'launching': False})
+        kind=FX['launch']
+        if kind == 'none' or not self.isVisible():
+            self.hide_menu(force=True); QTimer.singleShot(35, start); return
+        QTimer.singleShot(35, start)
+        if kind == 'fade':
+            anim=QPropertyAnimation(self, b'windowOpacity', self); anim.setDuration(260); anim.setStartValue(1.0); anim.setEndValue(0.0)
+            anim.finished.connect(lambda: (self.hide_menu(force=True), self.setWindowOpacity(1.0))); anim.start(); self._fade_anim=anim
+            return
+        center=widget.mapTo(self, widget.rect().center())
+        pix=get_icon(app.get('icon')).pixmap(64, 64)
+        accent=getattr(widget, '_accent', (0, 168, 121))
+        self.fx.play(kind, center, pix, accent, lambda: self.hide_menu(force=True))
+
+    def start_hover_effect(self, row):
+        if FX['hover'] == 'none':
+            return
+        delegate=self.cats.itemDelegate()
+        anim=QVariantAnimation(self); anim.setDuration(420); anim.setStartValue(0.0); anim.setEndValue(1.0); anim.setEasingCurve(QEasingCurve.OutCubic)
+        def step(v, r=row):
+            delegate.phase[r]=float(v); self.cats.viewport().update()
+        anim.valueChanged.connect(step); anim.finished.connect(lambda r=row: (delegate.phase.pop(r, None), self.cats.viewport().update()))
+        anim.start(QAbstractAnimation.DeleteWhenStopped)
+
     def category_hovered(self, item):
         row=self.cats.row(item)
         if row != getattr(self, '_hover_row', None):
             self._hover_row=row
             self.cats.itemDelegate().rerandomize(row); self.cats.viewport().update()
+            self.start_hover_effect(row)
         self._orca_category_hover(item)
 
     def _orca_category_hover(self, item):
@@ -668,7 +835,9 @@ class EdukaMenu(QWidget):
             )
 
     def position(self):
-        screen=QApplication.primaryScreen().availableGeometry(); panel=read_panel_config(); dcfg=read_desktop_config(); ph=int(panel.get('height',42))+18
+        screen=QApplication.primaryScreen().availableGeometry(); panel=read_panel_config(); dcfg=read_desktop_config()
+        # The work area already leaves room for Eduka-Panel; a side panel needs no extra height.
+        ph=18 if panel_position(panel) in ('Left', 'Right') else int(panel.get('height',42))+18
         wp=max(94, min(99, int(dcfg.get('width_percent',98)))) / 100.0
         hp=max(78, min(95, int(dcfg.get('height_percent',92)))) / 100.0
         available_h = max(520, screen.height() - ph - 14)

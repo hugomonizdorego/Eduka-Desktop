@@ -1,9 +1,6 @@
 /* XPM */
-static const char *bottom_inactive[] = {
-/* columns rows colors chars-per-pixel */
-"16 2 1 1 ",
-"  c gray20 s inactive_color_1",
-/* pixels */
-"                ",
-"                "
+static char *bottom[] = {
+"8 1 1 1",
+". c #383838",
+"........"
 };

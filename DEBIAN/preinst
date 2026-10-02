@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-# Edukasaun Desktop 0.9.17 clean upgrade: stop old runtime before files are replaced.
+# Edukasaun Desktop 0.9.18 clean upgrade: stop old runtime before files are replaced.
 pkill -f "eduka-menu --daemon" 2>/dev/null || true
 pkill -x eduka-panel 2>/dev/null || true
 for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do

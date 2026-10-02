@@ -40,6 +40,28 @@ SETTINGS_PALETTES = {
         'chip': 'rgba(77,182,172,40)', 'chip_text': '#80cbc4', 'reset': 'rgba(255,193,7,30)', 'reset_text': '#ffe082',
         'groove': 'rgba(255,255,255,45)', 'ok': '#80cbc4', 'error': '#ef9a9a',
     },
+    THEME_LOW: {
+        'bg': '#f7f7f7', 'sidebar': '#ececec', 'card': '#ffffff', 'border': '#dcdcdc',
+        'text': '#3d3d3d', 'title': '#181818', 'sub': '#666666', 'accent': '#315bef', 'accent_hover': '#4a6ff2',
+        'field': '#ffffff', 'field_border': '#cfcfcf', 'hover': '#e3e3e3', 'button': '#f2f2f2',
+        'chip': '#e3e9fd', 'chip_text': '#315bef', 'reset': '#fff4e5', 'reset_text': '#7a4b00',
+        'groove': '#dcdcdc', 'ok': '#0e8420', 'error': '#c7162b',
+    },
+    THEME_TRANSPARENT: {
+        'bg': '#1a1a1a', 'sidebar': '#141414', 'card': '#232323', 'border': 'rgba(255,255,255,18)',
+        'text': 'rgba(242,242,242,235)', 'title': '#f2f2f2', 'sub': 'rgba(242,242,242,150)', 'accent': '#5c5c5c', 'accent_hover': '#6c6c6c',
+        'field': '#2b2b2b', 'field_border': 'rgba(255,255,255,30)', 'hover': 'rgba(217,217,217,20)', 'button': 'rgba(217,217,217,20)',
+        'chip': 'rgba(217,217,217,30)', 'chip_text': '#f2f2f2', 'reset': 'rgba(255,193,7,26)', 'reset_text': '#ffe082',
+        'groove': 'rgba(255,255,255,40)', 'ok': '#9ad9a0', 'error': '#ef9a9a',
+    },
+}
+# Small previews of the themes (surface, panel, accent, text) for the theme cards.
+THEME_SWATCHES = {
+    THEME_DEFAULT: ('#f4faf7', '#ffffff', '#00a879', '#1f2d2a'),
+    THEME_LOW: ('#f7f7f7', '#323030', '#315bef', '#3d3d3d'),
+    THEME_LIQUID: ('#dcecf6', '#ffffff', '#1e9bd7', '#1c2b33'),
+    THEME_DARK: ('#2c2c2c', '#212121', '#26a69a', '#ffffff'),
+    THEME_TRANSPARENT: ('#1a1a1a', '#262626', '#d9d9d9', '#f2f2f2'),
 }
 
 def check_icon_path():
@@ -67,6 +89,21 @@ QListWidget#navList{{background:transparent;border:0;outline:0;padding:0;}}
 QListWidget#navList::item{{padding:10px 10px;border-radius:12px;margin:2px 0;color:{c['text']};font-weight:600;}}
 QListWidget#navList::item:hover{{background:{c['hover']};}}
 QListWidget#navList::item:selected{{background:{c['accent']};color:#ffffff;}}
+QToolButton#navItem{{background:transparent;border:0;border-radius:11px;padding:6px 10px;text-align:left;color:{c['text']};font-weight:600;}}
+QToolButton#navItem:hover{{background:{c['hover']};}}
+QToolButton#navItem:checked{{background:{c['accent']};color:#ffffff;}}
+QLabel#navGroup{{color:{c['sub']};font-size:10px;font-weight:800;letter-spacing:1px;padding:4px 10px 2px 10px;}}
+QComboBox:disabled,QSpinBox:disabled,QDoubleSpinBox:disabled,QLineEdit:disabled{{color:{c['sub']};background:{c['button']};}}
+QFrame#navLine{{background:{c['border']};max-height:1px;min-height:1px;border:0;margin:6px 6px 0 6px;}}
+QFrame#settingRow{{background:transparent;border:0;}}
+QLabel#rowTitle{{font-weight:700;color:{c['title']};}}
+QFrame#rowLine{{background:{c['border']};max-height:1px;min-height:1px;border:0;}}
+QToolButton#themeCard,QToolButton#posCard{{background:{c['field']};border:2px solid {c['field_border']};border-radius:14px;padding:6px;color:{c['text']};font-weight:700;}}
+QToolButton#themeCard:hover,QToolButton#posCard:hover{{border:2px solid {c['accent_hover']};}}
+QToolButton#themeCard:checked,QToolButton#posCard:checked{{border:2px solid {c['accent']};background:{c['chip']};}}
+QToolButton#ledSwatch{{border-radius:13px;border:2px solid {c['field_border']};}}
+QToolButton#ledSwatch:checked{{border:3px solid {c['title']};}}
+QLabel#capability{{background:{c['chip']};color:{c['chip_text']};border-radius:10px;padding:8px 10px;font-weight:600;}}
 QScrollArea#pageScroll{{background:transparent;border:0;}}
 QScrollArea#pageScroll>QWidget>QWidget{{background:transparent;}}
 QLabel#pageTitle{{font-size:20px;font-weight:800;color:{c['title']};}}
@@ -107,6 +144,66 @@ QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{{background:transpar
 """
 
 
+class NavBar(QWidget):
+    """Sidebar navigation: group headings with a line between groups and
+    one button per page (rows are numbered in the order they are added)."""
+    currentRowChanged=pyqtSignal(int)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lay=QVBoxLayout(self); self.lay.setContentsMargins(0,0,0,0); self.lay.setSpacing(2)
+        self.buttons=[]; self.group=QButtonGroup(self); self.group.setExclusive(True)
+
+    def add_group(self, title, first=False):
+        if not first:
+            line=QFrame(); line.setObjectName('navLine'); self.lay.addSpacing(6); self.lay.addWidget(line)
+        lab=QLabel(title); lab.setObjectName('navGroup'); self.lay.addWidget(lab)
+
+    def add_item(self, icon, text):
+        b=QToolButton(); b.setObjectName('navItem'); b.setCheckable(True); b.setText('  '+text.replace('&', '&&')); b.setIcon(icon); b.setIconSize(QSize(20,20))
+        b.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); b.setFixedHeight(36)
+        b.setCursor(Qt.PointingHandCursor); b.setAccessibleName(text)
+        row=len(self.buttons); b.clicked.connect(lambda _=False, r=row: self.setCurrentRow(r))
+        self.group.addButton(b); self.buttons.append(b); self.lay.addWidget(b)
+        return row
+
+    def finish(self):
+        self.lay.addStretch(1)
+
+    def item(self, row):
+        return self.buttons[row]
+
+    def setCurrentRow(self, row):
+        if 0 <= row < len(self.buttons):
+            self.buttons[row].setChecked(True); self.currentRowChanged.emit(row)
+
+
+class RowForm(QVBoxLayout):
+    """Settings rows with a title on the left, the control on the right and a
+    thin line between rows (replaces QFormLayout: rows are clearly separated).
+    addRow('', hint) adds the hint under the previous row; addRow('', widget)
+    makes a full-width row."""
+    def __init__(self):
+        super().__init__(); self.setSpacing(0); self.setContentsMargins(0,0,0,0); self._last=None; self._count=0
+
+    def addRow(self, label, field):
+        if isinstance(field, QLabel) and not label and field.objectName() == 'fieldHint' and self._last is not None:
+            self._last.addWidget(field); return
+        if self._count:
+            line=QFrame(); line.setObjectName('rowLine'); self.addWidget(line)
+        row=QFrame(); row.setObjectName('settingRow')
+        h=QHBoxLayout(row); h.setContentsMargins(2,10,2,10); h.setSpacing(16)
+        right=QVBoxLayout(); right.setSpacing(4)
+        if label:
+            t=QLabel(label.rstrip(':')); t.setObjectName('rowTitle'); t.setFixedWidth(170); t.setWordWrap(True)
+            h.addWidget(t, 0, Qt.AlignTop if isinstance(field, QLayout) else Qt.AlignVCenter)
+        if isinstance(field, QLayout):
+            right.addLayout(field)
+        else:
+            right.addWidget(field)
+        h.addLayout(right, 1)
+        self.addWidget(row); self._last=right; self._count+=1
+
+
 class Page(QWidget):
     """A settings page: title, hint and one or more rounded cards.
     `self.v` is the layout of the first card."""
@@ -132,9 +229,41 @@ class Page(QWidget):
 
 
 def form():
-    f=QFormLayout(); f.setSpacing(10); f.setLabelAlignment(Qt.AlignRight|Qt.AlignVCenter)
-    f.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-    return f
+    return RowForm()
+
+
+def theme_preview(theme, w=132, h=78):
+    """Tiny picture of a theme: desktop, Eduka-Desktop window and panel."""
+    surface, panel, accent, text=THEME_SWATCHES[theme]
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    g=QLinearGradient(0, 0, w, h); g.setColorAt(0, QColor('#9fd2b4')); g.setColorAt(1, QColor('#3f8f6a'))
+    if theme in (THEME_DARK, THEME_TRANSPARENT): g.setColorAt(0, QColor('#3a4a46')); g.setColorAt(1, QColor('#101413'))
+    path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, w, h), 10, 10); p.setClipPath(path); p.fillRect(pix.rect(), g)
+    win=QColor(surface)
+    if theme in (THEME_LIQUID, THEME_TRANSPARENT): win.setAlpha(190)
+    radius=3 if theme == THEME_LOW else 8
+    p.setPen(QPen(QColor(255,255,255,90), 1)); p.setBrush(win); p.drawRoundedRect(QRectF(10, 8, w-20, h-30), radius, radius)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(16, 14, 28, 6), 3, 3)
+    tc=QColor(text); tc.setAlpha(110); p.setBrush(tc)
+    for i in range(3): p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
+    pc=QColor(panel)
+    if theme in (THEME_LIQUID, THEME_TRANSPARENT): pc.setAlpha(200)
+    p.setBrush(pc); p.drawRoundedRect(QRectF(6, h-16, w-12, 11), 5, 5)
+    p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(9, h-14, 18, 7), 3.5, 3.5)
+    p.end()
+    return pix
+
+
+def position_preview(edge, w=96, h=60, accent='#00a879'):
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor('#7a8f89'), 1.5)); p.setBrush(QColor('#e9f2ee')); p.drawRoundedRect(QRectF(2, 2, w-4, h-4), 6, 6)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent))
+    bar={'Bottom': QRectF(8, h-14, w-16, 7), 'Top': QRectF(8, 7, w-16, 7), 'Left': QRectF(7, 8, 7, h-16), 'Right': QRectF(w-14, 8, 7, h-16)}[edge]
+    p.drawRoundedRect(bar, 3.5, 3.5)
+    p.end()
+    return pix
 
 
 def hint_label(text):
@@ -231,7 +360,7 @@ class Settings(QDialog):
         self.setMinimumSize(760, 520)
         self.panel=read_panel_config(); self.menu=read_menu_config(); self.desktop=read_desktop_config()
         self._initial_orca_enabled=bool(self.desktop.get('orca_enabled', False))
-        self._liquid_confirmed=normalize_theme_style(self.desktop.get('theme_style')) == THEME_LIQUID
+        self._liquid_confirmed=normalize_theme_style(self.desktop.get('theme_style')) in (THEME_LIQUID, THEME_TRANSPARENT)
         self._sddm_dirty=False; self._sddm_background=''; self._sddm_logo=''
         self.sddm_timer=QTimer(self); self.sddm_timer.setSingleShot(True); self.sddm_timer.timeout.connect(self.realtime_sddm)
         self.build()
@@ -254,30 +383,37 @@ class Settings(QDialog):
         t=QLabel('Eduka Settings'); t.setObjectName('appTitle'); names.addWidget(t)
         chip=QLabel(VERSION); chip.setObjectName('versionChip'); chip.setAlignment(Qt.AlignCenter); chip.setFixedWidth(chip.sizeHint().width()+16)
         names.addWidget(chip); brand.addLayout(names, 1); sl.addLayout(brand)
-        self.nav=QListWidget(); self.nav.setObjectName('navList'); self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.nav.setIconSize(QSize(22,22))
+        self.nav=NavBar()
         sl.addWidget(self.nav, 1)
         reset=QPushButton('Reset to Defaults'); reset.setObjectName('resetButton'); reset.clicked.connect(self.reset_defaults); sl.addWidget(reset)
         root.addWidget(side)
 
         content=QVBoxLayout(); content.setContentsMargins(0,0,0,0); content.setSpacing(0)
         self.stack=QStackedWidget()
-        self.pages=[
-            ('General','preferences-system',self.page_general()),
-            ('Appearance','preferences-desktop-theme',self.page_appearance()),
-            ('Eduka-Desktop','start-here',self.page_behavior()),
-            ('Eduka-Panel','preferences-desktop',self.page_icon_name()),
-            ('Notifications','preferences-system-notifications',self.page_notifications()),
-            ('Accessibility','preferences-desktop-accessibility',self.page_accessibility()),
-            ('Login Screen','system-users',self.page_login()),
-            ('Maintenance','applications-system',self.page_advanced()),
+        groups=[
+            ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',self.page_appearance),
+                             ('effects','Effects','applications-graphics',self.page_effects)]),
+            ('DESKTOP', [('desktop','Eduka-Desktop','start-here',self.page_behavior),
+                         ('panel','Eduka-Panel','preferences-desktop',self.page_icon_name),
+                         ('clock','Clock','preferences-system-time',self.page_clock),
+                         ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
+            ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',self.page_general),
+                        ('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility),
+                        ('login','Login Screen','system-users',self.page_login),
+                        ('maintenance','Maintenance','applications-system',self.page_advanced)]),
         ]
-        self.page_keys=['general','appearance','desktop','panel','notifications','accessibility','login','maintenance']
-        for name, icon, page in self.pages:
-            # Pages scroll on small (1024x600 / 1366x768) school screens.
-            scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
-            item=QListWidgetItem(get_icon(icon,'preferences-system'), name); item.setToolTip(name); item.setSizeHint(QSize(180, 42))
-            self.nav.addItem(item); self.stack.addWidget(scroll)
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(0)
+        self.pages=[]; self.page_keys=[]; self.nav_rows={}
+        for gi, (group, entries) in enumerate(groups):
+            # Group heading and a line separate the sections.
+            self.nav.add_group(group, first=gi == 0)
+            for key, name, icon, builder in entries:
+                page=builder()
+                # Pages scroll on small (1024x600 / 1366x768) school screens.
+                scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
+                self.nav_rows[key]=self.nav.add_item(get_icon(icon,'preferences-system'), name)
+                self.pages.append((name, icon, page)); self.page_keys.append(key); self.stack.addWidget(scroll)
+        self.nav.finish()
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['appearance'])
         content.addWidget(self.stack, 1)
 
         bar=QHBoxLayout(); bar.setContentsMargins(26,8,26,16); bar.setSpacing(8)
@@ -294,7 +430,7 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ pages
     def page_general(self):
-        p=Page('General', 'Eduka-Settings sets up Eduka-Desktop, Eduka-Panel, the Action Center, notifications and the login screen.')
+        p=Page('Language & Startup', 'Language of greetings and messages, startup and the section Eduka-Desktop opens with.')
         f=form()
         self.start_login=QCheckBox('Preload Eduka-Desktop at login for a faster first opening'); f.addRow('', self.start_login)
         self.language=QComboBox()
@@ -307,10 +443,21 @@ class Settings(QDialog):
         return p.finish()
 
     def page_appearance(self):
-        p=Page('Appearance', 'Theme, transparency and icons. Apply changes the whole desktop at once.')
+        p=Page('Appearance', 'Theme, transparency, icons and mouse cursor. Apply changes the whole desktop at once.')
+        p.v.addWidget(self.card_title('Theme'))
+        # The combo box keeps the chosen theme; the cards are its face.
+        self.theme=QComboBox(); self.theme.addItems(THEMES); self.theme.setVisible(False)
+        grid=QGridLayout(); grid.setSpacing(10); self.theme_cards={}; group=QButtonGroup(self)
+        for i, name in enumerate(THEMES):
+            card=QToolButton(); card.setObjectName('themeCard'); card.setCheckable(True); card.setText(name)
+            card.setIcon(QIcon(theme_preview(name))); card.setIconSize(QSize(132, 78)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            card.clicked.connect(lambda _=False, n=name: self.theme.setCurrentText(n))
+            group.addButton(card); grid.addWidget(card, i//3, i%3); self.theme_cards[name]=card
+        p.v.addLayout(grid)
+        self.theme.currentTextChanged.connect(lambda n: self.theme_cards[n].setChecked(True) if n in self.theme_cards else None)
         f=form()
-        self.theme=QComboBox(); self.theme.addItems(THEMES); f.addRow('Visual theme:', self.theme)
-        self.theme_info=hint_label(''); f.addRow('', self.theme_info)
+        self.theme_info=hint_label(''); p.v.addWidget(self.theme_info)
         # Ranges match what Eduka-Panel (0.50) and Eduka-Desktop (0.45) accept.
         self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.50,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Panel opacity:', self.panel_trans)
         self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Desktop opacity:', self.desktop_trans)
@@ -346,13 +493,19 @@ class Settings(QDialog):
 
     THEME_INFO = {
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
+        THEME_LOW: 'Eduka-Low-Theme (after Yaru-remix): flat and fully opaque. Transparency, the compositor and all effects are switched off — for very low spec computers.',
+        THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',
         THEME_LIQUID: 'Soft milky glass with light rims. Needs a compositor (started automatically); without one the default theme is used.',
         THEME_DARK: 'Edukasaun-Dark (Orchis dark): Eduka-Panel, Eduka-Desktop, GTK and Qt applications and window borders turn dark.',
     }
 
     def update_theme_info(self):
-        self.theme_info.setText(self.THEME_INFO.get(self.theme.currentText(), ''))
-        self.glass_blur.setEnabled(self.theme.currentText() == THEME_LIQUID)
+        name=self.theme.currentText()
+        self.theme_info.setText(self.THEME_INFO.get(name, ''))
+        self.glass_blur.setEnabled(name in (THEME_LIQUID, THEME_TRANSPARENT))
+        opaque=name == THEME_LOW
+        for w in (self.panel_trans, self.desktop_trans, self.shadow): w.setEnabled(not opaque)
+        if hasattr(self, 'effects_on'): self.update_effects_state()
 
     def liquid_glass_capability(self):
         memory_gib=0.0
@@ -373,9 +526,10 @@ class Settings(QDialog):
 
     def theme_changed(self, theme):
         self.update_theme_info(); self.mark_sddm_follow()
-        if theme != THEME_LIQUID:
+        if theme not in (THEME_LIQUID, THEME_TRANSPARENT):
             self._liquid_confirmed=False
             self.low.setEnabled(True)
+            if theme == THEME_LOW: self.low.setChecked(True)
             return
         self._low_before_liquid=self.low.isChecked()
         self.low.setChecked(False); self.low.setEnabled(False)
@@ -384,7 +538,7 @@ class Settings(QDialog):
         memory_gib, cpu_threads, compositor, capable=self.liquid_glass_capability()
         detected=f'Memory: {memory_gib:.1f} GiB • CPU threads: {cpu_threads} • Compositor: {"running" if compositor_running(force=True) else ("will be started" if compositor else "none (default theme is used)")}'
         if not capable:
-            QMessageBox.warning(self, 'Liquid Glass', 'Liquid Glass needs at least 2 GB of memory and two CPU threads.\n\n'+detected)
+            QMessageBox.warning(self, theme, f'{theme} needs at least 2 GB of memory and two CPU threads.\n\n'+detected)
             self._leave_liquid(); return
         self._liquid_confirmed=True
 
@@ -426,19 +580,93 @@ class Settings(QDialog):
         for signal in (self.label.textChanged, self.icon.textChanged, self.show_text.toggled, self.icon_size.valueChanged, self.keep_aspect.toggled):
             signal.connect(self.update_preview)
         p.v.addLayout(f)
+        where=p.new_card('Position')
+        prow=QHBoxLayout(); prow.setSpacing(10); self.pos_cards={}; pgroup=QButtonGroup(self)
+        for edge in PANEL_POSITIONS:
+            card=QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(edge)
+            card.setIcon(QIcon(position_preview(edge))); card.setIconSize(QSize(96, 60)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            pgroup.addButton(card); prow.addWidget(card); self.pos_cards[edge]=card
+        where.addLayout(prow)
+        where.addWidget(hint_label('Left and right show a vertical panel with icons only. Right-click Eduka-Panel → Panel Position changes it too.'))
         panel=p.new_card('Panel and taskbar')
         fp=form()
         self.panel_height=QSpinBox(); self.panel_height.setRange(34,58); self.panel_height.setSuffix(' px'); fp.addRow('Panel height:', self.panel_height)
         self.panel_width=QSpinBox(); self.panel_width.setRange(70,100); self.panel_width.setSuffix(' %'); fp.addRow('Panel width:', self.panel_width)
         self.taskbar_style=QComboBox(); self.taskbar_style.addItems(['Icon and Text','Icon only','Text only']); fp.addRow('Taskbar style:', self.taskbar_style)
         panel.addLayout(fp)
-        clock=p.new_card('Clock (panel and Action Center)')
-        fk=form()
-        self.clock_style=QComboBox(); self.clock_style.addItem('Digital', 'digital'); self.clock_style.addItem('Analog', 'analog'); fk.addRow('Clock face:', self.clock_style)
-        self.clock_format=QComboBox(); self.clock_format.addItem('24 hours (14:30)', '24h'); self.clock_format.addItem('12 hours (2:30 PM)', '12h'); fk.addRow('Time format:', self.clock_format)
-        fk.addRow('', hint_label('Right-click the clock in the Action Center to switch quickly. Drag the handle at the top of the Action Center down to hide the month calendar.'))
-        clock.addLayout(fk)
         return p.finish()
+
+    # ------------------------------------------------------------------ clock
+    def page_clock(self):
+        p=Page('Clock', 'The clock of the Action Center (click the time on Eduka-Panel). Click the clock there to see the world globe.')
+        f=form()
+        self.clock_style=QComboBox()
+        for key, label in (('digital','Digital'), ('analog','Analog'), ('led','LED (seven segments)')): self.clock_style.addItem(label, key)
+        f.addRow('Clock face:', self.clock_style)
+        self.clock_format=QComboBox(); self.clock_format.addItem('24 hours (14:30)', '24h'); self.clock_format.addItem('12 hours (2:30 PM)', '12h'); f.addRow('Time format:', self.clock_format)
+        self.clock_seconds=QCheckBox('Show seconds'); f.addRow('', self.clock_seconds)
+        self.clock_blink=QCheckBox('Blinking colon ( : )'); f.addRow('', self.clock_blink)
+        swatches=QHBoxLayout(); swatches.setSpacing(8); self.led_swatches={}; lgroup=QButtonGroup(self)
+        for value, name in LED_COLORS:
+            b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(26,26); b.setToolTip(name)
+            b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}'); lgroup.addButton(b); swatches.addWidget(b); self.led_swatches[value]=b
+            # Picking an LED color switches the clock to the LED face.
+            b.clicked.connect(lambda _=False: self.clock_style.setCurrentIndex(self.clock_style.findData('led')))
+        swatches.addStretch(); f.addRow('LED color:', swatches)
+        p.v.addLayout(f)
+        self.clock_preview=QLabel(); self.clock_preview.setObjectName('capability'); self.clock_preview.setAlignment(Qt.AlignCenter)
+        p.v.addWidget(self.clock_preview)
+        for sig in (self.clock_style.currentIndexChanged, self.clock_format.currentIndexChanged, self.clock_seconds.toggled, self.clock_blink.toggled, lgroup.buttonClicked):
+            sig.connect(lambda *_: self.update_clock_preview())
+        t=QTimer(self); t.timeout.connect(self.update_clock_preview); t.start(1000)
+        return p.finish()
+
+    def led_color(self):
+        for value, b in self.led_swatches.items():
+            if b.isChecked(): return value
+        return '#00e676'
+
+    def update_clock_preview(self):
+        if not hasattr(self, 'clock_preview'): return
+        now=QTime.currentTime(); colon=':' if not self.clock_blink.isChecked() or now.second() % 2 == 0 else ' '
+        text=format_clock(now, self.clock_format.currentData(), self.clock_seconds.isChecked(), colon)
+        style=self.clock_style.currentData()
+        color=self.led_color() if style == 'led' else ''
+        self.clock_preview.setText(f'Preview: {text}')
+        self.clock_preview.setStyleSheet(f'font-family:monospace;font-size:20px;font-weight:800;' + (f'background:#0d0f0e;color:{color};' if color else ''))
+        pass
+
+    # ------------------------------------------------------------------ effects
+    def page_effects(self):
+        p=Page('Effects', 'Animations for Eduka-Desktop: movement when the pointer goes over a category, and an effect when an application starts.')
+        mem, threads, ok=effects_capability()
+        cap=QLabel(); cap.setObjectName('capability'); cap.setWordWrap(True)
+        cap.setText((f'✓ This computer can use effects ({mem:.1f} GiB memory, {threads} CPU threads).' if ok else
+                     f'Effects need at least 4 GB of memory and 4 CPU threads. This computer: {mem:.1f} GiB, {threads} threads — effects stay off to keep it fast.'))
+        p.v.addWidget(cap)
+        f=form()
+        self.effects_on=QCheckBox('Enable effects in Eduka-Desktop'); f.addRow('', self.effects_on)
+        self.effect_hover=QComboBox()
+        for key, label in EFFECT_HOVER: self.effect_hover.addItem(label, key)
+        f.addRow('Category pointer:', self.effect_hover)
+        f.addRow('', hint_label('Wave lifts the category icon, Glow pulses a colored ring, Slide moves the name aside.'))
+        self.effect_launch=QComboBox()
+        for key, label in EFFECT_LAUNCH: self.effect_launch.addItem(label, key)
+        f.addRow('Opening an application:', self.effect_launch)
+        f.addRow('', hint_label('Bubbles rise from the tile, Zoom in grows the icon, Zoom out shrinks it, Ripple spreads rings, Bounce jumps the icon, Confetti scatters colors, Fade dissolves Eduka-Desktop.'))
+        p.v.addLayout(f)
+        self.effects_note=hint_label('Eduka-Low-Theme is chosen: effects stay off with this theme.'); p.v.addWidget(self.effects_note)
+        self.effects_on.setEnabled(ok); self.effects_on.toggled.connect(lambda *_: self.update_effects_state())
+        self._effects_capable=ok
+        return p.finish()
+
+    def update_effects_state(self):
+        allowed=self._effects_capable and self.theme.currentText() != THEME_LOW
+        self.effects_note.setVisible(self.theme.currentText() == THEME_LOW)
+        self.effects_on.setEnabled(allowed)
+        if not allowed: self.effects_on.setChecked(False)
+        for w in (self.effect_hover, self.effect_launch): w.setEnabled(allowed and self.effects_on.isChecked())
 
     def card_title(self, text):
         t=QLabel(text); t.setObjectName('cardTitle')
@@ -673,7 +901,7 @@ class Settings(QDialog):
         style=self.sddm_style.currentData()
         accent=self.sddm_accent_value
         if style == 'follow':
-            style={THEME_DARK:'dark', THEME_LIQUID:'glass'}.get(self.theme.currentText(), 'light')
+            style={THEME_DARK:'dark', THEME_TRANSPARENT:'dark', THEME_LIQUID:'glass'}.get(self.theme.currentText(), 'light')
             accent=SDDM_ACCENTS[style]
         return {'style': style, 'accent': accent, 'title': self.sddm_title.text().strip() or 'Edukasaun',
                 'default_user': self.sddm_user.currentText().strip(), 'show_clock': self.sddm_clock.isChecked(),
@@ -816,10 +1044,12 @@ class Settings(QDialog):
         """The Settings window follows the Eduka theme; spin boxes and combo
         boxes get their arrows in every theme."""
         theme=current_theme()
-        self.setStyleSheet(settings_qss(theme) + arrow_qss(theme == THEME_DARK))
+        self.setStyleSheet(settings_qss(theme) + arrow_qss(theme in DARK_THEMES))
+        if hasattr(self, 'theme_cards'):
+            for name, card in self.theme_cards.items(): card.setIcon(QIcon(theme_preview(name)))
         # Icons follow the (possibly just changed) icon theme.
-        for i, (name, icon, _page) in enumerate(self.pages):
-            self.nav.item(i).setIcon(get_icon(icon, 'preferences-system'))
+        for key, (name, icon, _page) in zip(self.page_keys, self.pages):
+            self.nav.item(self.nav_rows[key]).setIcon(get_icon(icon, 'preferences-system'))
         self.logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(40,40))
 
     def load_values(self):
@@ -840,13 +1070,14 @@ class Settings(QDialog):
         idx=self.cursor_size.findData(current_cursor_size()); self.cursor_size.setCurrentIndex(max(0, idx))
         self._initial_cursor=(self.cursor_theme.currentData(), self.cursor_size.currentData())
         self._initial_theme=theme
-        self._liquid_confirmed = theme == THEME_LIQUID
+        self._liquid_confirmed = theme in (THEME_LIQUID, THEME_TRANSPARENT)
         self.panel_trans.setValue(float(panel.get('transparency',0.54)))
         self.desktop_trans.setValue(float(desktop.get('transparency',0.51)))
         self.glass_blur.setChecked(bool(desktop.get('glass_blur', False)))
         self._low_before_liquid=bool(desktop.get('low_resource_mode',True))
-        self.low.setChecked(False if theme == THEME_LIQUID else self._low_before_liquid)
-        self.low.setEnabled(theme != THEME_LIQUID)
+        self.low.setChecked(False if theme in (THEME_LIQUID, THEME_TRANSPARENT) else self._low_before_liquid)
+        self.low.setEnabled(theme not in (THEME_LIQUID, THEME_TRANSPARENT))
+        if theme in self.theme_cards: self.theme_cards[theme].setChecked(True)
         self.shadow.setChecked(bool(desktop.get('enable_shadows',False)))
         self.visual_access.setChecked(bool(desktop.get('visual_accessibility',False)))
         self.hearing_access.setChecked(bool(desktop.get('hearing_accessibility',False)))
@@ -864,6 +1095,13 @@ class Settings(QDialog):
         self.taskbar_style.setCurrentText(panel.get('taskbar_style','Icon and Text'))
         self.clock_style.setCurrentIndex(max(0, self.clock_style.findData(panel.get('clock_style','digital'))))
         self.clock_format.setCurrentIndex(max(0, self.clock_format.findData(panel.get('clock_format','24h'))))
+        self.clock_seconds.setChecked(bool(panel.get('clock_seconds', False))); self.clock_blink.setChecked(bool(panel.get('clock_blink', False)))
+        (self.led_swatches.get(str(panel.get('clock_led_color','#00e676')).lower()) or self.led_swatches['#00e676']).setChecked(True)
+        self.pos_cards[panel_position(panel)].setChecked(True)
+        self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
+        self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
+        self.effect_launch.setCurrentIndex(max(0, self.effect_launch.findData(desktop.get('effect_launch','bubble'))))
+        self.update_effects_state(); self.update_clock_preview()
         self.notify_seconds.setValue(int(panel.get('notify_seconds', 7)))
         self.notify_history.setChecked(bool(panel.get('notify_history', True)))
         try:
@@ -890,8 +1128,8 @@ class Settings(QDialog):
             QMessageBox.warning(self, 'Orca settings', 'Orca Voice Settings could not be opened in this desktop session.')
 
     def open_page(self, key):
-        if key in self.page_keys:
-            self.nav.setCurrentRow(self.page_keys.index(key))
+        if key in self.nav_rows:
+            self.nav.setCurrentRow(self.nav_rows[key])
 
     def activate_existing_window(self):
         if self.isMinimized():
@@ -900,8 +1138,8 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':'Bottom','theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentText(),'last_category':self.default_section.currentText(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked()}
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_led_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        desktop={'layout':self.layout_default.currentText(),'last_category':self.default_section.currentText(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 
@@ -911,7 +1149,7 @@ class Settings(QDialog):
         self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
         set_menu_daemon_autostart(self.start_login.isChecked())
         # Theme for the whole desktop: GTK, Qt palette and window borders.
-        if desktop['theme_style'] != self._initial_theme or desktop['theme_style'] == THEME_DARK:
+        if desktop['theme_style'] != self._initial_theme or desktop['theme_style'] in SYSTEM_THEMES:
             apply_desktop_theme(desktop['theme_style'])
             self._initial_theme=desktop['theme_style']
         chosen_icons=self.icon_theme.currentData()

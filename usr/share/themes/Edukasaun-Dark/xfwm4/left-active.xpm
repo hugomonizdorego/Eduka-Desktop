@@ -1,23 +1,13 @@
 /* XPM */
-static const char *left_active[] = {
-/* columns rows colors chars-per-pixel */
-"2 16 1 1 ",
-"  c #2C2C2C s active_color_2",
-/* pixels */
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  ",
-"  "
+static char *left[] = {
+"1 8 1 1",
+". c #383838",
+".",
+".",
+".",
+".",
+".",
+".",
+".",
+"."
 };

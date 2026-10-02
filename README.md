@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.17_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.18_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.17_all.deb
+   rm ./edukasaun-desktop-menu_0.9.18_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -114,6 +114,29 @@ and other greeters.
   restored when another Eduka theme is chosen.
 - Reset to Defaults restores Eduka-Default-Theme and sends `reset` to
   Eduka-Desktop, which then drops its remembered layout, section and search.
+
+## Panel position, effects and clock
+
+- `position` in the panel settings: `Bottom`, `Top`, `Left`, `Right`.
+  Struts (`_NET_WM_STRUT_PARTIAL`) follow the edge.
+- Effects: `effects_enabled`, `effect_hover` (`wave`, `glow`, `slide`) and
+  `effect_launch` (`bubble`, `zoom-in`, `zoom-out`, `ripple`, `bounce`,
+  `confetti`, `fade`) in the desktop settings. Used only with 4 GB of memory
+  and 4 CPU threads and never with Eduka-Low-Theme.
+- Clock: `clock_style` (`digital`, `analog`, `led`), `clock_format`,
+  `clock_seconds`, `clock_blink`, `clock_led_color`. The globe map
+  (`usr/share/edukasaun-desktop/assets/world-map.png`) is drawn by
+  `tools/gen-globe-map.py` from Natural Earth 1:110m land (public domain).
+- Per-application sound: `pactl list sink-inputs` (pulseaudio-utils) and
+  MPRIS players through `dbus-send`, read only while the Action Center is open.
+
+## Theme sources
+
+- `tools/gen-wm-themes.py` writes the xfwm4 and Openbox borders of
+  Edukasaun-Dark, Eduka-Low and Eduka-Transparan (fixed colors, no GTK
+  symbolic colors).
+- Eduka-Low GTK: Yaru-remix default flavour, built with
+  `meson setup build -Dicons=false -Dgnome-shell=false -Dgresource=false -Dwallpapers=false -Dmetacity=false -Ddark=false -Dlight=false`.
 
 ## Notifications
 

@@ -85,6 +85,27 @@ if [ -f "$meta" ]; then
     fi
 fi
 
+# --- Notifications -------------------------------------------------------
+# Eduka-Panel shows every notification in Eduka-Desktop sessions; keep
+# LXQt's notification daemon from starting for new and existing accounts.
+override='[Desktop Entry]
+Type=Application
+Name=LXQt Notification Daemon
+Exec=lxqt-notificationd
+Hidden=true
+Comment=Disabled by Edukasaun Desktop: Eduka-Panel shows notifications.'
+for dir in /etc/skel/.config/autostart $(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $6 ~ /^\/home\// {print $6"/.config/autostart"}'); do
+    home=${dir%/.config/autostart}
+    [ "$dir" = /etc/skel/.config/autostart ] || [ -d "$home" ] || continue
+    if [ ! -e "$dir/lxqt-notifications.desktop" ]; then
+        mkdir -p "$dir" && printf '%s\n' "$override" > "$dir/lxqt-notifications.desktop"
+        if [ "$dir" != /etc/skel/.config/autostart ]; then
+            owner=$(stat -c %U "$home" 2>/dev/null || true)
+            [ -n "$owner" ] && chown -R "$owner": "$home/.config/autostart" 2>/dev/null || true
+        fi
+    fi
+done
+
 # --- Live session autologin ---------------------------------------------
 # The service only acts when booted with boot=live; on installed systems it
 # removes any live autologin file so the login screen asks for a password.

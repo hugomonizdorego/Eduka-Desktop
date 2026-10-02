@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import sys, os, subprocess, re, time, shutil, json, fcntl
+import sys, os, subprocess, re, time, shutil, json, fcntl, math
+from array import array
+from operator import itemgetter
 from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
@@ -40,8 +42,23 @@ def qcolor(value):
         r,g,b,a=m.groups(); return QColor(int(r),int(g),int(b),int(a) if a is not None else 255)
     return QColor(value)
 
+# Eduka-Low-Theme: Yaru-remix colors, flat.
+LOW_UI = dict(LIGHT_UI, **{
+    'text': '#3d3d3d', 'title': '#181818', 'sub': '#666666', 'btn_bg': '#f2f2f2', 'btn_border': '#d6d6d6', 'btn_hover': '#e9e9e9',
+    'accent': '#315bef', 'accent_hover': '#4a6ff2', 'accent_border': '#2a4fd6', 'row_active': '#e3e9fd', 'field': '#ffffff',
+    'groove': '#dcdcdc', 'tile': '#f2f2f2', 'tile_off': '#f7f7f7', 'cal': '#ffffff', 'cal_hover': '#eef2fe', 'weekend': '#c7162b', 'scroll': '#aea79f'})
+# Eduka-Transparan: Transparent-Shell-Theme palette.
+TRANS_UI = dict(DARK_UI, **{
+    'text': 'rgba(242,242,242,235)', 'title': '#f2f2f2', 'sub': 'rgba(242,242,242,160)', 'btn_bg': 'rgba(217,217,217,20)',
+    'btn_border': 'rgba(255,255,255,18)', 'btn_hover': 'rgba(217,217,217,34)', 'accent': '#8a8a8a', 'accent_hover': '#a0a0a0',
+    'accent_border': '#bfbfbf', 'tile': 'rgba(217,217,217,20)', 'tile_off': 'rgba(217,217,217,8)', 'cal': 'rgba(36,36,36,240)',
+    'cal_hover': 'rgba(217,217,217,30)', 'field': 'rgba(46,46,46,240)', 'row_active': 'rgba(217,217,217,40)', 'scroll': 'rgba(242,242,242,90)'})
+
 def ui_colors():
-    return DARK_UI if is_dark_theme() else LIGHT_UI
+    theme=current_theme()
+    if theme == THEME_LOW: return LOW_UI
+    if theme == THEME_TRANSPARENT: return TRANS_UI
+    return DARK_UI if theme in DARK_THEMES else LIGHT_UI
 
 
 def popup_qss():
@@ -55,6 +72,12 @@ def popup_qss():
     if dcfg.get('visual_accessibility', False):
         box='background:#ffffff;border:2px solid #344d47;'
         card='background:#ffffff;border:2px solid #344d47;'
+    elif theme == THEME_LOW:
+        box='background:#f7f7f7;border:1px solid #d0d0d0;'
+        card='background:#ffffff;border:1px solid #dcdcdc;'
+    elif theme == THEME_TRANSPARENT:
+        box=f'background:rgba(26,26,26,{max(200, a)});border:1px solid rgba(255,255,255,18);'
+        card='background:rgba(217,217,217,16);border:1px solid rgba(255,255,255,14);'
     elif theme == THEME_DARK:
         box=f'background:rgba(44,44,44,{a});border:1px solid rgba(255,255,255,40);'
         card=f'background:rgba(56,56,56,{c});border:1px solid rgba(255,255,255,22);'
@@ -222,6 +245,74 @@ def restore_software_brightness():
         set_brightness(value, 'software')
 
 
+MEDIA_WANTED={'on': False}   # only while the Action Center is open
+QUIET_STREAMS={'speech-dispatcher', 'libcanberra', 'lxqt-notificationd', 'eduka-panel', 'pavucontrol', 'pavucontrol-qt'}
+
+def sink_inputs():
+    """Applications playing sound right now (pactl list sink-inputs):
+    id, app name, title, icon, process id, volume and mute."""
+    out=_run_text(['pactl','list','sink-inputs'], timeout=2)
+    streams=[]; cur=None
+    for line in (out or '').splitlines():
+        m=re.match(r'^Sink Input #(\d+)', line)
+        if m:
+            cur={'id': int(m.group(1)), 'volume': 100, 'muted': False, 'corked': False, 'props': {}}; streams.append(cur); continue
+        if cur is None: continue
+        t=line.strip()
+        if t.startswith('Mute:'): cur['muted']='yes' in t
+        elif t.startswith('Corked:'): cur['corked']='yes' in t
+        elif t.startswith('Volume:'):
+            m=re.search(r'(\d+)%', t)
+            if m: cur['volume']=int(m.group(1))
+        else:
+            m=re.match(r'^([\w.]+) = "(.*)"$', t)
+            if m: cur['props'][m.group(1)]=m.group(2)
+    result=[]
+    for st in streams:
+        pr=st.pop('props')
+        app=pr.get('application.name') or pr.get('application.process.binary') or 'Application'
+        if app.casefold() in QUIET_STREAMS or pr.get('media.role') in ('event', 'phone') or pr.get('application.id') == 'org.PulseAudio.pavucontrol':
+            continue
+        title=pr.get('media.name') or ''
+        if title.casefold() in ('playback', 'audio stream', 'output', 'playstream', app.casefold()): title=''
+        st.update(app=app, title=title, icon=pr.get('application.icon_name') or pr.get('application.process.binary') or '',
+                  pid=pr.get('application.process.id') or '', binary=(pr.get('application.process.binary') or '').casefold())
+        result.append(st)
+    return result
+
+def _dbus(dest, path, method, *args, timeout=1.0):
+    if shutil.which('dbus-send') is None: return None
+    return _run_text(['dbus-send','--session','--print-reply',f'--reply-timeout={int(timeout*1000)}',f'--dest={dest}',path,method,*args], timeout=timeout+0.5)
+
+def mpris_players():
+    """Media players that speak MPRIS (VLC, SMPlayer, Celluloid, Audacious,
+    Rhythmbox, Spotify, Firefox and Chromium for YouTube, ...)."""
+    names=re.findall(r'string "(org\.mpris\.MediaPlayer2\.[^"]+)"', _dbus('org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus.ListNames') or '')
+    players=[]
+    for name in names[:8]:
+        props=_dbus(name,'/org/mpris/MediaPlayer2','org.freedesktop.DBus.Properties.GetAll','string:org.mpris.MediaPlayer2.Player') or ''
+        if not props: continue
+        status=re.search(r'string "PlaybackStatus"\s+variant\s+string "(\w+)"', props)
+        title=re.search(r'string "xesam:title"\s+variant\s+string "(.*)"', props)
+        artist=re.search(r'string "xesam:artist"\s+variant\s+array \[\s+string "(.*)"', props)
+        volume=re.search(r'string "Volume"\s+variant\s+double ([\d.eE+-]+)', props)
+        ident=re.search(r'variant\s+string "(.*)"', _dbus(name,'/org/mpris/MediaPlayer2','org.freedesktop.DBus.Properties.Get','string:org.mpris.MediaPlayer2','string:Identity') or '')
+        pid=re.search(r'uint32 (\d+)', _dbus('org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus.GetConnectionUnixProcessID',f'string:{name}') or '')
+        players.append({'name': name, 'status': status.group(1) if status else 'Stopped',
+                        'title': title.group(1) if title else '', 'artist': artist.group(1) if artist else '',
+                        'volume': float(volume.group(1)) if volume else None, 'identity': ident.group(1) if ident else name.split('.')[3],
+                        'pid': pid.group(1) if pid else ''})
+    return players
+
+def match_player(stream, players):
+    key=stream['app'].casefold(); binary=stream.get('binary','')
+    for pl in players:
+        if stream.get('pid') and pl['pid'] == stream['pid']: return pl
+    for pl in players:
+        ident=pl['identity'].casefold(); short=pl['name'].split('.')[3].casefold()
+        if key and (key in ident or ident in key or short in key or (binary and short in binary)): return pl
+    return None
+
 def collect_status():
     """Gather tray/Action Center state. Runs in a worker thread."""
     st={}
@@ -260,6 +351,8 @@ def collect_status():
     o=_run_text(['setxkbmap','-query']); m=re.search(r'^layout:\s*([^\s,]+)', o or '', re.M)
     st['layout']=(m.group(1) if m else 'en')[:3].upper()
     st['brightness'], st['brightness_method']=read_brightness()
+    st['streams']=sink_inputs() if MEDIA_WANTED['on'] else []
+    st['players']=mpris_players() if MEDIA_WANTED['on'] else []
     st['battery']=battery_info()
     return st
 
@@ -611,21 +704,28 @@ class NotificationServer(QObject):
             center.start_monitor()
             if in_eduka_session():
                 stop_lxqt_notifications_in_eduka_session()
-                self.retry.start(1500)
+                self.retry.start(400)
 
     def try_register(self):
         self._tries+=1
         iface=self.bus.interface()
-        iface.registerService(NOTIFY_NAME, QDBusConnectionInterface.ReplaceExistingService, QDBusConnectionInterface.AllowReplacement)
         owner=iface.serviceOwner(NOTIFY_NAME)
+        if not (owner.isValid() and owner.value() == self.bus.baseService()):
+            iface.registerService(NOTIFY_NAME, QDBusConnectionInterface.ReplaceExistingService, QDBusConnectionInterface.DontAllowReplacement)
+            owner=iface.serviceOwner(NOTIFY_NAME)
+        was=self.registered
         self.registered=owner.isValid() and owner.value() == self.bus.baseService()
         if self.registered:
-            self.retry.stop() if hasattr(self, 'retry') else None
-            self.center.stop()
-        elif self._tries % 4 == 0 and in_eduka_session():
-            stop_lxqt_notifications_in_eduka_session()
-        if self._tries > 40 and hasattr(self, 'retry'):
-            self.retry.stop()
+            if not was: self.center.stop()
+        else:
+            if was: self.center.start_monitor()
+            if self._tries % 3 == 0 and in_eduka_session():
+                stop_lxqt_notifications_in_eduka_session()
+        if hasattr(self, 'retry') and in_eduka_session():
+            # Quick at first, then keep watching the whole session: LXQt may
+            # start its daemon late, or D-Bus may activate it.
+            self.retry.setInterval(400 if (not self.registered and self._tries < 15) else (5000 if not self.registered else 15000))
+            if not self.retry.isActive(): self.retry.start()
 
     def notify(self, app, replaces_id, app_icon, summary, body, actions, hints, timeout):
         nid=replaces_id if replaces_id > 0 else self.next_id
@@ -654,10 +754,19 @@ class NotificationServer(QObject):
         return nid
 
     def layout_bubbles(self):
-        screen=QApplication.primaryScreen().availableGeometry()
-        panel=self.panel
-        bottom=(panel.y()-8) if panel.isVisible() else (screen.bottom()-8)
-        x=screen.right()-NotificationBubble.WIDTH-10
+        full=QApplication.primaryScreen().geometry()
+        panel=self.panel; edge=getattr(panel, 'edge', 'Bottom'); shown=panel.isVisible()
+        right=full.x()+full.width()-10
+        if shown and edge == 'Right': right=panel.x()-10
+        x=right-NotificationBubble.WIDTH
+        if edge == 'Top':
+            top=(panel.y()+panel.height()+8) if shown else full.y()+8
+            for nid in reversed(self.order):
+                b=self.bubbles.get(nid)
+                if b is None: continue
+                h=b.sizeHint().height(); b.setGeometry(x, top, NotificationBubble.WIDTH, h); top+=h+4
+            return
+        bottom=(panel.y()-8) if shown and edge == 'Bottom' else (full.y()+full.height()-10)
         for nid in reversed(self.order):
             b=self.bubbles.get(nid)
             if b is None: continue
@@ -772,32 +881,322 @@ class NotificationPopup(PopupFrame):
 # Action Center
 # ---------------------------------------------------------------------------
 
-class AnalogClock(QWidget):
-    """Round clock face drawn with QPainter (no images, very light)."""
-    def __init__(self, size=136, parent=None):
+class ClockFace(QWidget):
+    """The Action Center clock: digital, analog or LED (seven segments in a
+    chosen color), with optional seconds and a blinking colon. Drawn with
+    QPainter, so it costs nothing while the Action Center is closed."""
+    clicked=pyqtSignal()
+    SEGMENTS={'0':'abcfed','1':'bc','2':'abged','3':'abgcd','4':'fgbc','5':'afgcd','6':'afgedc','7':'abc','8':'abcdefg','9':'abcdfg',' ':''}
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(size, size)
-        u=ui_colors()
-        self.face=qcolor(u['cal']); self.ink=qcolor(u['title']); self.sub=qcolor(u['sub']); self.accent=qcolor(u['accent'])
+        self.opts=clock_options(); self.big=True
+        u=ui_colors(); self.ink=qcolor(u['title']); self.sub=qcolor(u['sub']); self.accent=qcolor(u['accent']); self.face=qcolor(u['cal'])
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip('Click: world globe • Right-click: clock style')
+        self.setAccessibleName('Clock')
+
+    def set_options(self, opts, big):
+        self.opts=dict(opts); self.big=big
+        self.setFixedSize(self.sizeHint()); self.update()
+
+    def sizeHint(self):
+        style=self.opts['style']; secs=self.opts['seconds']; twelve=self.opts['format'] == '12h'
+        if style == 'analog':
+            d=132 if self.big else 64
+            return QSize(d, d)
+        h=60 if self.big else 42
+        chars=(8 if secs else 5)
+        w=int(h*0.62*chars) + (int(h*0.9) if twelve else 0)
+        if style == 'led': w=int(w*1.05)+12
+        return QSize(min(330, w), h+(8 if style == 'led' else 0))
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.pos()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def text_parts(self):
+        now=QTime.currentTime(); o=self.opts
+        colon=':' if (not o['blink'] or now.second() % 2 == 0) else ' '
+        if o['format'] == '12h':
+            t=now.toString('hh:mm:ss' if o['seconds'] else 'hh:mm'); ap=now.toString('AP')
+            if t.startswith('0'): t=' '+t[1:]
+        else:
+            t=now.toString('HH:mm:ss' if o['seconds'] else 'HH:mm'); ap=''
+        return t.replace(':', colon), ap
 
     def paintEvent(self, e):
-        now=QTime.currentTime()
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        side=min(self.width(), self.height()); p.translate(self.width()/2, self.height()/2); p.scale(side/200.0, side/200.0)
+        style=self.opts['style']
+        if style == 'analog': self.paint_analog(p)
+        elif style == 'led': self.paint_led(p)
+        else: self.paint_digital(p)
+
+    def paint_digital(self, p):
+        t, ap=self.text_parts()
+        f=QFont(self.font()); f.setPixelSize(int(self.height()*0.78)); f.setBold(True)
+        f.setStyleHint(QFont.Monospace); f.setFamilies(['DejaVu Sans Mono', 'Noto Sans Mono', 'Monospace'])
+        p.setFont(f); p.setPen(self.ink)
+        fm=QFontMetrics(f); tw=fm.horizontalAdvance(t)
+        if ap:
+            f2=QFont(f); f2.setPixelSize(int(self.height()*0.3)); fm2=QFontMetrics(f2); total=tw+6+fm2.horizontalAdvance(ap)
+        else:
+            total=tw
+        x=(self.width()-total)/2; base=(self.height()+fm.ascent()-fm.descent())/2
+        p.drawText(QPointF(x, base), t)
+        if ap:
+            p.setFont(f2); p.setPen(self.accent); p.drawText(QPointF(x+tw+6, base), ap)
+
+    def paint_led(self, p):
+        t, ap=self.text_parts()
+        color=QColor(self.opts['led_color']); off=QColor(color); off.setAlpha(26)
+        r=QRectF(self.rect()).adjusted(1,1,-1,-1)
+        p.setPen(QPen(QColor(255,255,255,30), 1)); p.setBrush(QColor('#0d0f0e')); p.drawRoundedRect(r, 10, 10)
+        h=self.height()-16; dw=h*0.52; gap=h*0.16; colw=h*0.22
+        widths=[colw if ch in ': ' and i in (2, 5) else dw for i, ch in enumerate(t)]
+        total=sum(widths)+gap*(len(t)-1)+(h*0.7 if ap else 0)
+        x=(self.width()-total)/2; y=8
+        for i, ch in enumerate(t):
+            if i in (2, 5):
+                # colon position (blinks when ' ')
+                c=color if ch == ':' else off
+                p.setPen(Qt.NoPen); p.setBrush(c); d=h*0.11
+                p.drawEllipse(QPointF(x+colw/2, y+h*0.32), d, d); p.drawEllipse(QPointF(x+colw/2, y+h*0.70), d, d)
+            else:
+                self.seven(p, ch, x, y, dw, h, color, off)
+            x+=widths[i]+gap
+        if ap:
+            f=QFont(self.font()); f.setPixelSize(int(h*0.3)); f.setBold(True); p.setFont(f); p.setPen(color)
+            p.drawText(QRectF(x, y, h*0.7, h), Qt.AlignVCenter | Qt.AlignLeft, ap)
+
+    def seven(self, p, ch, x, y, w, h, on, off):
+        lit=self.SEGMENTS.get(ch, '')
+        t=max(2.5, w*0.17); hh=h/2
+        segs={'a': QRectF(x+t*0.6, y, w-t*1.2, t), 'g': QRectF(x+t*0.6, y+hh-t/2, w-t*1.2, t), 'd': QRectF(x+t*0.6, y+h-t, w-t*1.2, t),
+              'f': QRectF(x, y+t*0.6, t, hh-t*0.9), 'b': QRectF(x+w-t, y+t*0.6, t, hh-t*0.9),
+              'e': QRectF(x, y+hh+t*0.3, t, hh-t*0.9), 'c': QRectF(x+w-t, y+hh+t*0.3, t, hh-t*0.9)}
+        p.setPen(Qt.NoPen)
+        for name, rect in segs.items():
+            p.setBrush(on if name in lit else off); p.drawRoundedRect(rect, t/2, t/2)
+
+    def paint_analog(self, p):
+        now=QTime.currentTime(); side=min(self.width(), self.height())
+        p.translate(self.width()/2, self.height()/2); p.scale(side/200.0, side/200.0)
         p.setPen(QPen(self.accent, 5)); p.setBrush(self.face); p.drawEllipse(QPointF(0,0), 94, 94)
         for i in range(60):
             p.save(); p.rotate(i*6)
             if i % 5 == 0:
                 p.setPen(QPen(self.ink, 4, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0,-80), QPointF(0,-70))
-            else:
+            elif self.big:
                 p.setPen(QPen(self.sub, 1.5, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0,-80), QPointF(0,-76))
             p.restore()
         def hand(angle, length, width, color):
             p.save(); p.rotate(angle); p.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(0, 12), QPointF(0, -length)); p.restore()
         hand(30.0*((now.hour()%12)+now.minute()/60.0), 46, 7, self.ink)
         hand(6.0*(now.minute()+now.second()/60.0), 66, 5, self.ink)
-        hand(6.0*now.second(), 72, 2, self.accent)
+        if self.opts['seconds'] or self.big:
+            hand(6.0*now.second(), 72, 2, self.accent)
         p.setPen(Qt.NoPen); p.setBrush(self.accent); p.drawEllipse(QPointF(0,0), 6, 6)
+
+
+WORLD_MAP = Path('/usr/share/edukasaun-desktop/assets/world-map.png')
+
+def sun_position(utc=None):
+    """(declination, subsolar longitude) in degrees for a UTC QDateTime."""
+    utc=utc or QDateTime.currentDateTimeUtc()
+    n=utc.date().dayOfYear(); hours=utc.time().hour()+utc.time().minute()/60.0+utc.time().second()/3600.0
+    decl=-23.44*math.cos(2*math.pi/365.0*(n+10))
+    b=2*math.pi*(n-81)/364.0
+    eot=9.87*math.sin(2*b)-7.53*math.cos(b)-1.5*math.sin(b)       # minutes
+    lon=-15.0*(hours-12.0+eot/60.0)
+    return decl, ((lon+180) % 360)-180
+
+
+class GlobeWidget(QWidget):
+    """A small rotating Earth with day and night. Drag to spin it; it keeps
+    turning slowly by itself. Rendered from an equirectangular map with a
+    per-row lookup (pure Python, no extra libraries)."""
+    clicked=pyqtSignal()
+    def __init__(self, diameter=210, parent=None):
+        super().__init__(parent)
+        self.d=diameter; self.setFixedSize(diameter+16, diameter+16)
+        self.setCursor(Qt.OpenHandCursor); self.setToolTip('Drag to turn the Earth • click to go back to the clock')
+        self.lon0=sun_position()[1]+30.0      # start with the day side in view
+        self._drag=None; self._moved=False; self._vel=0.0; self._last=None
+        self.map=QImage(str(WORLD_MAP)).convertToFormat(QImage.Format_RGB32) if WORLD_MAP.exists() else QImage()
+        self.tex=None; self.tex_stamp=None
+        self._build_lookup()
+        self.timer=QTimer(self); self.timer.timeout.connect(self.tick)
+
+    def showEvent(self, e):
+        self.timer.start(50); super().showEvent(e)
+
+    def hideEvent(self, e):
+        self.timer.stop(); super().hideEvent(e)
+
+    def _build_lookup(self):
+        """For each screen row (a latitude) the map columns of its pixels,
+        relative to the centre longitude."""
+        R=self.d/2.0; self.rows=[]
+        W=self.map.width() or 1024; H=self.map.height() or 512; self.W=W; self.H=H
+        for y in range(self.d):
+            yy=R-(y+0.5)
+            if abs(yy) >= R: self.rows.append(None); continue
+            lat=math.asin(yy/R); half=math.sqrt(R*R-yy*yy)
+            x0=int(math.ceil(R-half)); x1=int(math.floor(R+half))
+            if x1 <= x0: self.rows.append(None); continue
+            coslat=math.cos(lat) or 1e-6
+            cols=[]
+            for x in range(x0, x1):
+                v=max(-1.0, min(1.0, (x+0.5-R)/(R*coslat)))
+                cols.append(int(round(math.degrees(math.asin(v))/360.0*W)) + W//4)
+            ty=min(H-1, max(0, int((90-math.degrees(lat))/180.0*H)))
+            self.rows.append((x0, ty, itemgetter(*cols) if len(cols) > 1 else (lambda seq, c=cols[0]: (seq[c],))))
+
+    def _texture(self):
+        """Map with the night side darkened (redrawn once a minute)."""
+        stamp=QDateTime.currentDateTimeUtc().toString('yyyyMMddhhmm')
+        if self.tex is not None and stamp == self.tex_stamp:
+            return self.tex
+        img=QImage(self.map) if not self.map.isNull() else QImage(self.W, self.H, QImage.Format_RGB32)
+        if self.map.isNull(): img.fill(QColor('#1f6fa8'))
+        decl, slon=sun_position()
+        p=QPainter(img); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen)
+        dec=math.radians(decl if abs(decl) > 0.2 else 0.2)
+        for shift, alpha in ((6, 60), (0, 70), (-6, 60)):
+            pts=[]
+            for i in range(0, 361, 3):
+                lon=-180+i; lat=math.degrees(math.atan(-math.cos(math.radians(lon-slon))/math.tan(dec)))+shift*(1 if decl > 0 else -1)
+                pts.append(QPointF((lon+180)/360.0*self.W, (90-lat)/180.0*self.H))
+            if decl > 0: pts+= [QPointF(self.W, self.H), QPointF(0, self.H)]
+            else: pts+= [QPointF(self.W, 0), QPointF(0, 0)]
+            p.setBrush(QColor(4, 10, 32, alpha)); p.drawPolygon(QPolygonF(pts))
+        p.end()
+        # Doubled rows let a plain slice handle the wrap at 180 degrees.
+        self.tex=img; self.tex_stamp=stamp
+        ptr=img.constBits(); ptr.setsize(img.sizeInBytes())
+        self.tex_rows=[]
+        raw=memoryview(bytes(ptr)).cast('I')
+        for ty in range(self.H):
+            row=array('I', raw[ty*self.W:(ty+1)*self.W])
+            self.tex_rows.append(row+row)
+        return img
+
+    def render(self):
+        self._texture()
+        d=self.d; W=self.W
+        out=array('I', bytes(4*d*d))
+        start=int(((self.lon0+180.0)/360.0)*W - W//4) % W
+        for y, row in enumerate(self.rows):
+            if row is None: continue
+            x0, ty, getter=row
+            vals=getter(self.tex_rows[ty][start:start+W//2+2])
+            out[y*d+x0:y*d+x0+len(vals)]=array('I', vals)
+        self._buf=out.tobytes()
+        return QImage(self._buf, d, d, 4*d, QImage.Format_ARGB32_Premultiplied)
+
+    def paintEvent(self, e):
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
+        c=QPointF(self.width()/2, self.height()/2); R=self.d/2.0
+        glow=QRadialGradient(c, R+8); glow.setColorAt(0.85, QColor(80,170,255,90)); glow.setColorAt(1.0, QColor(80,170,255,0))
+        p.setPen(Qt.NoPen); p.setBrush(glow); p.drawEllipse(c, R+8, R+8)
+        p.drawImage(QPointF(c.x()-R, c.y()-R), self.render())
+        shade=QRadialGradient(QPointF(c.x()-R*0.35, c.y()-R*0.4), R*1.5)
+        shade.setColorAt(0.0, QColor(255,255,255,40)); shade.setColorAt(0.55, QColor(255,255,255,0)); shade.setColorAt(1.0, QColor(0,0,0,90))
+        p.setBrush(shade); p.drawEllipse(c, R, R)
+        p.setPen(QPen(QColor(150,210,255,140), 1.6)); p.setBrush(Qt.NoBrush); p.drawEllipse(c, R, R)
+
+    def tick(self):
+        if self._drag is None:
+            if abs(self._vel) > 0.05: self._vel*=0.94
+            else: self._vel=0.0
+            self.lon0+=0.35+self._vel
+            self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag=e.pos().x(); self._last=(e.pos().x(), time.monotonic()); self._moved=False
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None:
+            dx=e.pos().x()-self._last[0]
+            if abs(e.pos().x()-self._drag) > 3: self._moved=True
+            self.lon0-=dx*180.0/self.d; self._vel=-dx*180.0/self.d*0.5
+            self._last=(e.pos().x(), time.monotonic()); self.update()
+
+    def mouseReleaseEvent(self, e):
+        if self._drag is not None:
+            self._drag=None; self.setCursor(Qt.OpenHandCursor)
+            if not self._moved: self.clicked.emit()
+
+    def wheelEvent(self, e):
+        self.lon0+=e.angleDelta().y()/12.0; self.update()
+
+
+class MediaRow(QFrame):
+    """One application playing sound: icon, title, play/pause (when the
+    player supports MPRIS), its own mute button and volume slider."""
+    def __init__(self, ac, key, parent=None):
+        super().__init__(parent)
+        self.ac=ac; self.key=key; self.stream=None; self.player=None
+        self.setObjectName('mediaRow')
+        lay=QHBoxLayout(self); lay.setContentsMargins(6,4,6,4); lay.setSpacing(6)
+        self.icon=QLabel(); self.icon.setFixedSize(26,26); lay.addWidget(self.icon)
+        texts=QVBoxLayout(); texts.setSpacing(0)
+        self.title=QLabel(''); self.title.setObjectName('mediaTitle'); self.title.setTextFormat(Qt.PlainText)
+        self.app=QLabel(''); self.app.setObjectName('popHint'); self.app.setTextFormat(Qt.PlainText)
+        texts.addWidget(self.title); texts.addWidget(self.app); lay.addLayout(texts, 1)
+        self.play=QToolButton(); self.play.setObjectName('mediaBtn'); self.play.setFixedSize(26,26); self.play.setIconSize(QSize(14,14)); self.play.clicked.connect(self.play_pause); lay.addWidget(self.play)
+        self.mute=QToolButton(); self.mute.setObjectName('mediaBtn'); self.mute.setCheckable(True); self.mute.setFixedSize(26,26); self.mute.setIconSize(QSize(14,14)); self.mute.clicked.connect(self.toggle_mute); lay.addWidget(self.mute)
+        self.slider=QSlider(Qt.Horizontal); self.slider.setRange(0,100); self.slider.setFixedWidth(84); lay.addWidget(self.slider)
+        self.timer=QTimer(self); self.timer.setSingleShot(True); self.timer.timeout.connect(self.apply_volume)
+        self.slider.valueChanged.connect(lambda _v: self.timer.start(80))
+
+    def set_data(self, stream, player):
+        self.stream=stream; self.player=player
+        title=(player or {}).get('title') or (stream or {}).get('title') or ''
+        artist=(player or {}).get('artist') or ''
+        app=(stream or {}).get('app') or (player or {}).get('identity') or 'Player'
+        shown=title or app
+        fm=self.title.fontMetrics(); self.title.setText(fm.elidedText(shown, Qt.ElideRight, 118))
+        self.app.setText(fm.elidedText(' • '.join(x for x in (artist, app if title else '') if x) or ('Paused' if (stream or {}).get('corked') else 'Playing'), Qt.ElideRight, 118))
+        self.setToolTip(f'{app}: {title}' if title else app)
+        icon=(stream or {}).get('icon') or (player or {}).get('name','').split('.')[3:4] or ''
+        icon=icon[0] if isinstance(icon, list) else icon
+        self.icon.setPixmap(get_icon(icon or 'multimedia-player', 'audio-x-generic').pixmap(24,24))
+        self.play.setVisible(player is not None)
+        if player is not None:
+            playing=player.get('status') == 'Playing'
+            self.play.setIcon(get_icon('media-playback-pause' if playing else 'media-playback-start', 'media-playback-start'))
+            self.play.setToolTip('Pause' if playing else 'Play')
+        muted=bool((stream or {}).get('muted'))
+        self.mute.blockSignals(True); self.mute.setChecked(muted); self.mute.blockSignals(False)
+        self.mute.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high', 'audio-volume-medium'))
+        self.mute.setVisible(stream is not None); self.mute.setToolTip('Unmute' if muted else 'Mute only this application')
+        vol=(stream or {}).get('volume') if stream else (int(round((player.get('volume') or 0)*100)) if player and player.get('volume') is not None else None)
+        self.slider.setVisible(vol is not None)
+        if vol is not None and not self.slider.isSliderDown():
+            self.slider.blockSignals(True); self.slider.setValue(min(100, int(vol))); self.slider.blockSignals(False)
+
+    def play_pause(self):
+        if self.player:
+            safe_popen(['dbus-send','--session','--type=method_call',f"--dest={self.player['name']}",'/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player.PlayPause'])
+            QTimer.singleShot(500, self.ac.panel.update_status_icons)
+
+    def toggle_mute(self, on):
+        if self.stream:
+            safe_popen(['pactl','set-sink-input-mute',str(self.stream['id']),'1' if on else '0'])
+            self.mute.setIcon(get_icon('audio-volume-muted' if on else 'audio-volume-high', 'audio-volume-medium'))
+
+    def apply_volume(self):
+        v=self.slider.value()
+        if self.stream:
+            safe_popen(['pactl','set-sink-input-volume',str(self.stream['id']),f'{v}%'])
+        elif self.player:
+            safe_popen(['dbus-send','--session','--type=method_call',f"--dest={self.player['name']}",'/org/mpris/MediaPlayer2',
+                        'org.freedesktop.DBus.Properties.Set','string:org.mpris.MediaPlayer2.Player','string:Volume',f'variant:double:{v/100.0:.2f}'])
 
 
 class GripBar(QWidget):
@@ -873,6 +1272,11 @@ def ac_qss():
     return f"""
 QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;margin-top:4px;}}
 QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
+QFrame#mediaRow{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:10px;}}
+QLabel#mediaTitle{{font-size:12px;font-weight:700;color:{u['title']};}}
+QToolButton#mediaBtn{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
+QToolButton#mediaBtn:hover{{border:1px solid {u['accent']};}}
+QToolButton#mediaBtn:checked{{background:#e5484d;border:1px solid #e5484d;}}
 QFrame#acClock{{background:{u['cal']};border:1px solid {u['btn_border']};border-radius:18px;}}
 QLabel#acTime{{font-size:46px;font-weight:800;color:{u['title']};}}
 QLabel#acGreeting{{font-size:15px;font-weight:800;color:{u['accent']};}}
@@ -926,16 +1330,24 @@ class ActionCenter(PopupFrame):
 
         # Clock card in the middle: digital or analog, greeting and date.
         self.clock_card=QFrame(); self.clock_card.setObjectName('acClock')
-        self.ck=QGridLayout(self.clock_card); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
-        self.analog=AnalogClock(132)
-        self.time_label=QLabel(); self.time_label.setObjectName('acTime')
+        card_lay=QVBoxLayout(self.clock_card); card_lay.setContentsMargins(0,0,0,0)
+        self.clock_stack=QStackedWidget(); card_lay.addWidget(self.clock_stack)
+        clock_page=QWidget(); self.ck=QGridLayout(clock_page); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
+        self.face=ClockFace(); self.face.clicked.connect(self.show_globe)
         self.greeting=QLabel(); self.greeting.setObjectName('acGreeting')
         self.date_label=QLabel(); self.date_label.setObjectName('acDate')
         self.date_label.setWordWrap(True); self._dense=None
+        self.clock_stack.addWidget(clock_page)
+        globe_page=QWidget(); gl=QVBoxLayout(globe_page); gl.setContentsMargins(8,8,8,8); gl.setSpacing(4)
+        self.globe=GlobeWidget(176); self.globe.clicked.connect(self.show_clock); gl.addWidget(self.globe, 0, Qt.AlignHCenter)
+        self.globe_info=QLabel(''); self.globe_info.setObjectName('acDate'); self.globe_info.setAlignment(Qt.AlignCenter); gl.addWidget(self.globe_info)
+        self.clock_stack.addWidget(globe_page)
+        # A stacked widget is as tall as its tallest page: size only by the visible one.
+        self.clock_stack.currentChanged.connect(self._stack_sizes); self._stack_sizes(0)
         self.clock_card.setContextMenuPolicy(Qt.CustomContextMenu); self.clock_card.customContextMenuRequested.connect(self.clock_menu)
-        self.clock_card.setToolTip('Right-click: analog or digital, 24 or 12 hours')
+        self.clock_card.setToolTip('Click the clock for the world globe • Right-click: clock style')
         self.v.addWidget(self.clock_card)
-        self.clock_format=clock_settings()[1]
+        self.clock_opts=clock_options(); self.clock_format=self.clock_opts['format']
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
@@ -966,6 +1378,12 @@ class ActionCenter(PopupFrame):
         cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
         self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,4)
         self.battery_label.setObjectName('popHint')
+        # Applications playing sound (players, browsers, games): each with
+        # its own volume and mute, and play/pause when the player allows it.
+        self.media_box=QWidget(); self.media_lay=QVBoxLayout(self.media_box); self.media_lay.setContentsMargins(0,2,0,0); self.media_lay.setSpacing(2)
+        self.media_rows={}; self.media_box.setVisible(False)
+        cl.addWidget(self.media_box,4,0,1,4)
+        MEDIA_WANTED['on']=True
         self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,3,0,1,4)
         self.v.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
@@ -1012,39 +1430,45 @@ class ActionCenter(PopupFrame):
         return self.panel.y()-8-(screen.y()+4)
 
     def set_clock_layout(self, dense):
-        """Compact view: big clock in the middle. With the month calendar:
-        one row (time left, greeting and date right) so it fits on 768 px."""
+        """With the month calendar: one row (clock left, greeting and date
+        right). Without it: a big clock in the middle."""
         if dense == self._dense:
             return
         self._dense=dense
-        for w in (self.analog, self.time_label, self.greeting, self.date_label):
+        for w in (self.face, self.greeting, self.date_label):
             self.ck.removeWidget(w)
-        analog=self.analog.property('wanted') is True
+        self.face.set_options(self.clock_opts, big=not dense)
         if dense:
-            self.analog.setFixedSize(64, 64)
-            big=self.analog if analog else self.time_label
-            self.ck.addWidget(big, 0, 0, 2, 1, Qt.AlignVCenter)
+            self.ck.addWidget(self.face, 0, 0, 2, 1, Qt.AlignVCenter)
             self.ck.addWidget(self.greeting, 0, 1, Qt.AlignBottom); self.ck.addWidget(self.date_label, 1, 1, Qt.AlignTop)
             self.ck.setColumnStretch(1, 1)
             for w in (self.greeting, self.date_label): w.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            self.time_label.setStyleSheet('font-size:34px;')
         else:
-            self.analog.setFixedSize(132, 132)
-            row=0
-            if analog: self.ck.addWidget(self.analog, row, 0, 1, 2, Qt.AlignHCenter); row+=1
-            self.ck.addWidget(self.time_label, row, 0, 1, 2); self.ck.addWidget(self.greeting, row+1, 0, 1, 2); self.ck.addWidget(self.date_label, row+2, 0, 1, 2)
+            self.ck.addWidget(self.face, 0, 0, 1, 2, Qt.AlignHCenter)
+            self.ck.addWidget(self.greeting, 1, 0, 1, 2); self.ck.addWidget(self.date_label, 2, 0, 1, 2)
             self.ck.setColumnStretch(1, 0)
-            for w in (self.time_label, self.greeting, self.date_label): w.setAlignment(Qt.AlignCenter)
-            self.time_label.setStyleSheet('font-size:22px;' if analog else '')
-        self.analog.setVisible(analog)
-        self.time_label.setVisible(not (analog and dense))
+            for w in (self.greeting, self.date_label): w.setAlignment(Qt.AlignCenter)
         self.update_time()
+
+    def _stack_sizes(self, index):
+        for i in range(self.clock_stack.count()):
+            self.clock_stack.widget(i).setSizePolicy(QSizePolicy.Preferred if i == index else QSizePolicy.Ignored,
+                                                     QSizePolicy.Preferred if i == index else QSizePolicy.Ignored)
+        self.clock_stack.adjustSize()
+
+    def show_globe(self):
+        self.clock_stack.setCurrentIndex(1); self.update_time()
+        if self.isVisible(): self.place()
+
+    def show_clock(self):
+        self.clock_stack.setCurrentIndex(0)
+        if self.isVisible(): self.place()
 
     def set_compact(self, compact, remember=False):
         compact=bool(compact)
         self.compact=compact
         self.set_clock_layout(not compact)
-        self.cal_holder.setMaximumHeight(0 if compact else self.cal_full); self.cal_holder.setMinimumHeight(0 if compact else self.cal_full)
+        self.set_calendar_height(0 if compact else self.cal_full)
         self.cal_holder.setVisible(not compact)
         self.mode_button.setIcon(QIcon(arrow_icon_path('up' if compact else 'down', self.ink)))
         tip='Show the calendar (drag the handle up)' if compact else 'Smaller: hide the calendar (drag the handle down)'
@@ -1054,42 +1478,65 @@ class ActionCenter(PopupFrame):
         if self.isVisible():
             self.place(); QTimer.singleShot(0, self.place)
 
+    CAL_MIN=128   # smallest calendar that still shows all six weeks
+
+    def set_calendar_height(self, h):
+        """Calendar holder height; the month grid shrinks with it."""
+        h=max(0, min(self.cal_full, int(h)))
+        self.cal_holder.setMinimumHeight(h); self.cal_holder.setMaximumHeight(h)
+        grid=max(90, 160-(self.cal_full-h)) if h < self.cal_full else 166
+        if self.calendar.height() != grid: self.calendar.setFixedHeight(grid)
+
     def drag_start(self):
-        self._drag_from=0 if self.compact else self.cal_full
+        self._drag_from=self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else 0
         self.set_clock_layout(True)
         self.cal_holder.setVisible(True)
 
     def drag_move(self, dy):
-        h=max(0, min(self.cal_full, self._drag_from-dy))
-        if self.base_height()+h > self.room():
-            h=max(0, self.room()-self.base_height())
-        self.cal_holder.setMinimumHeight(h); self.cal_holder.setMaximumHeight(h)
+        h=max(0, min(self.cal_full, self._drag_from-dy, self.room()-self.base_height()))
+        self.set_calendar_height(h)
         self.place(check_room=False)
 
     def drag_end(self, dy):
-        h=self.cal_holder.maximumHeight()
-        self.set_compact(h < self.cal_full/2, remember=True)
+        self.set_compact(self.cal_holder.maximumHeight() < self.CAL_MIN*0.7, remember=True)
 
-    def base_height(self):
-        """Height of the Action Center without the calendar."""
-        return self.sizeHint().height()-self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else self.sizeHint().height()
-
-    def place(self, check_room=True):
-        """Keep the bottom edge just above Eduka-Panel and grow upwards."""
-        panel=self.panel; screen=QApplication.primaryScreen().availableGeometry()
+    def settle(self):
         # Layout changes are applied lazily: settle them before measuring.
         self.ck.activate(); self.v.activate(); self.layout().activate()
         self.box.adjustSize(); self.adjustSize()
-        if check_room and not self.compact and self.sizeHint().height() > self.room():
-            # Not enough room above the panel for the month calendar.
-            self.compact=True; self.cal_holder.setVisible(False); self.cal_holder.setMaximumHeight(0); self.cal_holder.setMinimumHeight(0)
-            self.mode_button.setIcon(QIcon(arrow_icon_path('up', self.ink))); self.set_clock_layout(False)
-            self.ck.activate(); self.v.activate(); self.layout().activate()
-            self.box.adjustSize(); self.adjustSize()
-        x=min(panel.x()+panel.width()-self.width(), screen.right()-self.width()-4); x=max(screen.x()+4, x)
-        h=self.sizeHint().height()
-        y=max(screen.y()+4, panel.y()-h-8)
-        self.setGeometry(x, y, self.width(), h)
+
+    def base_height(self):
+        """Height of the Action Center without the calendar."""
+        self.settle()
+        return self.sizeHint().height()-(self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else 0)
+
+    def room(self):
+        return self.panel.popup_room()
+
+    def place(self, check_room=True):
+        """Open next to Eduka-Panel (any edge). When the full calendar does
+        not fit, it is made smaller first; only on very small screens the
+        Action Center switches to the compact view."""
+        if check_room:
+            self.notif_card.setVisible(True)
+        if check_room and not self.compact:
+            free=self.room()-self.base_height()
+            if free < self.CAL_MIN:
+                # Make room for the calendar the user asked for: the latest
+                # notification is still behind the bell on the panel.
+                self.notif_card.setVisible(False); free=self.room()-self.base_height()
+            if free >= self.CAL_MIN:
+                self.set_calendar_height(min(self.cal_full, free)); self.cal_holder.setVisible(True)
+            else:
+                self.compact=True; self.cal_holder.setVisible(False); self.set_calendar_height(0)
+                self.mode_button.setIcon(QIcon(arrow_icon_path('up', self.ink))); self.set_clock_layout(False)
+        self.settle()
+        if self.sizeHint().height() > self.room() and self.notif_card.isVisible():
+            self.notif_card.setVisible(False); self.settle()
+        h=min(self.sizeHint().height(), self.room()) if self.panel.edge in ('Bottom','Top') else self.sizeHint().height()
+        anchor=self.panel.clock.mapToGlobal(QPoint(self.panel.clock.width()//2, self.panel.clock.height()//2))
+        pos=self.panel.popup_position(self.width(), h, anchor)
+        self.setGeometry(pos.x(), pos.y(), self.width(), h)
 
     def wheelEvent(self, e):
         # Scrolling on the clock or the handle also changes the size.
@@ -1099,21 +1546,31 @@ class ActionCenter(PopupFrame):
 
     # -------------------------------------------------------------- clock
     def apply_clock_style(self):
-        style, self.clock_format=clock_settings()
-        self.analog.setProperty('wanted', style == 'analog')
+        self.clock_opts=clock_options(); self.clock_format=self.clock_opts['format']
         dense=self._dense; self._dense=None
         self.set_clock_layout(bool(dense) if dense is not None else False)
 
     def clock_menu(self, pos):
-        style, fmt=clock_settings()
+        o=clock_options()
         m=RoundedMenu(self)
-        for label, key, value, current in [('Digital clock','clock_style','digital',style), ('Analog clock','clock_style','analog',style),
-                                           (None,None,None,None), ('24 hours (14:30)','clock_format','24h',fmt), ('12 hours (2:30 PM)','clock_format','12h',fmt)]:
+        for label, key, value, current in [('Digital clock','clock_style','digital',o['style']), ('Analog clock','clock_style','analog',o['style']),
+                                           ('LED clock','clock_style','led',o['style']), (None,None,None,None),
+                                           ('24 hours (14:30)','clock_format','24h',o['format']), ('12 hours (2:30 PM)','clock_format','12h',o['format'])]:
             if label is None:
                 m.addSeparator(); continue
             act=m.addAction(label); act.setCheckable(True); act.setChecked(value == current)
             act.triggered.connect(lambda _=False, k=key, v=value: self.set_clock(k, v))
-        m.addSeparator(); m.addAction(get_icon('preferences-system'), 'Clock settings…', lambda: self.launch('eduka-settings --page panel'))
+        m.addSeparator()
+        sec=m.addAction('Show seconds'); sec.setCheckable(True); sec.setChecked(o['seconds']); sec.triggered.connect(lambda on: self.set_clock('clock_seconds', bool(on)))
+        blink=m.addAction('Blinking colon'); blink.setCheckable(True); blink.setChecked(o['blink']); blink.triggered.connect(lambda on: self.set_clock('clock_blink', bool(on)))
+        colors=m.addMenu('LED color')
+        for value, name in LED_COLORS:
+            pix=QPixmap(14,14); pix.fill(QColor(value))
+            act=colors.addAction(QIcon(pix), name); act.setCheckable(True); act.setChecked(o['led_color'].casefold() == value)
+            act.triggered.connect(lambda _=False, v=value: (self.set_clock('clock_led_color', v), self.set_clock('clock_style', 'led')))
+        m.addSeparator()
+        m.addAction(get_icon('applications-internet', 'globe'), 'World globe', self.show_globe)
+        m.addAction(get_icon('preferences-system'), 'Clock settings…', lambda: self.launch('eduka-settings --page clock'))
         m.exec_(self.clock_card.mapToGlobal(pos))
 
     def set_clock(self, key, value):
@@ -1123,13 +1580,15 @@ class ActionCenter(PopupFrame):
 
     def update_time(self):
         now=QDateTime.currentDateTime(); loc=QLocale()
-        self.time_label.setText(format_clock(now.time(), self.clock_format))
         self.greeting.setText(f'{greeting_text(now.time().hour(), self.lang)}, {user_display_name()}'.rstrip(', '))
-        self.date_label.setText(loc.toString(now.date(), QLocale.LongFormat))
-        if self.analog.isVisible(): self.analog.update()
-        if self._dense and self.analog.isVisible():
-            # Analog row: the digital time goes in front of the date.
-            self.date_label.setText(format_clock(now.time(), self.clock_format)+' • '+loc.toString(now.date(), QLocale.LongFormat))
+        date=loc.toString(now.date(), QLocale.LongFormat)
+        if self.clock_opts['style'] == 'analog':
+            date=format_clock(now.time(), self.clock_format)+' • '+date
+        self.date_label.setText(date)
+        self.face.update()
+        if self.clock_stack.currentIndex() == 1:
+            utc=QDateTime.currentDateTimeUtc()
+            self.globe_info.setText(f"{format_clock(now.time(), self.clock_format)} here • UTC {utc.toString('HH:mm')} • lit side is day")
 
     # -------------------------------------------------------------- tiles
     def set_tile(self, key, on, enabled=True, tip=''):
@@ -1194,6 +1653,7 @@ class ActionCenter(PopupFrame):
         self.vol_value.setText(f'{vol}%' if vol is not None else '—')
         self.mute.blockSignals(True); self.mute.setChecked(bool(st.get('muted'))); self.mute.setEnabled(vol is not None); self.mute.blockSignals(False)
         self.update_sound_icon()
+        self.update_media(st.get('streams') or [], st.get('players') or [])
         bri=st.get('brightness'); method=st.get('brightness_method')
         self.bri_slider.blockSignals(True)
         self.bri_slider.setMinimum(SOFTWARE_BRIGHTNESS_MIN if method == 'software' else 5)
@@ -1208,6 +1668,28 @@ class ActionCenter(PopupFrame):
         count=int(self.panel.eus_status.get('count',0) or 0) if self.panel.eus_status else 0
         self.update_button.setVisible(count > 0)
         if count: self.update_button.setText(f'  {count} update{"s" if count != 1 else ""} available'); self.update_button.setIcon(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'))
+
+    def update_media(self, streams, players):
+        rows=[]; used=set()
+        for stream in streams:
+            pl=match_player(stream, players)
+            if pl: used.add(pl['name'])
+            rows.append((f"s{stream['id']}", stream, pl))
+        for pl in players:
+            if pl['name'] not in used and pl['status'] in ('Playing', 'Paused'):
+                rows.append((pl['name'], None, pl))
+        rows=rows[:4]
+        keys={k for k, _s, _p in rows}
+        for k in list(self.media_rows):
+            if k not in keys:
+                w=self.media_rows.pop(k); self.media_lay.removeWidget(w); w.deleteLater()
+        for k, stream, pl in rows:
+            if k not in self.media_rows:
+                w=MediaRow(self, k); self.media_rows[k]=w; self.media_lay.addWidget(w)
+            self.media_rows[k].set_data(stream, pl)
+        had=self.media_box.isVisible(); self.media_box.setVisible(bool(rows))
+        if had != bool(rows) and self.isVisible():
+            QTimer.singleShot(0, self.place)
 
     def update_notifications(self):
         items=self.panel.notifications.items
@@ -1293,6 +1775,7 @@ class ActionCenter(PopupFrame):
         self.panel.last_status['brightness']=value
 
     def hideEvent(self, e):
+        MEDIA_WANTED['on']=False
         self.blink.stop()
         self.panel._action_center_closed_at=time.monotonic()
         self.panel.set_tray_compact(False)
@@ -1531,6 +2014,7 @@ class EdukaPanel(QWidget):
         except (AttributeError, TypeError): pass
         self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
         self._tray_compact=False; self._showing_desktop=False; self._spy=None
+        self.edge='Bottom'; self.vertical=False; self.thickness=42
         self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
@@ -1558,7 +2042,7 @@ class EdukaPanel(QWidget):
         outer=QVBoxLayout(self); outer.setContentsMargins(0,0,0,0); self.bg=QFrame(); self.bg.setObjectName('panelBg'); outer.addWidget(self.bg)
         # Panel shadow is optional. Default OFF for 512MB/old CPU target.
         self.bg.setGraphicsEffect(None)
-        self.layout=QHBoxLayout(self.bg); self.layout.setContentsMargins(10,4,10,4); self.layout.setSpacing(7)
+        self.layout=QBoxLayout(QBoxLayout.LeftToRight, self.bg); self.layout.setContentsMargins(10,4,10,4); self.layout.setSpacing(7)
         self.bg.setContextMenuPolicy(Qt.CustomContextMenu); self.bg.customContextMenuRequested.connect(self.panel_context)
         self.start=QPushButton(); self.start.setObjectName('startButton'); self.start.setAccessibleName('Edukasaun application menu'); self.start.clicked.connect(self.toggle_menu); self.start.setContextMenuPolicy(Qt.CustomContextMenu); self.start.customContextMenuRequested.connect(self.start_context); self.layout.addWidget(self.start)
         for kind, name, icon, cmd in [('files','File Manager','system-file-manager','pcmanfm-qt'),('terminal','Terminal','utilities-terminal','qterminal')]:
@@ -1566,7 +2050,7 @@ class EdukaPanel(QWidget):
             b.setContextMenuPolicy(Qt.CustomContextMenu)
             b.customContextMenuRequested.connect(lambda pos,k=kind,w=b: self.launcher_context(k,w,pos))
             self.quick_launchers[kind]=b; self.layout.addWidget(b)
-        self.task_area=QWidget(); self.task_area.setObjectName('taskArea'); self.task_area.setStyleSheet('QWidget#taskArea{background:transparent;}'); self.task_area.setMinimumWidth(80); self.task_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.task_area.setContextMenuPolicy(Qt.CustomContextMenu); self.task_area.customContextMenuRequested.connect(self.panel_context); self.task_layout=QHBoxLayout(self.task_area); self.task_layout.setContentsMargins(0,0,0,0); self.task_layout.setSpacing(6); self.task_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter); self.layout.addWidget(self.task_area,1)
+        self.task_area=QWidget(); self.task_area.setObjectName('taskArea'); self.task_area.setStyleSheet('QWidget#taskArea{background:transparent;}'); self.task_area.setMinimumWidth(80); self.task_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.task_area.setContextMenuPolicy(Qt.CustomContextMenu); self.task_area.customContextMenuRequested.connect(self.panel_context); self.task_layout=QBoxLayout(QBoxLayout.LeftToRight, self.task_area); self.task_layout.setContentsMargins(0,0,0,0); self.task_layout.setSpacing(6); self.task_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter); self.layout.addWidget(self.task_area,1)
         self.net=QPushButton(); self.net.setObjectName('trayButton'); self.net.clicked.connect(self.network_popup); self.net.setContextMenuPolicy(Qt.CustomContextMenu); self.net.customContextMenuRequested.connect(self.network_context)
         self.bt=QPushButton(); self.bt.setObjectName('trayButton'); self.bt.clicked.connect(self.bluetooth_popup); self.bt.setContextMenuPolicy(Qt.CustomContextMenu); self.bt.customContextMenuRequested.connect(self.bluetooth_context)
         self.printer=QPushButton(); self.printer.setObjectName('trayButton'); self.printer.clicked.connect(lambda: launch_app('system-config-printer')); self.printer.setContextMenuPolicy(Qt.CustomContextMenu); self.printer.customContextMenuRequested.connect(self.printer_context)
@@ -1579,7 +2063,7 @@ class EdukaPanel(QWidget):
         for button,name in [(self.net,'Network'),(self.bt,'Bluetooth'),(self.printer,'Printers'),(self.battery,'Battery'),(self.vol,'Volume'),(self.eus,'Eduka Update System'),(self.notif,'Notifications'),(self.clock,'Clock and calendar')]: button.setAccessibleName(name)
         # Status icons and the clock sit together in one rounded tray group.
         self.tray=QFrame(); self.tray.setObjectName('trayGroup'); self.tray.setContextMenuPolicy(Qt.CustomContextMenu); self.tray.customContextMenuRequested.connect(self.panel_context)
-        tray_layout=QHBoxLayout(self.tray); tray_layout.setContentsMargins(6,0,4,0); tray_layout.setSpacing(2)
+        tray_layout=QBoxLayout(QBoxLayout.LeftToRight, self.tray); tray_layout.setContentsMargins(6,0,4,0); tray_layout.setSpacing(2); self.tray_layout=tray_layout
         for w in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif,self.lang,self.clock]: tray_layout.addWidget(w)
         self.clock.setToolTip('Action Center — calendar, Wi-Fi, Bluetooth, sound and brightness')
         self.clock.setAccessibleName('Clock. Opens Action Center')
@@ -1634,12 +2118,25 @@ class EdukaPanel(QWidget):
         self.update_status_icons()
     def load_config(self):
         icon_theme_setup(force=True); cfg=read_panel_config(); self.current_cfg=cfg
-        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); theme=effective_theme(cfg.get('theme_style')); liquid=theme == THEME_LIQUID and self._composited; dark=theme == THEME_DARK
+        desktop_cfg=read_desktop_config(); high_contrast=bool(desktop_cfg.get('visual_accessibility', False)); self.hearing_accessibility=bool(desktop_cfg.get('hearing_accessibility', False)); theme=effective_theme(cfg.get('theme_style')); liquid=theme == THEME_LIQUID and self._composited; dark=theme in DARK_THEMES; low=theme == THEME_LOW; trans=theme == THEME_TRANSPARENT and self._composited
+        if low: alpha_override=1.0
+        else: alpha_override=None
         h=max(34, min(58, int(cfg.get('height',40)))); icon_size=max(18, min(42, int(cfg.get('icon_size',24))))
         width=max(45, min(100, int(cfg.get('width_percent',96)))); alpha=max(0.50, min(1.0, float(cfg.get('transparency',0.54))))
-        if high_contrast or not self._composited: alpha=1.0
-        screen=QApplication.primaryScreen().geometry(); w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2); y=screen.y()+screen.height()-h-5
-        self.setGeometry(x,y,w,h); self.setFixedSize(w,h); radius=int(h/2.3) if self._composited else 0; bg_alpha=int(alpha*255)
+        if high_contrast or not self._composited or alpha_override: alpha=1.0
+        self.apply_orientation(cfg, h)
+        screen=QApplication.primaryScreen().geometry(); edge=self.edge
+        if self.vertical:
+            th=max(48, h); length=int(screen.height()*width/100)
+            w, hh = th, min(length, screen.height()-10)
+            x=screen.x()+5 if edge == 'Left' else screen.x()+screen.width()-th-5
+            y=screen.y()+int((screen.height()-hh)/2)
+            self.setGeometry(x,y,w,hh); self.setFixedSize(w,hh); self.thickness=th
+        else:
+            w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2)
+            y=screen.y()+5 if edge == 'Top' else screen.y()+screen.height()-h-5
+            self.setGeometry(x,y,w,h); self.setFixedSize(w,h); self.thickness=h
+        radius=int(min(self.width(), self.height())/2.3) if self._composited else 0; bg_alpha=int(alpha*255)
         sb=max(13,int(h/2.7)); fs=11 if h < 46 else 12
         # 0.9.16 look: bright surface, accent start button, flat task buttons
         # with an accent indicator. Plain stylesheets only (no effects), so it
@@ -1678,6 +2175,30 @@ class EdukaPanel(QWidget):
             QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{background:transparent;border:0;color:#10262b;}}
             QPushButton#taskButton:hover,QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:rgba(255,255,255,150);border:1px solid rgba(255,255,255,200);}}
             QPushButton#taskButton[activeTask="true"]{{{pill}border-bottom:3px solid #1e9bd7;color:#0b2230;}}''')
+        if low and not high_contrast:
+            # Eduka-Low-Theme (Yaru-remix colors): flat and opaque, no gradients.
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:#f7f7f7;border:1px solid #d6d6d6;border-radius:{min(radius, 8)}px;}}
+            QPushButton#startButton{{background:#315bef;border:1px solid #315bef;color:#ffffff;border-radius:8px;}} QPushButton#startButton:hover{{background:#4a6ff2;}}
+            QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;border-radius:6px;color:#3d3d3d;}}
+            QPushButton#taskButton:hover{{background:#e9e9e9;}} QPushButton#taskButton[activeTask="true"]{{background:#e3e9fd;border:1px solid #c9d5fb;border-bottom:3px solid #315bef;color:#181818;}}
+            QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:#e9e9e9;}}
+            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton{{color:#3d3d3d;border-radius:6px;}}
+            QFrame#trayGroup{{background:#ffffff;border:1px solid #dcdcdc;border-radius:8px;}}
+            QPushButton#batteryButton{{background:#e3e9fd;color:#315bef;border-radius:6px;}} QLabel#langLabel{{color:#3d3d3d;}}''')
+        elif trans and not high_contrast:
+            # Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass.
+            ta=max(120, min(242, int(bg_alpha*0.95)))
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:rgba(26,26,26,{ta});border:1px solid rgba(255,255,255,18);border-radius:{radius}px;}}
+            QPushButton#startButton{{background:rgba(217,217,217,30);border:1px solid rgba(255,255,255,26);color:#f2f2f2;}} QPushButton#startButton:hover{{background:rgba(217,217,217,52);}}
+            QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;color:rgba(242,242,242,220);}}
+            QPushButton#taskButton:hover{{background:rgba(217,217,217,26);border:1px solid rgba(255,255,255,18);}}
+            QPushButton#taskButton[activeTask="true"]{{background:rgba(217,217,217,36);border:1px solid rgba(255,255,255,30);border-bottom:3px solid rgba(242,242,242,230);color:#ffffff;}}
+            QFrame#trayGroup{{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);}}
+            QPushButton#batteryButton{{background:rgba(217,217,217,30);color:#f2f2f2;}}''')
+        if self.edge != 'Bottom':
+            # The accent line of the active task faces away from the screen edge.
+            line={'Top':'border-top:3px','Left':'border-left:3px','Right':'border-right:3px'}[self.edge]
+            self.bg.setStyleSheet(self.bg.styleSheet().replace('border-bottom:3px', line))
         # No QGraphicsDropShadowEffect: re-rendering the whole panel through an
         # effect on every repaint made it sluggish.
         self.bg.setGraphicsEffect(None)
@@ -1685,7 +2206,11 @@ class EdukaPanel(QWidget):
         menu_icon=cfg.get('menu_icon',START_ICON)
         icon_h=max(16, min(int(cfg.get('menu_icon_size',26)), h-8))
         self.start.setIcon(get_icon(menu_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
-        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) else '')
+        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) and not self.vertical else '')
+        if self.vertical:
+            self.start.setFixedSize(self.thickness-10, self.thickness-10)
+        else:
+            self.start.setMinimumSize(0, 0); self.start.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
         for b in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif]: b.setIconSize(QSize(icon_size,icon_size))
         if hasattr(self, 'notifications'): self.update_notification_badge()
         for b in self.buttons.values(): b.setIconSize(QSize(int(cfg.get('taskbar_icon_size',22)), int(cfg.get('taskbar_icon_size',22))))
@@ -1695,10 +2220,54 @@ class EdukaPanel(QWidget):
         else:
             self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''
             self.show(); self.raise_(); QTimer.singleShot(80, lambda hh=h: self.reserve_screen_space(hh))
+        self.update_clock(); QTimer.singleShot(0, self.update_tasks)
         QTimer.singleShot(220, self.enforce_window_space)
 
+    def apply_orientation(self, cfg, h):
+        """Lay the panel out along the chosen screen edge."""
+        edge=panel_position(cfg); vertical=edge in ('Left', 'Right')
+        self.edge=edge; self.vertical=vertical
+        main=QBoxLayout.TopToBottom if vertical else QBoxLayout.LeftToRight
+        self.layout.setDirection(main); self.task_layout.setDirection(main); self.tray_layout.setDirection(main)
+        if vertical:
+            self.layout.setContentsMargins(4,10,4,10)
+            self.task_area.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding); self.task_area.setMinimumWidth(0); self.task_area.setMinimumHeight(60)
+            self.task_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+            self.tray_layout.setContentsMargins(0,6,0,6); self.tray_layout.setAlignment(Qt.AlignHCenter)
+            self.desktop_button.setMinimumWidth(0); self.desktop_button.setMaximumWidth(QWIDGETSIZE_MAX); self.desktop_button.setFixedHeight(10)
+        else:
+            self.layout.setContentsMargins(10,4,10,4)
+            self.task_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.task_area.setMinimumHeight(0); self.task_area.setMinimumWidth(80)
+            self.task_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self.tray_layout.setContentsMargins(6,0,4,0); self.tray_layout.setAlignment(Qt.Alignment())
+            self.desktop_button.setMinimumHeight(0); self.desktop_button.setMaximumHeight(QWIDGETSIZE_MAX); self.desktop_button.setFixedWidth(10)
+
+    def popup_position(self, w, h, anchor_global=None, gap=8):
+        """Top-left corner for a popup next to the panel (any edge),
+        centred on anchor_global when given, kept on screen."""
+        screen=QApplication.primaryScreen().availableGeometry(); full=QApplication.primaryScreen().geometry()
+        a=anchor_global or QPoint(self.x()+self.width()-w//2-4, self.y()+self.height()//2)
+        if self.edge == 'Bottom':
+            x=a.x()-w//2; y=self.y()-h-gap
+        elif self.edge == 'Top':
+            x=a.x()-w//2; y=self.y()+self.height()+gap
+        elif self.edge == 'Left':
+            x=self.x()+self.width()+gap; y=a.y()-h//2
+        else:
+            x=self.x()-w-gap; y=a.y()-h//2
+        x=max(full.x()+4, min(x, full.x()+full.width()-w-4))
+        y=max(full.y()+4, min(y, full.y()+full.height()-h-4))
+        return QPoint(x, y)
+
+    def popup_room(self, gap=8):
+        """Height available for a popup beside the panel."""
+        full=QApplication.primaryScreen().geometry()
+        if self.edge == 'Bottom': return self.y()-gap-(full.y()+4)
+        if self.edge == 'Top': return full.y()+full.height()-4-(self.y()+self.height()+gap)
+        return full.height()-8
+
     def reserve_screen_space(self, h):
-        """Reserve the bottom workarea like a normal LXQt panel."""
+        """Reserve the workarea along the panel's edge like a normal LXQt panel."""
         if self._fullscreen_hidden or shutil.which('xprop') is None:
             return
         try:
@@ -1706,12 +2275,18 @@ class EdukaPanel(QWidget):
             screen=QApplication.primaryScreen().geometry()
             bottom = max(1, int(screen.y()+screen.height()-self.y()))
             left = int(screen.x()); right = int(screen.x()+screen.width()-1)
+            top_px=max(1, int(self.y()+self.height()-screen.y())); left_px=max(1, int(self.x()+self.width()-screen.x())); right_px=max(1, int(screen.x()+screen.width()-self.x()))
+            y0=int(screen.y()); y1=int(screen.y()+screen.height()-1)
+            # EWMH order: left,right,top,bottom,left_start_y,left_end_y,right_start_y,right_end_y,top_start_x,top_end_x,bottom_start_x,bottom_end_x
+            partial={'Bottom': f'0,0,0,{bottom},0,0,0,0,0,0,{left},{right}', 'Top': f'0,0,{top_px},0,0,0,0,0,{left},{right},0,0',
+                     'Left': f'{left_px},0,0,0,{y0},{y1},0,0,0,0,0,0', 'Right': f'0,{right_px},0,0,0,0,{y0},{y1},0,0,0,0'}[self.edge]
+            simple={'Bottom': f'0,0,0,{bottom}', 'Top': f'0,0,{top_px},0', 'Left': f'{left_px},0,0,0', 'Right': f'0,{right_px},0,0'}[self.edge]
             subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_WINDOW_TYPE','32a','-set','_NET_WM_WINDOW_TYPE','_NET_WM_WINDOW_TYPE_DOCK'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_DESKTOP','32c','-set','_NET_WM_DESKTOP','4294967295'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STATE','32a','-set','_NET_WM_STATE','_NET_WM_STATE_STICKY,_NET_WM_STATE_ABOVE,_NET_WM_STATE_SKIP_TASKBAR,_NET_WM_STATE_SKIP_PAGER'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             # EWMH order: left,right,top,bottom,left_start_y,left_end_y,right_start_y,right_end_y,top_start_x,top_end_x,bottom_start_x,bottom_end_x
-            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT_PARTIAL','32c','-set','_NET_WM_STRUT_PARTIAL', f'0,0,0,{bottom},0,0,0,0,0,0,{left},{right}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT','32c','-set','_NET_WM_STRUT', f'0,0,0,{bottom}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT_PARTIAL','32c','-set','_NET_WM_STRUT_PARTIAL', partial], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(['xprop','-id',wid,'-f','_NET_WM_STRUT','32c','-set','_NET_WM_STRUT', simple], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.Popen(['wmctrl','-r','Eduka-Panel','-b','add,above,sticky,skip_taskbar,skip_pager'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
@@ -1768,7 +2343,7 @@ class EdukaPanel(QWidget):
                 if fills_screen:
                     return wid, 'borderless-fullscreen'
                 small_screen=screen.width() <= 1440 or screen.height() <= 900
-                overlaps_panel=(x < self.x()+self.width() and x+width > self.x() and y+height > self.y()-2)
+                overlaps_panel=QRect(x, y, width, height).intersects(self.geometry().adjusted(-2,-2,2,2))
                 maximized={'_NET_WM_STATE_MAXIMIZED_VERT','_NET_WM_STATE_MAXIMIZED_HORZ'}.issubset(states)
                 visually_maximized=width >= int(screen.width()*0.90) and height >= int(screen.height()*0.78)
                 if small_screen and overlaps_panel and (maximized or visually_maximized):
@@ -1793,6 +2368,8 @@ class EdukaPanel(QWidget):
         registry_update('panel', {'hidden_for_window': False, 'version': VERSION})
 
     def task_button_metrics(self, count):
+        if self.vertical:
+            return self.thickness-10, True
         available=max(120, self.width() - 420)
         count=max(1, int(count or 1))
         min_w=int(self.current_cfg.get('taskbar_min_button_width',46))
@@ -1906,36 +2483,49 @@ class EdukaPanel(QWidget):
         safe_popen('pkill -x eduka-panel; sleep 0.2; eduka-panel', shell=True)
 
     def panel_context(self, pos):
+        """Panel menu: position, taskbar look and settings. Session actions
+        live in the Action Center; Eduka-Desktop opens from the start button."""
         m=self._context_menu_style(RoundedMenu(self))
-        m.addAction(get_icon('start-here'), 'Open Edukasaun Desktop', self.toggle_menu)
-        m.addAction(get_icon('preferences-system'), 'Eduka-Settings', lambda: launch_app('eduka-settings'))
+        title=m.addAction(get_icon(START_ICON, 'start-here'), 'Eduka-Panel'); title.setEnabled(False)
         m.addSeparator()
-        m.addAction(get_icon('view-refresh'), 'Reload Panel', lambda: (self.load_config(), self.update_tasks(), self.update_status_icons()))
-        m.addAction(get_icon('view-refresh'), 'Rebuild App Cache', lambda: safe_popen(['eduka-app-cache','--warm']))
-        m.addAction(get_icon('system-reboot'), 'Restart Eduka-Panel', self.restart_panel)
-        m.addSeparator()
-        style_menu=m.addMenu(get_icon('view-list-icons'), 'Taskbar Style')
+        where=m.addMenu(get_icon('transform-move', 'view-fullscreen'), 'Panel Position')
+        group=QActionGroup(where)
+        for edge, label, icon in (('Bottom','Bottom','go-down'),('Top','Top','go-up'),('Left','Left','go-previous'),('Right','Right','go-next')):
+            act=where.addAction(get_icon(icon), label); act.setCheckable(True); act.setChecked(self.edge == edge); group.addAction(act)
+            act.triggered.connect(lambda _=False, e=edge: self.set_position(e))
+        style_menu=m.addMenu(get_icon('view-list-icons'), 'Taskbar Buttons')
+        group2=QActionGroup(style_menu)
         for label in ['Icon and Text', 'Icon only', 'Text only']:
-            act=style_menu.addAction(label)
-            act.setCheckable(True); act.setChecked(self.current_cfg.get('taskbar_style','Icon and Text') == label)
+            act=style_menu.addAction(label); act.setCheckable(True); group2.addAction(act)
+            act.setChecked(self.current_cfg.get('taskbar_style','Icon and Text') == label)
             act.triggered.connect(lambda checked=False, v=label: (save_panel_config({'taskbar_style': v}), self.load_config(), self.update_tasks()))
+        m.addAction(get_icon('user-desktop', 'desktop'), 'Show Desktop', self.toggle_show_desktop)
         m.addSeparator()
-        m.addAction(get_icon('system-lock-screen'), 'Lock Screen', lambda: launch_app('eduka-session-action lock'))
-        leave=m.addMenu(get_icon('system-log-out'), 'Leave')
-        leave.addAction(get_icon('system-log-out'), 'Logout', lambda: launch_app('eduka-session-action logout'))
-        leave.addAction(get_icon('system-reboot'), 'Restart', lambda: launch_app('eduka-session-action restart'))
-        leave.addAction(get_icon('system-shutdown'), 'Shutdown', lambda: launch_app('eduka-session-action shutdown'))
+        m.addAction(get_icon('preferences-system'), 'Panel Settings…', lambda: launch_app('eduka-settings --page panel'))
+        m.addAction(get_icon('system-reboot', 'view-refresh'), 'Restart Eduka-Panel', self.restart_panel)
         if isinstance(pos, QPoint):
             gp = self.sender().mapToGlobal(pos) if hasattr(self.sender(), 'mapToGlobal') else self.mapToGlobal(pos)
         else:
             gp = QCursor.pos()
         m.exec_(gp)
 
+    def set_position(self, edge):
+        if edge == self.edge:
+            return
+        if self.action_center is not None:
+            self.action_center.close()
+        self.clear_screen_space()
+        save_panel_config({'position': edge})
+        self.load_config(); self.update_tasks(); touch_reload()
+
     def start_context(self,pos):
         self.panel_context(pos)
     def update_clock(self):
         now=QDateTime.currentDateTime()
-        text=format_clock(now.time(), clock_settings()[1])+'\n'+now.toString('dd/MM/yyyy')
+        if getattr(self, 'vertical', False):
+            text=now.toString('HH\nmm') if clock_settings()[1] == '24h' else now.toString('h:mm\nAP')
+        else:
+            text=format_clock(now.time(), clock_settings()[1])+'\n'+now.toString('dd/MM/yyyy')
         if self.clock.text() != text:
             self.clock.setText(text)
         if self.action_center is not None and self.action_center.isVisible():
@@ -2136,10 +2726,10 @@ class EdukaPanel(QWidget):
             btn=self.pinned_buttons[key]
             btn.setAccessibleName('Pinned application '+app.get('name','Application'))
             style=self.current_cfg.get('taskbar_style','Icon and Text')
-            btn.setFixedWidth(task_w); btn.setMaximumWidth(task_w); btn.setMinimumWidth(task_w); btn.setFixedHeight(max(26, self.height()-10))
+            btn.setFixedSize(task_w, task_w if self.vertical else max(26, self.thickness-10))
             btn.setIcon(QIcon() if style=='Text only' else get_icon(app.get('icon'), 'application-x-executable'))
             btn.setIconSize(QSize(int(self.current_cfg.get('taskbar_icon_size',22)), int(self.current_cfg.get('taskbar_icon_size',22))))
-            show_pin_text = style == 'Text only' or (style == 'Icon and Text' and not compact_tasks)
+            show_pin_text = not self.vertical and (style == 'Text only' or (style == 'Icon and Text' and not compact_tasks))
             btn.setText((' '+app.get('name','Application')[:20]) if show_pin_text else '')
             btn.setProperty('activeTask', False)
             btn.setVisible(True)
@@ -2159,10 +2749,10 @@ class EdukaPanel(QWidget):
             btn.setToolTip(title)
             btn.setAccessibleName(name+' application window')
             style=self.current_cfg.get('taskbar_style','Icon and Text')
-            btn.setFixedWidth(task_w); btn.setMaximumWidth(task_w); btn.setMinimumWidth(task_w); btn.setFixedHeight(max(26, self.height()-10))
-            btn.setIcon(QIcon() if style=='Text only' else get_icon(app.get('icon') if app else None, 'application-x-executable'))
+            btn.setFixedSize(task_w, task_w if self.vertical else max(26, self.thickness-10))
+            btn.setIcon(QIcon() if style=='Text only' and not self.vertical else get_icon(app.get('icon') if app else None, 'application-x-executable'))
             btn.setIconSize(QSize(int(self.current_cfg.get('taskbar_icon_size',22)), int(self.current_cfg.get('taskbar_icon_size',22))))
-            btn.setText((' '+name) if style!='Icon only' and not compact_tasks else '')
+            btn.setText((' '+name) if style!='Icon only' and not compact_tasks and not self.vertical else '')
             is_active = bool(active_wid and self.normalize_window_id(wid) == self.normalize_window_id(active_wid))
             if bool(btn.property('activeTask')) != is_active:
                 btn.setProperty('activeTask', is_active)
@@ -2483,7 +3073,8 @@ class EdukaPanel(QWidget):
         self.vol.setToolTip(f'Volume: {target}%')
         safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(250, self.update_status_icons)
     def show_popup_above(self,popup,anchor):
-        popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2,0)); x=g.x()-popup.width()//2; y=self.y()-popup.height()-8; screen=QApplication.primaryScreen().availableGeometry(); x=max(screen.x()+6,min(x,screen.right()-popup.width()-6)); popup.move(x,y); popup.show()
+        popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2, anchor.height()//2))
+        popup.move(self.popup_position(popup.width(), popup.height(), g)); popup.show()
     def volume_popup(self):
         self.show_popup_above(SoundPopup(self), self.vol)
     def notification_popup(self):

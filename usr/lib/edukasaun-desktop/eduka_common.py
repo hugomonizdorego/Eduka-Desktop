@@ -5,14 +5,19 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.17"
+VERSION = "0.9.18"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
 THEME_LIQUID = "Liquid Glass"
 THEME_DARK = "Edukasaun-Dark"
-THEMES = [THEME_DEFAULT, THEME_LIQUID, THEME_DARK]
+THEME_LOW = "Eduka-Low-Theme"          # after Yaru-remix: flat, opaque, no effects
+THEME_TRANSPARENT = "Eduka-Transparan" # after Transparent-Shell-Theme: dark glass
+THEMES = [THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT]
+DARK_THEMES = (THEME_DARK, THEME_TRANSPARENT)
+# Themes whose look needs a compositor, and what they fall back to without one.
+GLASS_FALLBACK = {THEME_LIQUID: THEME_DEFAULT, THEME_TRANSPARENT: THEME_DARK}
 
 # Edukasaun-Dark: colors from the Orchis dark theme by vinceliuice
 # (github.com/vinceliuice/Orchis-theme, GPL-3.0): grey 900/800 surfaces,
@@ -137,6 +142,12 @@ def ensure_compositor():
         return False
     mode, args = _picom_mode()
     own=_own_picom()
+    if mode == 'none':
+        # Eduka-Low-Theme: no compositor at all (saves memory and CPU).
+        if own:
+            try: os.kill(own[0], 15)
+            except Exception: pass
+        return False
     if own and own[1] == mode:
         return True
     if own:
@@ -163,9 +174,12 @@ def _picom_mode():
     Eduka-Panel and Eduka-Desktop when Liquid Glass blur is switched on."""
     try:
         cfg=read_desktop_config()
-        blur=normalize_theme_style(cfg.get('theme_style')) == THEME_LIQUID and bool(cfg.get('glass_blur', False))
+        theme=normalize_theme_style(cfg.get('theme_style'))
+        blur=theme in (THEME_LIQUID, THEME_TRANSPARENT) and bool(cfg.get('glass_blur', False))
     except Exception:
-        blur=False
+        theme=THEME_DEFAULT; blur=False
+    if theme == THEME_LOW:
+        return 'none', []
     if blur:
         return 'glx-blur', ['picom','--backend','glx','--config','/dev/null',
                             '--blur-method','dual_kawase','--blur-strength','4',
@@ -248,8 +262,8 @@ def effective_theme(value):
     """Liquid Glass only when a compositor can show it; otherwise the
     default theme, so the desktop never turns black."""
     theme=normalize_theme_style(value)
-    if theme == THEME_LIQUID and not compositor_running():
-        return THEME_DEFAULT
+    if theme in GLASS_FALLBACK and not compositor_running():
+        return GLASS_FALLBACK[theme]
     return theme
 
 def liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
@@ -418,8 +432,20 @@ DARK_PALETTE = {
     'window_text_color': '#ffffff', 'text_color': '#ffffff', 'highlighted_text_color': '#ffffff',
     'link_color': '#4db6ac', 'link_visited_color': '#80cbc4',
 }
+LOW_PALETTE = {
+    # Yaru-remix colors: porcelain surfaces, jet text, blue accent.
+    'window_color': '#f7f7f7', 'base_color': '#ffffff', 'highlight_color': '#315bef',
+    'window_text_color': '#3d3d3d', 'text_color': '#3d3d3d', 'highlighted_text_color': '#ffffff',
+    'link_color': '#315bef', 'link_visited_color': '#5d5d5d',
+}
 THEME_BACKUP = BASE_CONFIG/'desktop-theme-backup.json'
 DESKTOP_DARK_THEME = 'Edukasaun-Dark'
+# Eduka theme -> (GTK theme, prefer dark, Qt palette, window border theme)
+SYSTEM_THEMES = {
+    THEME_DARK: ('Edukasaun-Dark', True, DARK_PALETTE, 'Edukasaun-Dark'),
+    THEME_TRANSPARENT: ('Edukasaun-Dark', True, DARK_PALETTE, 'Eduka-Transparan'),
+    THEME_LOW: ('Eduka-Low', False, LOW_PALETTE, 'Eduka-Low'),
+}
 
 def _home(*parts):
     return Path.home().joinpath(*parts)
@@ -458,6 +484,19 @@ def _xfwm4_theme():
     except Exception:
         return None
 
+def _xfwm4_get(prop):
+    if shutil.which('xfconf-query') is None:
+        return None
+    try:
+        out=subprocess.run(['xfconf-query','-c','xfwm4','-p',prop], capture_output=True, text=True, timeout=2)
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except Exception:
+        return None
+
+def _xfwm4_set(prop, kind, value):
+    if shutil.which('xfconf-query'):
+        safe_popen(['xfconf-query','-c','xfwm4','-p',prop,'-n','-t',kind,'-s',str(value)])
+
 def _set_xfwm4_theme(name):
     if shutil.which('xfconf-query'):
         safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-s',name])
@@ -474,7 +513,8 @@ def apply_desktop_theme(theme=None):
     lxqt=_home('.config','lxqt','lxqt.conf')
     gtk3=_home('.config','gtk-3.0','settings.ini'); gtk4=_home('.config','gtk-4.0','settings.ini')
     gtk2=_home('.gtkrc-2.0')
-    if theme == THEME_DARK:
+    if theme in SYSTEM_THEMES:
+        gtk_name, prefer_dark, palette, wm_name = SYSTEM_THEMES[theme]
         if not THEME_BACKUP.exists():
             ob=_openbox_rc()
             backup={
@@ -486,19 +526,23 @@ def apply_desktop_theme(theme=None):
                 'palette': {k: _get_ini_value(lxqt, 'Palette', k) for k in DARK_PALETTE},
                 'openbox': _openbox_theme(ob) if ob else None,
                 'xfwm4': _xfwm4_theme(),
+                'xfwm4_compositing': _xfwm4_get('/general/use_compositing'),
             }
             write_json(THEME_BACKUP, backup)
         for path in (gtk3, gtk4):
-            _set_ini_value(path, 'Settings', 'gtk-theme-name', DESKTOP_DARK_THEME)
-            _set_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme', 'true')
+            _set_ini_value(path, 'Settings', 'gtk-theme-name', gtk_name)
+            _set_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme', 'true' if prefer_dark else 'false')
         lines=[l for l in (gtk2.read_text(encoding='utf-8', errors='ignore').splitlines() if gtk2.exists() else []) if not l.strip().startswith('gtk-theme-name')]
-        lines.append(f'gtk-theme-name="{DESKTOP_DARK_THEME}"')
+        lines.append(f'gtk-theme-name="{gtk_name}"')
         gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
-        for key, value in DARK_PALETTE.items():
+        for key, value in palette.items():
             _set_ini_value(lxqt, 'Palette', key, value)
         ob=_openbox_rc()
-        if ob: _set_openbox_theme(ob, DESKTOP_DARK_THEME)
-        if shutil.which('xfwm4') and _xfwm4_theme() is not None: _set_xfwm4_theme(DESKTOP_DARK_THEME)
+        if ob: _set_openbox_theme(ob, wm_name)
+        if shutil.which('xfwm4') and _xfwm4_theme() is not None:
+            _set_xfwm4_theme(wm_name)
+            # The low theme also switches xfwm4's compositor off.
+            _xfwm4_set('/general/use_compositing', 'bool', 'false' if theme == THEME_LOW else 'true')
         return True
     if not THEME_BACKUP.exists():
         return False
@@ -523,6 +567,7 @@ def apply_desktop_theme(theme=None):
     ob=_openbox_rc()
     if ob and backup.get('openbox'): _set_openbox_theme(ob, backup['openbox'])
     if backup.get('xfwm4'): _set_xfwm4_theme(backup['xfwm4'])
+    if backup.get('xfwm4_compositing'): _xfwm4_set('/general/use_compositing', 'bool', backup['xfwm4_compositing'])
     try: THEME_BACKUP.unlink()
     except Exception: pass
     return True
@@ -585,17 +630,68 @@ def user_display_name():
         name=os.environ.get('USER', '')
     return name.split()[0].capitalize() if name else ''
 
+CLOCK_STYLES = ('digital', 'analog', 'led')
+LED_COLORS = [('#ff3b30', 'Red'), ('#00e676', 'Green'), ('#2196f3', 'Blue'), ('#ffb300', 'Amber'),
+              ('#00e5ff', 'Cyan'), ('#e040fb', 'Purple'), ('#ffffff', 'White')]
+
 def clock_settings():
     cfg=read_panel_config()
     style=cfg.get('clock_style', 'digital'); fmt=cfg.get('clock_format', '24h')
-    return (style if style in ('digital', 'analog') else 'digital'), (fmt if fmt in ('24h', '12h') else '24h')
+    return (style if style in CLOCK_STYLES else 'digital'), (fmt if fmt in ('24h', '12h') else '24h')
 
-def format_clock(qtime, fmt=None, seconds=False):
-    """'14:05' (24 hours) or '2:05 PM' (12 hours)."""
+def clock_options():
+    """Every clock option: style, format, seconds, blinking colon, LED color."""
+    cfg=read_panel_config(); style, fmt=clock_settings()
+    color=str(cfg.get('clock_led_color', '#00e676'))
+    if not re.fullmatch(r'#[0-9a-fA-F]{6}', color): color='#00e676'
+    return {'style': style, 'format': fmt, 'seconds': bool(cfg.get('clock_seconds', False)),
+            'blink': bool(cfg.get('clock_blink', False)), 'led_color': color}
+
+def format_clock(qtime, fmt=None, seconds=False, colon=':'):
+    """'14:05' (24 hours) or '2:05 PM' (12 hours); colon=' ' hides the
+    separators for a blinking clock (same width with a monospace font)."""
     fmt=fmt or clock_settings()[1]
     if fmt == '12h':
-        return qtime.toString('h:mm:ss AP' if seconds else 'h:mm AP')
-    return qtime.toString('HH:mm:ss' if seconds else 'HH:mm')
+        text=qtime.toString('h:mm:ss AP' if seconds else 'h:mm AP')
+    else:
+        text=qtime.toString('HH:mm:ss' if seconds else 'HH:mm')
+    return text.replace(':', colon) if colon != ':' else text
+
+# ---------------------------------------------------------------- effects
+EFFECT_HOVER = [('none', 'None'), ('wave', 'Wave (icon lifts)'), ('glow', 'Glow pulse'), ('slide', 'Slide in')]
+EFFECT_LAUNCH = [('none', 'None'), ('bubble', 'Bubbles'), ('zoom-in', 'Zoom in'), ('zoom-out', 'Zoom out'),
+                 ('ripple', 'Ripple'), ('bounce', 'Bounce'), ('confetti', 'Confetti'), ('fade', 'Fade')]
+
+def system_memory_gib():
+    try:
+        for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+            if line.startswith('MemTotal:'):
+                return float(line.split()[1])/(1024*1024)
+    except Exception:
+        pass
+    return 0.0
+
+def effects_capability():
+    """(memory GiB, CPU threads, allowed). Animated effects need 4 GB of
+    memory and four CPU threads (shown as ~3.6 GiB by the kernel)."""
+    mem=system_memory_gib(); threads=max(1, int(os.cpu_count() or 1))
+    return mem, threads, mem >= 3.5 and threads >= 4
+
+def effects_settings():
+    """Effects in force: off unless the user enabled them, the computer is
+    strong enough and the theme is not Eduka-Low-Theme."""
+    cfg=read_desktop_config()
+    on=bool(cfg.get('effects_enabled', False)) and effects_capability()[2] and current_theme() != THEME_LOW \
+        and not cfg.get('visual_accessibility', False)
+    hover=cfg.get('effect_hover', 'wave'); launch=cfg.get('effect_launch', 'bubble')
+    return {'enabled': on, 'hover': hover if on else 'none', 'launch': launch if on else 'none'}
+
+# ---------------------------------------------------------------- panel position
+PANEL_POSITIONS = ('Bottom', 'Top', 'Left', 'Right')
+
+def panel_position(cfg=None):
+    value=str((cfg or read_panel_config()).get('position', 'Bottom')).capitalize()
+    return value if value in PANEL_POSITIONS else 'Bottom'
 
 # ---------------------------------------------------------------- cursor themes
 def list_cursor_themes():
@@ -750,6 +846,9 @@ DEFAULT_PANEL = {
     "theme_style": THEME_DEFAULT,
     "clock_style": "digital",
     "clock_format": "24h",
+    "clock_seconds": False,
+    "clock_blink": False,
+    "clock_led_color": "#00e676",
     "notify_seconds": 7,
     "notify_history": True,
     "reserve_workarea": True,
@@ -758,7 +857,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble"}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),
@@ -894,7 +993,10 @@ def current_theme():
         return THEME_DEFAULT
 
 def is_dark_theme():
-    return current_theme() == THEME_DARK
+    return current_theme() in DARK_THEMES
+
+def is_low_theme():
+    return current_theme() == THEME_LOW
 def read_panel_config():
     data=read_json(panel_config_path(), DEFAULT_PANEL)
     changed=False
@@ -951,9 +1053,28 @@ def stop_lxqt_module_in_eduka_session(module, process):
         return safe_popen(['qdbus','org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule',module])
     return False
 
+LXQT_NOTIFY_OVERRIDE = '[Desktop Entry]\nType=Application\nName=LXQt Notification Daemon\nExec=lxqt-notificationd\n' \
+    'Hidden=true\nComment=Disabled by Edukasaun Desktop: Eduka-Panel shows notifications.\n'
+
 def stop_lxqt_notifications_in_eduka_session():
-    """Eduka-Panel shows all notifications itself in Eduka-Desktop sessions."""
-    return stop_lxqt_module_in_eduka_session('lxqt-notifications.desktop', 'lxqt-notificationd')
+    """Eduka-Panel shows all notifications itself in Eduka-Desktop sessions:
+    lxqt-session stops its daemon, it is hidden from future logins (user
+    autostart override) and, if it still runs, it is ended."""
+    if not in_eduka_session():
+        return False
+    try:
+        override=Path.home()/'.config/autostart/lxqt-notifications.desktop'
+        if not override.exists():
+            override.parent.mkdir(parents=True, exist_ok=True); override.write_text(LXQT_NOTIFY_OVERRIDE, encoding='utf-8')
+    except Exception:
+        pass
+    stop_lxqt_module_in_eduka_session('lxqt-notifications.desktop', 'lxqt-notificationd')
+    if shutil.which('pkill'):
+        try:
+            subprocess.run(['pkill','-u',str(os.getuid()),'-x','lxqt-notificationd'], timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    return True
 
 def stop_lxqt_panel_in_eduka_session():
     """Stop lxqt-panel through lxqt-session, only in Eduka-Desktop sessions.
@@ -1673,6 +1794,17 @@ def filter_apps(apps, category='All', query=''):
 def _norm_window_text(value):
     return re.sub(r'[^a-z0-9]+', ' ', (value or '').casefold()).strip()
 
+EDUKA_OWN_WINDOWS = [
+    (('eduka-settings', 'eduka-menu-settings', 'eduka settings'),
+     {'name': 'Eduka-Settings', 'icon': 'preferences-system', 'exec': 'eduka-settings', 'desktop_id': 'eduka-settings.desktop'}),
+    (('eduka-about', 'about edukasaun'),
+     {'name': 'About Edukasaun', 'icon': 'help-about', 'exec': 'eduka-about', 'desktop_id': 'eduka-about.desktop'}),
+]
+# Words many application names share; they must not decide a match alone.
+GENERIC_WINDOW_WORDS = {'eduka', 'edukasaun', 'settings', 'system', 'manager', 'update', 'updates',
+                        'desktop', 'application', 'applications', 'viewer', 'editor', 'tools', 'center',
+                        'centre', 'configuration', 'preferences', 'linux', 'debian', 'about'}
+
 def find_app_for_window(title, wm_class=''):
     """Match an X11/LXQt window to its .desktop application.
     0.9.6: improved for PCManFM-Qt and minimized windows so taskbar labels
@@ -1683,6 +1815,12 @@ def find_app_for_window(title, wm_class=''):
     c=_norm_window_text(wm_class)
     raw_c=(wm_class or '').casefold()
     raw_t=(title or '').casefold()
+
+    # Eduka's own windows are hidden from the application list, so they
+    # would otherwise borrow another Eduka application's name and icon.
+    for needles, own in EDUKA_OWN_WINDOWS:
+        if any(n in raw_c or raw_t.startswith(n) for n in needles):
+            return dict(own)
 
     # Explicit desktop/file-manager class mapping first.
     if 'pcmanfm' in raw_c:
@@ -1709,7 +1847,7 @@ def find_app_for_window(title, wm_class=''):
             else:
                 # partial words are useful for titles like "file.txt - FeatherPad".
                 for part in tok.split():
-                    if len(part) >= 4 and (part in t or part in c): score=max(score, 40)
+                    if len(part) >= 4 and part not in GENERIC_WINDOW_WORDS and (part in t or part in c): score=max(score, 40)
         if score > best_score:
             best_score=score; best=app
     return best

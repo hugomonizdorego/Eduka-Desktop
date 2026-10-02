@@ -7,4 +7,4 @@ Encoding=UTF-8
 [X-GNOME-Metatheme]
 GtkTheme=Edukasaun-Dark
 MetacityTheme=Edukasaun-Dark
-ButtonLayout=close,minimize,maximize:menu
+ButtonLayout=:minimize,maximize,close

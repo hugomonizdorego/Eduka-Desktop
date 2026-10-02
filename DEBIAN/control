@@ -1,18 +1,17 @@
 Package: edukasaun-desktop-menu
-Version: 0.9.17
+Version: 0.9.18
 Section: x11
 Priority: optional
 Architecture: all
 Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
-Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin, pkexec
+Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin, pkexec, pulseaudio-utils
 Suggests: sddm | lightdm
-Description: Edukasaun Desktop 0.9.17 - Eduka-Settings, smart Action Center and notifications
+Description: Edukasaun Desktop 0.9.18 - panel positions, effects, LED clock, globe and new themes
  Edukasaun Desktop, Eduka-Menu, Eduka-Settings and Eduka-Panel.
- Eduka-Settings configures the whole desktop (theme, icons, cursor, panel,
- clock, notifications and the SDDM login screen with live preview). The
- Action Center has a big digital or analog clock with greetings, a smart
- network tile, a resizable calendar and the session buttons; Eduka-Panel is
- the notification server. One standard account edukasaun for the live
- system.
+ Eduka-Panel on any screen edge, a redesigned Eduka-Settings, optional
+ effects for Eduka-Desktop on capable computers, digital/analog/LED clock
+ with a day-and-night globe, per-application volume in the Action Center,
+ Eduka-Panel as the only notification service, visible window buttons and
+ two new themes: Eduka-Low-Theme (Yaru-remix) and Eduka-Transparan.
