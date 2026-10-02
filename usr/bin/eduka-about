@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
 )
 
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
-from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, _
+from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, theme_accent, _
 
 
 class AboutDialog(QDialog):
@@ -19,7 +19,7 @@ class AboutDialog(QDialog):
         self.setWindowIcon(get_icon(START_ICON, 'help-about'))
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setModal(True)
-        self.resize(610, 500)
+        self.resize(660, 560)
         self.setMinimumSize(560, 440)
 
         root = QVBoxLayout(self)
@@ -41,12 +41,27 @@ class AboutDialog(QDialog):
 
         details = QTextBrowser()
         details.setOpenExternalLinks(True)
+        details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('Eduka-Desktop follows the language chosen when the computer starts; Tetun is built in.'),
-            _('New login screen with user pictures, keyboard layout, accessibility and power menu.'),
-            _('The Action Center never leaves the screen: its content scrolls when space is short.'),
-            _('One clock color for the digital, analog and LED clock.'),
-            _('Rounded drop-down lists, softer themes and helpers of virtual machines hidden.'),
+            _('Accent color for the whole desktop (Eduka-Settings → Appearance).'),
+            _('Action Center: music and video on top with previous, play/pause and next; sound and brightness at the bottom.'),
+            _('Calendar agenda with alarms; weather behind the clock; time zone map with daylight saving time.'),
+            _('Eduka-Panel: window pictures on the taskbar, clock in the style of the Action Center, battery time.'),
+            _('Parental Control: a time limit with your own message before the computer shuts down.'),
+        ]
+        # Work of others that Edukasaun Desktop uses — thank you!
+        credits = [
+            ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark theme')),
+            ('Yaru-remix', 'Muqtxdir', 'https://github.com/Muqtxdir/yaru-remix', 'GPL-3.0, CC BY-SA 4.0', _('Eduka-Low-Theme')),
+            ('Transparent-Shell-Theme', 'mrbrownstone07', 'https://github.com/mrbrownstone07/Transparent-Shell-Theme', 'GPL-3.0', _('Eduka-Transparan theme')),
+            ('Papirus icon theme', 'Papirus Development Team', 'https://github.com/PapirusDevelopmentTeam/papirus-icon-theme', 'GPL-3.0', _('Icons')),
+            ('Natural Earth', 'naturalearthdata.com', 'https://www.naturalearthdata.com', _('Public domain'), _('World map of the globe')),
+            ('Open-Meteo', 'open-meteo.com', 'https://open-meteo.com', 'CC BY 4.0', _('Weather forecast')),
+            ('GeoJS', 'geojs.io', 'https://www.geojs.io', _('Free service'), _('Location for the weather')),
+            ('IANA Time Zone Database', 'IANA', 'https://www.iana.org/time-zones', _('Public domain'), _('Time zones and daylight saving time')),
+            ('LXQt', 'LXQt team', 'https://lxqt-project.org', 'LGPL-2.1+', _('Desktop session')),
+            ('Qt and PyQt5', 'The Qt Company, Riverbank Computing', 'https://www.riverbankcomputing.com/software/pyqt/', 'GPL-3.0', _('Toolkit')),
+            ('Debian', 'Debian Project', 'https://www.debian.org', _('Free software'), _('Base system')),
         ]
         rows = [('Eduka-Desktop', _('Start menu and application launcher')), ('Eduka-Panel', _('Panel, taskbar and status controls')),
                 ('Eduka-Menu', _('Launcher button and toggle bridge')), ('Eduka-Settings', _('Configuration center'))]
@@ -60,7 +75,12 @@ class AboutDialog(QDialog):
             + f"</table><h3>{_('Version')} {VERSION}</h3><ul>"
             + ''.join(f'<li>{x}</li>' for x in notes)
             + f"</ul><p><b>{_('Developer')}:</b> Hugo Moniz do Rego<br>"
-            f"<b>{_('Organizations')}:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>")
+            f"<b>{_('Organizations')}:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>"
+            + f"<h3>{_('Credits')}</h3><p>{_('Edukasaun Desktop is built on the work of these people and projects. Thank you!')}</p>"
+            "<table cellspacing='2' cellpadding='4' width='100%'>"
+            + ''.join(f"<tr><td><a href='{url}'><b>{name}</b></a><br><span style='color:#5b6e69'>{who}</span></td>"
+                      f"<td>{use}</td><td style='color:#5b6e69'>{lic}</td></tr>" for name, who, url, lic, use in credits)
+            + "</table>")
         root.addWidget(details, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -74,6 +94,7 @@ class AboutDialog(QDialog):
         QTextBrowser{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:14px;padding:12px;}
         QPushButton{background:#00a879;color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}
         QPushButton:hover{background:#008f68;}
+        a{color:#00785a;}
         """)
 
 

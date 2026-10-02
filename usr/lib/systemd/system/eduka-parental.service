@@ -1,0 +1,13 @@
+[Unit]
+Description=Eduka-Desktop Parental Control (time limit)
+Documentation=file:///usr/share/edukasaun-desktop/doc/HISTORY.txt
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/edukasaun-desktop/eduka-parental-daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

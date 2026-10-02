@@ -11,6 +11,8 @@ from eduka_common import _get_ini_value, _
 
 SDDM_THEME_DIR = Path('/usr/share/sddm/themes/edukasaun')
 SDDM_HELPER = '/usr/lib/edukasaun-desktop/eduka-sddm-apply'
+PARENTAL_HELPER = '/usr/lib/edukasaun-desktop/eduka-parental-apply'
+PARENTAL_CONF = '/etc/edukasaun-desktop/parental.json'
 SDDM_STYLES = [('follow', 'Follow Eduka-Desktop theme'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass')]
 SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
 
@@ -127,6 +129,11 @@ QPushButton{{background:{c['button']};color:{c['text']};border:1px solid {c['fie
 QPushButton:hover{{border:1px solid {c['accent']};}}
 QPushButton:focus{{border:1px solid {c['accent']};}}
 QPushButton#primary{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
+QPushButton#chip{{border-radius:15px;padding:6px 16px;font-weight:700;}}
+QPushButton#chip:checked{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
+QToolButton#emojiChip{{font-size:18px;border-radius:17px;border:1px solid {c['field_border']};background:{c['field']};}}
+QToolButton#emojiChip:hover{{border:1px solid {c['accent']};}}
+QToolButton#emojiChip:checked{{border:2px solid {c['accent']};background:{c['hover']};}}
 QPushButton#primary:hover{{background:{c['accent_hover']};}}
 QPushButton#resetButton{{background:{c['reset']};color:{c['reset_text']};border:1px solid rgba(220,160,0,80);}}
 QPushButton#maintButton{{text-align:left;padding:10px 14px;}}
@@ -405,6 +412,7 @@ class Settings(QDialog):
                          ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
             ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',self.page_general),
                         ('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility),
+                        ('parental','Parental Control','preferences-system-parental-controls',self.page_parental),
                         ('login','Login Screen','system-users',self.page_login),
                         ('maintenance','Maintenance','applications-system',self.page_advanced)]),
         ]
@@ -465,6 +473,24 @@ class Settings(QDialog):
             group.addButton(card); grid.addWidget(card, i//3, i%3); self.theme_cards[name]=card
         p.v.addLayout(grid)
         self.theme.currentTextChanged.connect(lambda n: self.theme_cards[n].setChecked(True) if n in self.theme_cards else None)
+        # Accent color: replaces the green (or the theme's color) everywhere.
+        p.v.addWidget(self.card_title('Accent color'))
+        acc=QGridLayout(); acc.setHorizontalSpacing(8); acc.setVerticalSpacing(8); self.accent_swatches={}; self.accent_group=QButtonGroup(self)
+        for i, (value, name) in enumerate(ACCENT_CHOICES+[('custom', 'Other color…')]):
+            b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(30,30); b.setToolTip(name); b.setAccessibleName(name)
+            b.setCursor(Qt.PointingHandCursor)
+            if value == '':
+                b.setText('A'); b.setStyleSheet('QToolButton#ledSwatch{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #00a879,stop:1 #1e9bd7);color:white;font-weight:800;}')
+            elif value == 'custom':
+                b.setText('+'); b.setStyleSheet('QToolButton#ledSwatch{background:qconicalgradient(cx:0.5,cy:0.5,angle:0,stop:0 #ff3b30,stop:0.33 #ffd60a,stop:0.66 #0a84ff,stop:1 #ff3b30);color:white;font-weight:800;font-size:15px;}')
+                b.clicked.connect(self.pick_accent)
+            else:
+                b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}')
+            self.accent_group.addButton(b); acc.addWidget(b, i//9, i%9); self.accent_swatches[value]=b
+        accw=QWidget(); accw.setLayout(acc); p.v.addWidget(accw, 0, Qt.AlignLeft)
+        self.accent_value=''
+        self.accent_group.buttonClicked.connect(lambda b: self.set_accent(next((v for v, w in self.accent_swatches.items() if w is b), ''), from_click=True))
+        p.v.addWidget(hint_label('Eduka-Panel, Eduka-Desktop, the Action Center, Eduka-Settings and the leave screen use this color. "A" keeps the color of the theme.'))
         f=form()
         self.theme_info=hint_label(''); p.v.addWidget(self.theme_info)
         # Ranges match what Eduka-Panel (0.50) and Eduka-Desktop (0.45) accept.
@@ -499,6 +525,105 @@ class Settings(QDialog):
         cursor.addLayout(fc)
         self.theme.currentTextChanged.connect(self.theme_changed)
         return p.finish()
+
+    def set_accent(self, value, from_click=False):
+        if value == 'custom':
+            return
+        self.accent_value=value or ''
+        b=self.accent_swatches.get(self.accent_value) or self.accent_swatches['custom']
+        b.setChecked(True)
+        if self.accent_value and self.accent_value not in self.accent_swatches:
+            self.accent_swatches['custom'].setStyleSheet(f'QToolButton#ledSwatch{{background:{self.accent_value};color:white;font-weight:800;font-size:15px;}}')
+
+    def pick_accent(self):
+        color=QColorDialog.getColor(QColor(self.accent_value or theme_accent()), self, 'Accent color')
+        if color.isValid():
+            self.set_accent(color.name())
+        else:
+            self.set_accent(self.accent_value)
+
+    # ------------------------------------------------------------ parental control
+    def page_parental(self):
+        from eduka_parental import EMOJIS, read_state, minutes_text
+        p=Page('Parental Control', 'Limit how long this computer can be used. When the time is up your message appears over the whole screen, keyboard and mouse stop working and the computer shuts down.')
+        self.pc_status=QLabel(''); self.pc_status.setObjectName('capability'); self.pc_status.setWordWrap(True); p.v.addWidget(self.pc_status)
+        self.pc_enabled=QCheckBox('Use a time limit on this computer'); p.v.addWidget(self.pc_enabled)
+        p.v.addWidget(self.card_title('Time allowed'))
+        row=QHBoxLayout(); row.setSpacing(8); self.pc_presets={}; grp=QButtonGroup(self)
+        for minutes, label in ((30, '30 min'), (60, '1 hour'), (120, '2 hours'), (180, '3 hours')):
+            b=QPushButton(label); b.setObjectName('chip'); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, m=minutes: self.pc_minutes.setValue(m)); grp.addButton(b); row.addWidget(b); self.pc_presets[minutes]=b
+        row.addWidget(QLabel('Other:'))
+        self.pc_minutes=QSpinBox(); self.pc_minutes.setRange(5, 1440); self.pc_minutes.setSingleStep(5); self.pc_minutes.setSuffix(' min'); row.addWidget(self.pc_minutes)
+        row.addStretch(1); p.v.addLayout(row)
+        self.pc_minutes.valueChanged.connect(lambda v: [b.setChecked(m == v) for m, b in self.pc_presets.items()])
+        f=form()
+        self.pc_mode=QComboBox(); self.pc_mode.addItem('Each time the computer starts', 'boot'); self.pc_mode.addItem('In total per day', 'daily')
+        f.addRow('Count:', self.pc_mode); p.v.addLayout(f)
+        msg=p.new_card('Message before shutting down')
+        self.pc_message=QPlainTextEdit(); self.pc_message.setPlaceholderText('It is time to rest. See you later!'); self.pc_message.setFixedHeight(76)
+        self.pc_message.textChanged.connect(lambda: self.pc_message.toPlainText().__len__() > 300 and self.pc_message.setPlainText(self.pc_message.toPlainText()[:300]))
+        msg.addWidget(self.pc_message)
+        er=QHBoxLayout(); er.setSpacing(6); self.pc_emojis={}; eg=QButtonGroup(self)
+        for e in EMOJIS:
+            b=QToolButton(); b.setObjectName('emojiChip'); b.setText(e); b.setCheckable(True); b.setFixedSize(34,34); b.setCursor(Qt.PointingHandCursor)
+            eg.addButton(b); er.addWidget(b); self.pc_emojis[e]=b
+        er.addStretch(1); msg.addLayout(er)
+        btns=QHBoxLayout()
+        prev=QPushButton('Preview message'); prev.clicked.connect(self.preview_parental); btns.addWidget(prev)
+        btns.addStretch(1)
+        self.pc_save=QPushButton('Save Parental Control'); self.pc_save.setObjectName('primary'); self.pc_save.clicked.connect(self.save_parental); btns.addWidget(self.pc_save)
+        msg.addLayout(btns)
+        msg.addWidget(hint_label('Saving always asks for an administrator password, so only parents and teachers can change or switch off the limit. On the message screen a parent can press Ctrl+Alt+P to add 30 minutes.'))
+        self.load_parental()
+        t=QTimer(self); t.timeout.connect(self.update_parental_status); t.start(5000); self.update_parental_status()
+        return p.finish()
+
+    def load_parental(self):
+        try:
+            with open(PARENTAL_CONF, encoding='utf-8') as f: conf=json.load(f)
+        except Exception:
+            conf={}
+        self.pc_enabled.setChecked(bool(conf.get('enabled', False)))
+        self.pc_minutes.setValue(int(conf.get('minutes', 60) or 60))
+        idx=self.pc_mode.findData(conf.get('mode', 'boot')); self.pc_mode.setCurrentIndex(max(0, idx))
+        self.pc_message.setPlainText(str(conf.get('message', '')))
+        b=self.pc_emojis.get(conf.get('emoji', '😊')) or next(iter(self.pc_emojis.values())); b.setChecked(True)
+
+    def parental_request(self):
+        emoji=next((e for e, b in self.pc_emojis.items() if b.isChecked()), '😊')
+        return {'enabled': self.pc_enabled.isChecked(), 'minutes': self.pc_minutes.value(), 'mode': self.pc_mode.currentData(),
+                'message': self.pc_message.toPlainText().strip()[:300], 'emoji': emoji, 'reset': True}
+
+    def update_parental_status(self):
+        from eduka_parental import read_state, minutes_text
+        st=read_state()
+        if st.get('enabled') and st.get('phase') in ('ok', 'warn'):
+            used=minutes_text(st.get('used', 0)); left=minutes_text(st.get('remaining', 0))
+            self.pc_status.setText(_('✓ On: {u} used, {l} left.').replace('{u}', used).replace('{l}', left))
+        elif st.get('phase') == 'lock':
+            self.pc_status.setText(_('Time is up — the computer is shutting down.'))
+        elif not os.path.exists(PARENTAL_HELPER):
+            self.pc_status.setText(_('Parental Control works on Edukasaun OS (eduka-parental.service).'))
+        else:
+            self.pc_status.setText(_('Off: this computer can be used without a time limit.'))
+
+    def preview_parental(self):
+        from eduka_parental import ParentalLockScreen
+        r=self.parental_request()
+        self._pc_preview=ParentalLockScreen(r['message'], r['emoji'], preview=True); self._pc_preview.show_locked()
+
+    def save_parental(self):
+        if shutil.which('pkexec') is None or not os.path.exists(PARENTAL_HELPER):
+            self.show_status('Parental Control can only be changed on Edukasaun OS (pkexec missing).', error=True); return
+        try:
+            out=subprocess.run(['pkexec', PARENTAL_HELPER], input=json.dumps(self.parental_request()), capture_output=True, text=True, timeout=180)
+        except Exception as e:
+            self.show_status(str(e), error=True); return
+        if out.returncode == 0:
+            self.show_status('Parental Control saved.'); QTimer.singleShot(1500, self.update_parental_status)
+        else:
+            self.show_status('Not saved (no administrator password).', error=True)
 
     THEME_INFO = {
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
@@ -1095,6 +1220,7 @@ class Settings(QDialog):
         self.low.setEnabled(theme not in (THEME_LIQUID, THEME_TRANSPARENT))
         if theme in self.theme_cards: self.theme_cards[theme].setChecked(True)
         self.shadow.setChecked(bool(desktop.get('enable_shadows',False)))
+        self.set_accent(str(desktop.get('accent_color','') or ''))
         self.visual_access.setChecked(bool(desktop.get('visual_accessibility',False)))
         self.hearing_access.setChecked(bool(desktop.get('hearing_accessibility',False)))
         self.orca.setChecked(bool(desktop.get('orca_enabled',False)))
@@ -1155,7 +1281,7 @@ class Settings(QDialog):
     # ------------------------------------------------------------------ save / apply
     def collect(self):
         panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 

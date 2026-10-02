@@ -57,9 +57,15 @@ TRANS_UI = dict(DARK_UI, **{
 
 def ui_colors():
     theme=current_theme()
-    if theme == THEME_LOW: return LOW_UI
-    if theme == THEME_TRANSPARENT: return TRANS_UI
-    return DARK_UI if theme in DARK_THEMES else LIGHT_UI
+    if theme == THEME_LOW: u=LOW_UI
+    elif theme == THEME_TRANSPARENT: u=TRANS_UI
+    else: u=DARK_UI if theme in DARK_THEMES else LIGHT_UI
+    if custom_accent():
+        # Painted parts (clock, calendar, sliders) follow the accent color too.
+        u={k: accentize(v) for k, v in u.items()}
+        if theme in (THEME_TRANSPARENT,):
+            u['accent']=custom_accent()
+    return u
 
 
 def popup_qss():
@@ -113,11 +119,15 @@ def popup_qss():
             'QScrollBar:vertical{background:transparent;width:8px;margin:2px;}'
             f'QScrollBar::handle:vertical{{background:{u["scroll"]};border-radius:4px;min-height:24px;}}'
             'QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}'
-            f'QSlider::groove:horizontal{{height:6px;border-radius:3px;background:{u["groove"]};}}'
-            f'QSlider::sub-page:horizontal{{background:{u["accent"]};border-radius:3px;}}'
-            f'QSlider::handle:horizontal{{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid {u["accent"]};}}'
+            # Slider: a soft track and a filled knob with a white ring; the
+            # widget is tall enough that the knob is never cut off.
+            'QSlider:horizontal{min-height:26px;background:transparent;}'
+            f'QSlider::groove:horizontal{{height:8px;border-radius:4px;background:{u["groove"]};}}'
+            f'QSlider::sub-page:horizontal{{background:{u["accent"]};border-radius:4px;}}'
+            f'QSlider::handle:horizontal{{width:14px;height:14px;margin:-6px 0;border-radius:10px;background:{u["accent"]};border:3px solid rgba(0,168,121,60);}}'
+            f'QSlider::handle:horizontal:hover{{background:{u["accent_hover"]};}}'
             f'QSlider::sub-page:horizontal:disabled{{background:{u["groove_off"]};}}'
-            f'QSlider::handle:horizontal:disabled{{border:2px solid {u["groove_off"]};}}'
+            f'QSlider::handle:horizontal:disabled{{background:{u["groove_off"]};}}'
             + arrow_qss())
 
 
@@ -171,10 +181,29 @@ def _run_text(cmd, timeout=1.5):
         return None
 
 def battery_info():
+    """Capacity, status and the minutes left (discharging) or until full
+    (charging) from the battery's energy or charge and its power or current."""
+    def num(path):
+        try: return float(path.read_text().strip())
+        except Exception: return None
     for b in sorted(Path('/sys/class/power_supply').glob('BAT*')):
-        try: return {'capacity':int((b/'capacity').read_text().strip()),'status':(b/'status').read_text().strip()}
-        except Exception: pass
+        try:
+            info={'capacity':int((b/'capacity').read_text().strip()),'status':(b/'status').read_text().strip(), 'minutes': None}
+        except Exception:
+            continue
+        now=num(b/'energy_now') or num(b/'charge_now'); full=num(b/'energy_full') or num(b/'charge_full')
+        rate=num(b/'power_now') or num(b/'current_now')
+        if now is not None and rate and rate > 0:
+            st=info['status'].lower()
+            if st == 'discharging': info['minutes']=int(now/rate*60)
+            elif st == 'charging' and full: info['minutes']=int(max(0.0, full-now)/rate*60)
+        return info
     return None
+
+def battery_time_text(info):
+    m=info.get('minutes') if info else None
+    if m is None or m <= 0 or m > 48*60: return ''
+    return f'{m//60}:{m%60:02d}'
 
 
 # --- Brightness ---------------------------------------------------------------
@@ -386,6 +415,11 @@ class ModernCalendar(QCalendarWidget):
             weekend=QTextCharFormat(); weekend.setForeground(self._weekend); self.setWeekdayTextFormat(day, weekend)
         for view in self.findChildren(QAbstractItemView):
             view.setMouseTracking(True)
+        self.agenda_days=set(); self.reload_agenda()
+
+    def reload_agenda(self):
+        self.agenda_days={e['date'] for e in read_agenda()}
+        self.updateCells()
 
     def paintCell(self, painter, rect, date):
         painter.save()
@@ -409,6 +443,10 @@ class ModernCalendar(QCalendarWidget):
             font.setBold(True)
         painter.setFont(font); painter.setPen(color)
         painter.drawText(rect, Qt.AlignCenter, str(date.day()))
+        if date.toString('yyyy-MM-dd') in self.agenda_days:
+            # A small dot under the number marks a day with an agenda.
+            painter.setPen(Qt.NoPen); painter.setBrush(QColor('#ffffff') if today else self._accent)
+            painter.drawEllipse(QPointF(rect.center().x()+0.5, circle.bottom()-3.5), 2.2, 2.2)
         painter.restore()
 
 
@@ -431,7 +469,78 @@ class CalendarCard(QFrame):
         self.next.clicked.connect(self.calendar.showNextMonth)
         today.clicked.connect(lambda: (self.calendar.setSelectedDate(QDate.currentDate()), self.calendar.showToday()))
         self.calendar.currentPageChanged.connect(lambda *_: self.update_title())
-        self.update_title()
+        # Agenda of the chosen day: the entries, and a small form to add one.
+        self.agenda=QWidget(); av=QVBoxLayout(self.agenda); av.setContentsMargins(2,2,2,2); av.setSpacing(4)
+        ah=QHBoxLayout(); ah.setSpacing(6)
+        self.agenda_title=QLabel(''); self.agenda_title.setObjectName('agendaTitle'); ah.addWidget(self.agenda_title, 1)
+        self.agenda_add=QPushButton('+ Agenda'); self.agenda_add.setObjectName('calToday'); self.agenda_add.setCursor(Qt.PointingHandCursor)
+        self.agenda_add.setToolTip('Write an agenda for this day'); ah.addWidget(self.agenda_add)
+        av.addLayout(ah)
+        self.agenda_list=QVBoxLayout(); self.agenda_list.setSpacing(2); av.addLayout(self.agenda_list)
+        self.form=QFrame(); self.form.setObjectName('agendaForm'); fl=QGridLayout(self.form); fl.setContentsMargins(8,8,8,8); fl.setSpacing(6)
+        self.form_text=QLineEdit(); self.form_text.setPlaceholderText('What is on this day?'); self.form_text.setMaxLength(200)
+        self.form_time=QTimeEdit(QTime(7, 0)); self.form_time.setDisplayFormat('HH:mm'); self.form_time.setButtonSymbols(QAbstractSpinBox.NoButtons); self.form_time.setAccessibleName('Alarm time')
+        self.form_alarm=QComboBox()
+        for key, label in AGENDA_ALARMS: self.form_alarm.addItem(_(label), key)
+        self.form_alarm.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon); self.form_alarm.setMinimumContentsLength(8)
+        self.form_alarm.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.form_text.setMinimumWidth(10)
+        round_combo(self.form_alarm)
+        save=QPushButton('Save'); save.setObjectName('agendaSave'); save.setCursor(Qt.PointingHandCursor)
+        cancel=QPushButton('Cancel'); cancel.setObjectName('calToday'); cancel.setCursor(Qt.PointingHandCursor)
+        fl.addWidget(self.form_text, 0, 0, 1, 3)
+        fl.addWidget(QLabel('Alarm:'), 1, 0); fl.addWidget(self.form_time, 1, 1); fl.addWidget(self.form_alarm, 1, 2)
+        btns=QHBoxLayout(); btns.addStretch(1); btns.addWidget(cancel); btns.addWidget(save); fl.addLayout(btns, 2, 0, 1, 3)
+        self.form.setVisible(False); av.addWidget(self.form)
+        lay.addWidget(self.agenda)
+        self.agenda_add.clicked.connect(self.open_form)
+        cancel.clicked.connect(lambda: self.show_form(False))
+        save.clicked.connect(self.save_entry); self.form_text.returnPressed.connect(self.save_entry)
+        self.calendar.selectionChanged.connect(self.update_agenda)
+        self.update_title(); self.update_agenda()
+
+    changed=pyqtSignal()
+
+    def show_form(self, on):
+        self.form.setVisible(on); self.agenda_add.setVisible(not on)
+        if on: self.form_text.setFocus()
+        self.changed.emit()
+
+    def open_form(self):
+        self.form_text.clear()
+        day=self.calendar.selectedDate()
+        t=QTime.currentTime().addSecs(3600) if day == QDate.currentDate() else QTime(7, 0)
+        self.form_time.setTime(QTime(t.hour(), 0)); self.show_form(True)
+
+    def save_entry(self):
+        text=self.form_text.text().strip()
+        if not text:
+            self.form_text.setFocus(); return
+        add_agenda(self.calendar.selectedDate().toString('yyyy-MM-dd'), self.form_time.time().toString('HH:mm'), text, self.form_alarm.currentData() or 'notify')
+        self.show_form(False); self.calendar.reload_agenda(); self.update_agenda()
+
+    def remove(self, item_id):
+        remove_agenda(item_id); self.calendar.reload_agenda(); self.update_agenda()
+
+    def update_agenda(self):
+        day=self.calendar.selectedDate()
+        self.agenda_title.setText(_('Agenda') + ' • ' + QLocale().toString(day, 'ddd d MMM'))
+        while self.agenda_list.count():
+            w=self.agenda_list.takeAt(0).widget()
+            if w: w.deleteLater()
+        key=day.toString('yyyy-MM-dd')
+        entries=[e for e in read_agenda() if e['date'] == key]
+        icons={'notify': '🔔', 'sound': '⏰', 'blink': '✨'}
+        for e in entries[:5]:
+            row=QFrame(); row.setObjectName('agendaRow'); rl=QHBoxLayout(row); rl.setContentsMargins(8,3,3,3); rl.setSpacing(6)
+            when=QLabel(e['time'] or '—'); when.setObjectName('agendaTime'); rl.addWidget(when)
+            text=QLabel(e['text']); text.setTextFormat(Qt.PlainText); text.setWordWrap(True); rl.addWidget(text, 1)
+            kind=QLabel(icons.get(e['alarm'], '🔔')); kind.setToolTip(_(dict(AGENDA_ALARMS).get(e['alarm'], 'Notification'))); rl.addWidget(kind)
+            x=QToolButton(); x.setObjectName('calNav'); x.setText('✕'); x.setToolTip('Delete'); x.setCursor(Qt.PointingHandCursor)
+            x.clicked.connect(lambda _=False, i=e['id']: self.remove(i)); rl.addWidget(x)
+            self.agenda_list.addWidget(row)
+        if not entries:
+            none=QLabel('No agenda for this day.'); none.setObjectName('popHint'); self.agenda_list.addWidget(none)
+        self.changed.emit()
 
     def update_title(self):
         page=QDate(self.calendar.yearShown(), self.calendar.monthShown(), 1)
@@ -1005,7 +1114,239 @@ class ClockFace(QWidget):
         p.setPen(Qt.NoPen); p.setBrush(self.accent); p.drawEllipse(QPointF(0,0), 6, 6)
 
 
+class WeatherWorker(QThread):
+    """Fetch the weather without blocking Eduka-Panel."""
+    ready=pyqtSignal(object)
+    def run(self):
+        try:
+            self.ready.emit(fetch_weather())
+        except Exception:
+            self.ready.emit(None)
+
+
+class WeatherBackdrop(QWidget):
+    """Background of the clock card: a small animated sky for the weather
+    of today — sun with turning rays, a moon and stars at night, drifting
+    clouds with a friendly face, rain, drizzle, snow, fog or lightning."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.weather=None; self.t=0.0
+        self.timer=QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.tick)
+        rnd=__import__('random').Random(7)
+        self.drops=[(rnd.random(), rnd.random(), 0.7+rnd.random()*0.6) for _ in range(46)]
+        self.stars=[(rnd.random(), rnd.random()*0.6, rnd.random()*6.28) for _ in range(18)]
+        u=ui_colors(); self.dark=is_dark_theme(); self.ink=qcolor(u['sub'])
+
+    def set_weather(self, w):
+        self.weather=w; self.update(); self.sync_timer()
+        # The weather chip gets its own line at the bottom of the card.
+        lay=self.layout()
+        if lay is not None: lay.setContentsMargins(12, 10, 12, 30 if w else 12)
+        tip=weather_summary(w)
+        self.setToolTip(tip)
+
+    def sync_timer(self):
+        if self.weather and self.isVisible() and not self.timer.isActive(): self.timer.start()
+        elif not (self.weather and self.isVisible()): self.timer.stop()
+
+    def showEvent(self, e): self.sync_timer(); super().showEvent(e)
+    def hideEvent(self, e): self.timer.stop(); super().hideEvent(e)
+
+    def tick(self):
+        self.t+=0.04; self.update()
+
+    def paintEvent(self, e):
+        w=self.weather
+        if not w: return
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        W=self.width(); H=self.height(); kind=w.get('kind', 'clear'); day=bool(w.get('is_day', True)); t=self.t
+        clip=QPainterPath(); clip.addRoundedRect(QRectF(1, 1, W-2, H-2), 17, 17); p.setClipPath(clip)
+        # Soft sky tint so the clock stays easy to read.
+        g=QLinearGradient(0, 0, 0, H)
+        if not day:
+            g.setColorAt(0, QColor(40, 52, 110, 70 if not self.dark else 120)); g.setColorAt(1, QColor(40, 52, 110, 10))
+        elif kind in ('rain', 'drizzle', 'thunder', 'cloudy', 'fog'):
+            g.setColorAt(0, QColor(120, 140, 160, 60)); g.setColorAt(1, QColor(120, 140, 160, 8))
+        else:
+            g.setColorAt(0, QColor(120, 200, 255, 60)); g.setColorAt(1, QColor(255, 236, 170, 25))
+        p.fillRect(self.rect(), g)
+        sx, sy = W-24, 22   # sun and moon peek in at the top right corner
+        if not day:
+            for x, y, ph in self.stars:
+                a=int(90+80*math.sin(t*2+ph)); p.setPen(Qt.NoPen); p.setBrush(QColor(255, 244, 200, max(0, a))); p.drawEllipse(QPointF(x*W, 6+y*H*0.6), 1.3, 1.3)
+            p.setBrush(QColor(255, 236, 170, 230)); p.drawEllipse(QPointF(sx, sy), 15, 15)
+            p.setBrush(QColor(60, 72, 130, 255) if self.dark else QColor(225, 230, 245, 255)); p.drawEllipse(QPointF(sx+7, sy-5), 13, 13)
+        elif kind in ('clear', 'partly'):
+            p.save(); p.translate(sx, sy); p.rotate(t*12)
+            p.setPen(QPen(QColor(255, 190, 40, 200), 3, Qt.SolidLine, Qt.RoundCap))
+            for i in range(10):
+                p.drawLine(QPointF(0, 21), QPointF(0, 27+2*math.sin(t*3+i))); p.rotate(36)
+            p.restore()
+            p.setPen(Qt.NoPen); p.setBrush(QColor(255, 200, 50, 240)); p.drawEllipse(QPointF(sx, sy), 16, 16)
+            # A little smile on the sun.
+            p.setBrush(QColor(120, 70, 0, 200)); p.drawEllipse(QPointF(sx-5, sy-3), 1.8, 1.8); p.drawEllipse(QPointF(sx+5, sy-3), 1.8, 1.8)
+            p.setPen(QPen(QColor(120, 70, 0, 200), 1.6, Qt.SolidLine, Qt.RoundCap)); p.setBrush(Qt.NoBrush)
+            p.drawArc(QRectF(sx-5, sy-2, 10, 7), 200*16, 140*16)
+        clouds={'partly': 1, 'cloudy': 3, 'fog': 1, 'drizzle': 2, 'rain': 3, 'snow': 2, 'thunder': 3}.get(kind, 0)
+        dark_cloud=kind in ('rain', 'thunder')
+        for i in range(clouds):
+            speed=6+i*3; cw=58-i*8
+            x=((t*speed+i*137) % (W+cw*2))-cw; y=10+i*16
+            self.cloud(p, x, y, cw, dark_cloud, face=(i == 0))
+        if kind in ('rain', 'thunder', 'drizzle'):
+            small=kind == 'drizzle'; n=22 if small else 46
+            p.setPen(QPen(QColor(70, 140, 230, 170 if not small else 140), 1.3 if small else 1.8, Qt.SolidLine, Qt.RoundCap))
+            for x, y, sp in self.drops[:n]:
+                yy=((y+t*sp*(0.45 if small else 0.9)) % 1.0)*(H-24)+24; xx=x*W-(yy-24)*0.18
+                p.drawLine(QPointF(xx, yy), QPointF(xx-1.5, yy+(3 if small else 7)))
+        if kind == 'snow':
+            p.setPen(Qt.NoPen); p.setBrush(QColor(255, 255, 255, 230) if self.dark else QColor(150, 180, 220, 220))
+            for x, y, sp in self.drops[:30]:
+                yy=((y+t*sp*0.18) % 1.0)*(H-20)+20; xx=x*W+6*math.sin(t*1.5+y*9)
+                p.drawEllipse(QPointF(xx, yy), 2.2, 2.2)
+        if kind == 'fog':
+            p.setPen(Qt.NoPen)
+            for i in range(4):
+                y=H*0.35+i*14; off=math.sin(t*0.6+i)*20
+                p.setBrush(QColor(170, 180, 190, 70)); p.drawRoundedRect(QRectF(-20+off+i*15, y, W*0.8, 7), 3.5, 3.5)
+        if kind == 'thunder':
+            phase=(t*0.5) % 4.0
+            if phase < 0.18:
+                p.fillRect(self.rect(), QColor(255, 255, 230, int(120*(1-phase/0.18))))
+                bolt=QPolygonF([QPointF(W*0.62, 30), QPointF(W*0.56, 52), QPointF(W*0.61, 52), QPointF(W*0.55, 76), QPointF(W*0.68, 46), QPointF(W*0.63, 46), QPointF(W*0.68, 30)])
+                p.setPen(Qt.NoPen); p.setBrush(QColor(255, 210, 40, 230)); p.drawPolygon(bolt)
+        # Small chip: temperature and place.
+        text=weather_chip(w)
+        f=QFont(self.font()); f.setPixelSize(11); f.setBold(True); p.setFont(f); fm=QFontMetrics(f)
+        tw=fm.horizontalAdvance(text)+16; r=QRectF(W-tw-8, H-24, tw, 18)
+        p.setPen(Qt.NoPen); p.setBrush(QColor(255, 255, 255, 170) if not self.dark else QColor(0, 0, 0, 110)); p.drawRoundedRect(r, 9, 9)
+        p.setPen(self.ink); p.drawText(r, Qt.AlignCenter, text)
+
+    def cloud(self, p, x, y, w, dark, face=False):
+        c=QColor(150, 160, 175, 210) if dark else QColor(255, 255, 255, 235)
+        edge=QColor(120, 130, 150, 120)
+        path=QPainterPath(); h=w*0.42
+        path.addRoundedRect(QRectF(x, y+h*0.45, w, h*0.55), h*0.27, h*0.27)
+        path.addEllipse(QRectF(x+w*0.12, y+h*0.12, w*0.42, h*0.75)); path.addEllipse(QRectF(x+w*0.40, y, w*0.45, h*0.85))
+        path=path.simplified()
+        p.setPen(QPen(edge, 1)); p.setBrush(c); p.drawPath(path)
+        if face:
+            p.setPen(Qt.NoPen); p.setBrush(QColor(70, 80, 100, 200))
+            p.drawEllipse(QPointF(x+w*0.42, y+h*0.62), 1.6, 1.6); p.drawEllipse(QPointF(x+w*0.62, y+h*0.62), 1.6, 1.6)
+            p.setPen(QPen(QColor(70, 80, 100, 200), 1.3, Qt.SolidLine, Qt.RoundCap)); p.setBrush(Qt.NoBrush)
+            p.drawArc(QRectF(x+w*0.46, y+h*0.62, w*0.12, h*0.22), 200*16, 140*16)
+            p.setPen(Qt.NoPen); p.setBrush(QColor(255, 140, 160, 120))
+            p.drawEllipse(QPointF(x+w*0.34, y+h*0.75), 2.4, 1.6); p.drawEllipse(QPointF(x+w*0.70, y+h*0.75), 2.4, 1.6)
+
+
+WEATHER_ICON = {'clear': '☀', 'partly': '⛅', 'cloudy': '☁', 'fog': '🌫', 'drizzle': '🌦', 'rain': '🌧', 'snow': '❄', 'thunder': '⛈'}
+
+def weather_chip(w):
+    icon=WEATHER_ICON.get(w.get('kind'), '☁')
+    if not w.get('is_day', True) and w.get('kind') in ('clear', 'partly'): icon='☾'
+    return f"{icon} {round(w.get('temp', 0))}°  {w.get('city', '')}".strip()
+
+def weather_summary(w):
+    if not w: return ''
+    rng=''
+    if w.get('tmin') is not None and w.get('tmax') is not None:
+        rng=f" • {round(w['tmin'])}° – {round(w['tmax'])}°"
+    return f"{_(WEATHER_TEXT.get(w.get('kind'), 'Cloudy'))}, {round(w.get('temp', 0))}°C{rng} • {w.get('city', '')}\n" + _('Weather: Open-Meteo (open source)')
+
+
 WORLD_MAP = Path('/usr/share/edukasaun-desktop/assets/world-map.png')
+if not WORLD_MAP.exists():
+    WORLD_MAP=Path(__file__).resolve().parents[1]/'share'/'edukasaun-desktop'/'assets'/'world-map.png'
+
+# Cities shown on the time zone map (name, zone).
+WORLD_CITIES = [('Dili', 'Asia/Dili'), ('Jakarta', 'Asia/Jakarta'), ('Manila', 'Asia/Manila'), ('Bangkok', 'Asia/Bangkok'),
+                ('Beijing', 'Asia/Shanghai'), ('Tokyo', 'Asia/Tokyo'), ('Sydney', 'Australia/Sydney'), ('Lisbon', 'Europe/Lisbon'),
+                ('London', 'Europe/London'), ('New York', 'America/New_York'), ('São Paulo', 'America/Sao_Paulo'), ('Nairobi', 'Africa/Nairobi')]
+
+
+class TimeZoneMap(QWidget):
+    """Flat world map with the 24 time zones: night side shaded, the zone
+    of this computer highlighted, a pulsing dot at its city and the time of
+    other cities (daylight saving follows each country's rules)."""
+    clicked=pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(340, 178); self.setCursor(Qt.PointingHandCursor); self.setMouseTracking(True)
+        img=QImage(str(WORLD_MAP)) if WORLD_MAP.exists() else QImage()
+        self.map=img.scaled(340, 170, Qt.IgnoreAspectRatio, Qt.SmoothTransformation) if not img.isNull() else QImage()
+        self.zone=local_timezone_name(); self.pulse=0.0
+        u=ui_colors(); self.accent=qcolor(u['accent']); self.ink=qcolor(u['title'])
+        self.timer=QTimer(self); self.timer.setInterval(60); self.timer.timeout.connect(self.tick)
+        self.setToolTip(_('Click to go back to the clock'))
+
+    def showEvent(self, e): self.timer.start(); super().showEvent(e)
+    def hideEvent(self, e): self.timer.stop(); super().hideEvent(e)
+    def tick(self): self.pulse=(self.pulse+0.05) % 1.0; self.update()
+
+    def xy(self, lat, lon):
+        return QPointF((lon+180.0)/360.0*340, 4+(90.0-lat)/180.0*170)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton: self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def mouseMoveEvent(self, e):
+        # Hover a city dot: its local time.
+        for city, zone in WORLD_CITIES:
+            pos=zone_position(zone)
+            if pos and (self.xy(pos[0], pos[1])-QPointF(e.pos())).manhattanLength() < 9:
+                z=zone_info(zone); dst=' • '+_('daylight saving time') if z['dst_now'] else ''
+                QToolTip.showText(e.globalPos(), f"{city}: {z['local'].strftime('%H:%M')} ({z['offset']}{dst})", self); return
+        QToolTip.hideText()
+        super().mouseMoveEvent(e)
+
+    def paintEvent(self, e):
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        clip=QPainterPath(); clip.addRoundedRect(QRectF(0, 4, 340, 170), 12, 12); p.setClipPath(clip)
+        if not self.map.isNull(): p.drawImage(QPointF(0, 4), self.map)
+        else: p.fillRect(QRectF(0, 4, 340, 170), QColor('#1b507c'))
+        # Night side (terminator from the sun's position).
+        decl, slon=sun_position()
+        night=QPainterPath(); td=math.tan(math.radians(decl)) or 1e-6
+        pts=[]
+        for i in range(0, 341, 4):
+            lon=i/340.0*360-180
+            lat=math.degrees(math.atan(-math.cos(math.radians(lon-slon))/td))
+            pts.append(self.xy(lat, lon))
+        edge=4+170 if decl > 0 else 4
+        night.moveTo(pts[0]);
+        for q in pts[1:]: night.lineTo(q)
+        night.lineTo(QPointF(340, edge)); night.lineTo(QPointF(0, edge)); night.closeSubpath()
+        p.setPen(Qt.NoPen); p.setBrush(QColor(5, 12, 40, 110)); p.drawPath(night)
+        # Time zone bands every 15 degrees; this computer's zone in the accent color.
+        z=zone_info(self.zone); hours=z['hours']
+        band=QColor(self.accent); band.setAlpha(70)
+        x0=(hours*15+180-7.5)/360*340
+        p.setBrush(band); p.drawRect(QRectF(x0, 4, 340/24.0, 170))
+        p.setPen(QPen(QColor(255, 255, 255, 45), 1))
+        for k in range(25):
+            x=(k*15-7.5)/360*340; p.drawLine(QPointF(x, 4), QPointF(x, 174))
+        f=QFont(self.font()); f.setPixelSize(8); f.setBold(True); p.setFont(f)
+        utc=QDateTime.currentDateTimeUtc()
+        for k in range(-12, 13, 3):
+            x=(k*15+180)/360*340; t=utc.addSecs(k*3600).toString('HH')
+            p.setPen(QColor(255, 255, 255, 200)); p.drawText(QRectF(x-10, 6, 20, 10), Qt.AlignCenter, t)
+        # Cities.
+        f.setPixelSize(8); f.setBold(False); p.setFont(f)
+        for city, zone in WORLD_CITIES:
+            pos=zone_position(zone)
+            if not pos: continue
+            q=self.xy(pos[0], pos[1]); p.setPen(Qt.NoPen); p.setBrush(QColor(255, 255, 255, 210)); p.drawEllipse(q, 1.8, 1.8)
+        # This computer: pulsing dot.
+        pos=zone_position(self.zone)
+        if pos:
+            q=self.xy(pos[0], pos[1]); r=4+10*self.pulse
+            ring=QColor(self.accent); ring.setAlphaF(max(0.0, 0.8*(1-self.pulse)))
+            p.setPen(QPen(ring, 2)); p.setBrush(Qt.NoBrush); p.drawEllipse(q, r, r)
+            p.setPen(QPen(QColor('#ffffff'), 1.5)); p.setBrush(self.accent); p.drawEllipse(q, 4.5, 4.5)
+
+
+
 
 def sun_position(utc=None):
     """(declination, subsolar longitude) in degrees for a UTC QDateTime."""
@@ -1140,68 +1481,160 @@ class GlobeWidget(QWidget):
         self.lon0+=e.angleDelta().y()/12.0; self.update()
 
 
+def media_icon(kind, color, size=28):
+    """Play, pause, previous and next drawn in one style (icon themes mix
+    styles and sizes)."""
+    pix=QPixmap(size*2, size*2); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing); p.scale(2, 2)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(color)); s=size
+    def tri(x0, flip=False):
+        w=s*0.30; h=s*0.36; y=(s-h)/2
+        pts=[QPointF(x0, y), QPointF(x0, y+h), QPointF(x0+w, y+h/2)] if not flip else [QPointF(x0+w, y), QPointF(x0+w, y+h), QPointF(x0, y+h/2)]
+        p.drawPolygon(QPolygonF(pts))
+    if kind == 'play':
+        w=s*0.34; h=s*0.40; x=(s-w)/2+s*0.04; y=(s-h)/2
+        path=QPainterPath(); path.moveTo(x, y); path.lineTo(x, y+h); path.lineTo(x+w, y+h/2); path.closeSubpath()
+        p.drawPath(path)
+    elif kind == 'pause':
+        w=s*0.11; h=s*0.38; y=(s-h)/2
+        p.drawRoundedRect(QRectF(s*0.33, y, w, h), w/2.5, w/2.5); p.drawRoundedRect(QRectF(s*0.56, y, w, h), w/2.5, w/2.5)
+    elif kind in ('next', 'prev'):
+        flip=kind == 'prev'
+        x0=s*0.24
+        tri(x0 if not flip else s*0.40, flip); tri(s*0.40 if not flip else x0, flip)
+        bar=QRectF(s*0.70, s*0.32, s*0.07, s*0.36) if not flip else QRectF(s*0.23, s*0.32, s*0.07, s*0.36)
+        p.drawRoundedRect(bar, 1, 1)
+    p.end(); pix.setDevicePixelRatio(2)
+    return QIcon(pix)
+
+
+def raise_application(pid=None, player=None):
+    """Bring the window of a playing application to the front: MPRIS
+    Raise() first, then the window that belongs to the process."""
+    if player:
+        safe_popen(['dbus-send','--session','--type=method_call',f'--dest={player}','/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Raise'])
+    pids=set()
+    try:
+        if pid:
+            pids.add(str(int(pid)))
+            # Browsers play sound in a child process: also try its parents.
+            cur=str(int(pid))
+            for _ in range(4):
+                stat=Path(f'/proc/{cur}/stat').read_text().rsplit(')', 1)[1].split()
+                cur=stat[1]
+                if cur in ('0', '1'): break
+                pids.add(cur)
+    except Exception:
+        pass
+    if not pids:
+        return
+    out=_run_text(['wmctrl','-lp'], timeout=1.5) or ''
+    for line in out.splitlines():
+        parts=line.split(None, 4)
+        if len(parts) >= 3 and parts[2] in pids:
+            safe_popen(['wmctrl','-ia',parts[0]]); return
+
+
+class MarqueeLabel(QWidget):
+    """One line of text that scrolls slowly when it is too long."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.text=''; self.offset=0.0; self.pause=60
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.timer=QTimer(self); self.timer.timeout.connect(self.step)
+
+    def setText(self, text):
+        text=str(text or '')
+        if text != self.text:
+            self.text=text; self.offset=0.0; self.pause=60; self.update()
+        self.setAccessibleName(text)
+        self.check()
+
+    def sizeHint(self):
+        return QSize(120, self.fontMetrics().height()+2)
+
+    def check(self):
+        long_text=self.fontMetrics().horizontalAdvance(self.text) > self.width()
+        if long_text and self.isVisible() and not self.timer.isActive(): self.timer.start(40)
+        if not long_text: self.timer.stop(); self.offset=0.0
+
+    def resizeEvent(self, e): self.check(); super().resizeEvent(e)
+    def showEvent(self, e): self.check(); super().showEvent(e)
+    def hideEvent(self, e): self.timer.stop(); super().hideEvent(e)
+
+    def step(self):
+        if self.pause > 0:
+            self.pause-=1; return
+        full=self.fontMetrics().horizontalAdvance(self.text)+40
+        self.offset+=1.0
+        if self.offset >= full: self.offset=0.0; self.pause=60
+        self.update()
+
+    def paintEvent(self, e):
+        p=QPainter(self); p.setRenderHint(QPainter.TextAntialiasing)
+        p.setPen(self.palette().color(QPalette.WindowText)); p.setFont(self.font())
+        fm=self.fontMetrics(); y=(self.height()+fm.ascent()-fm.descent())//2
+        if fm.horizontalAdvance(self.text) <= self.width():
+            p.drawText(0, y, self.text); return
+        # Soft fade at both ends while the title scrolls.
+        full=fm.horizontalAdvance(self.text)+40
+        p.drawText(int(-self.offset), y, self.text); p.drawText(int(full-self.offset), y, self.text)
+
+
 class MediaRow(QFrame):
-    """One application playing sound: icon, title, play/pause (when the
-    player supports MPRIS), its own mute button and volume slider."""
+    """One application playing sound or video: icon, a scrolling title,
+    previous / play-pause / next (MPRIS). Clicking the row opens the
+    application. Volume stays with the sound control below."""
     def __init__(self, ac, key, parent=None):
         super().__init__(parent)
         self.ac=ac; self.key=key; self.stream=None; self.player=None
-        self.setObjectName('mediaRow')
-        lay=QHBoxLayout(self); lay.setContentsMargins(6,4,6,4); lay.setSpacing(6)
-        self.icon=QLabel(); self.icon.setFixedSize(26,26); lay.addWidget(self.icon)
-        texts=QVBoxLayout(); texts.setSpacing(0)
-        self.title=QLabel(''); self.title.setObjectName('mediaTitle'); self.title.setTextFormat(Qt.PlainText)
+        self.setObjectName('mediaRow'); self.setCursor(Qt.PointingHandCursor)
+        lay=QHBoxLayout(self); lay.setContentsMargins(8,6,6,6); lay.setSpacing(8)
+        self.icon=QLabel(); self.icon.setFixedSize(30,30); self.icon.setAlignment(Qt.AlignCenter); lay.addWidget(self.icon)
+        texts=QVBoxLayout(); texts.setSpacing(1)
+        self.title=MarqueeLabel(); self.title.setObjectName('mediaTitle')
         self.app=QLabel(''); self.app.setObjectName('popHint'); self.app.setTextFormat(Qt.PlainText)
         texts.addWidget(self.title); texts.addWidget(self.app); lay.addLayout(texts, 1)
-        self.play=QToolButton(); self.play.setObjectName('mediaBtn'); self.play.setFixedSize(26,26); self.play.setIconSize(QSize(14,14)); self.play.clicked.connect(self.play_pause); lay.addWidget(self.play)
-        self.mute=QToolButton(); self.mute.setObjectName('mediaBtn'); self.mute.setCheckable(True); self.mute.setFixedSize(26,26); self.mute.setIconSize(QSize(14,14)); self.mute.clicked.connect(self.toggle_mute); lay.addWidget(self.mute)
-        self.slider=QSlider(Qt.Horizontal); self.slider.setRange(0,100); self.slider.setFixedWidth(84); lay.addWidget(self.slider)
-        self.timer=QTimer(self); self.timer.setSingleShot(True); self.timer.timeout.connect(self.apply_volume)
-        self.slider.valueChanged.connect(lambda _v: self.timer.start(80))
+        ink=ui_colors()['title']; self.ink=ink; self.buttons={}
+        for kind, tip in (('prev', 'Previous'), ('play', 'Play'), ('next', 'Next')):
+            b=QToolButton(); b.setObjectName('mediaPlay' if kind == 'play' else 'mediaBtn')
+            b.setFixedSize(36 if kind == 'play' else 30, 36 if kind == 'play' else 30); b.setIconSize(QSize(28, 28))
+            b.setIcon(media_icon(kind, '#ffffff' if kind == 'play' else ink)); b.setToolTip(tip); b.setAccessibleName(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=kind: self.control(k)); lay.addWidget(b); self.buttons[kind]=b
 
     def set_data(self, stream, player):
         self.stream=stream; self.player=player
         title=(player or {}).get('title') or (stream or {}).get('title') or ''
         artist=(player or {}).get('artist') or ''
         app=(stream or {}).get('app') or (player or {}).get('identity') or 'Player'
-        shown=title or app
-        fm=self.title.fontMetrics(); self.title.setText(fm.elidedText(shown, Qt.ElideRight, 118))
-        self.app.setText(fm.elidedText(' • '.join(x for x in (artist, app if title else '') if x) or ('Paused' if (stream or {}).get('corked') else 'Playing'), Qt.ElideRight, 118))
-        self.setToolTip(f'{app}: {title}' if title else app)
+        self.title.setText(title or app)
+        fm=self.app.fontMetrics()
+        playing=(player or {}).get('status') == 'Playing' if player else not (stream or {}).get('corked')
+        state=_('Playing') if playing else _('Paused')
+        self.app.setText(fm.elidedText(' • '.join(x for x in (artist, app if title else state) if x) or state, Qt.ElideRight, 150))
+        self.setToolTip(_('Click to open {a}').replace('{a}', app))
         icon=(stream or {}).get('icon') or (player or {}).get('name','').split('.')[3:4] or ''
         icon=icon[0] if isinstance(icon, list) else icon
-        self.icon.setPixmap(get_icon(icon or 'multimedia-player', 'audio-x-generic').pixmap(24,24))
-        self.play.setVisible(player is not None)
+        self.icon.setPixmap(get_icon(icon or 'multimedia-player', 'audio-x-generic').pixmap(28,28))
+        for b in self.buttons.values(): b.setVisible(player is not None)
         if player is not None:
-            playing=player.get('status') == 'Playing'
-            self.play.setIcon(get_icon('media-playback-pause' if playing else 'media-playback-start', 'media-playback-start'))
-            self.play.setToolTip('Pause' if playing else 'Play')
-        muted=bool((stream or {}).get('muted'))
-        self.mute.blockSignals(True); self.mute.setChecked(muted); self.mute.blockSignals(False)
-        self.mute.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high', 'audio-volume-medium'))
-        self.mute.setVisible(stream is not None); self.mute.setToolTip('Unmute' if muted else 'Mute only this application')
-        vol=(stream or {}).get('volume') if stream else (int(round((player.get('volume') or 0)*100)) if player and player.get('volume') is not None else None)
-        self.slider.setVisible(vol is not None)
-        if vol is not None and not self.slider.isSliderDown():
-            self.slider.blockSignals(True); self.slider.setValue(min(100, int(vol))); self.slider.blockSignals(False)
+            kind='pause' if playing else 'play'
+            self.buttons['play'].setIcon(media_icon(kind, '#ffffff'))
+            self.buttons['play'].setToolTip(_('Pause') if playing else _('Play'))
 
-    def play_pause(self):
-        if self.player:
-            safe_popen(['dbus-send','--session','--type=method_call',f"--dest={self.player['name']}",'/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player.PlayPause'])
-            QTimer.singleShot(500, self.ac.panel.update_status_icons)
+    def control(self, kind):
+        if not self.player: return
+        method={'prev': 'Previous', 'next': 'Next', 'play': 'PlayPause'}[kind]
+        safe_popen(['dbus-send','--session','--type=method_call',f"--dest={self.player['name']}",'/org/mpris/MediaPlayer2',f'org.mpris.MediaPlayer2.Player.{method}'])
+        QTimer.singleShot(450, self.ac.panel.update_status_icons)
 
-    def toggle_mute(self, on):
-        if self.stream:
-            safe_popen(['pactl','set-sink-input-mute',str(self.stream['id']),'1' if on else '0'])
-            self.mute.setIcon(get_icon('audio-volume-muted' if on else 'audio-volume-high', 'audio-volume-medium'))
-
-    def apply_volume(self):
-        v=self.slider.value()
-        if self.stream:
-            safe_popen(['pactl','set-sink-input-volume',str(self.stream['id']),f'{v}%'])
-        elif self.player:
-            safe_popen(['dbus-send','--session','--type=method_call',f"--dest={self.player['name']}",'/org/mpris/MediaPlayer2',
-                        'org.freedesktop.DBus.Properties.Set','string:org.mpris.MediaPlayer2.Player','string:Volume',f'variant:double:{v/100.0:.2f}'])
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.pos()):
+            pid=(self.stream or {}).get('pid') or (self.player or {}).get('pid')
+            raise_application(pid, (self.player or {}).get('name'))
+            self.ac.close()
+        super().mouseReleaseEvent(e)
 
 
 class GripBar(QWidget):
@@ -1277,10 +1710,15 @@ def ac_qss():
     return f"""
 QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
 QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
-QFrame#mediaRow{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:10px;}}
-QLabel#mediaTitle{{font-size:12px;font-weight:700;color:{u['title']};}}
-QToolButton#mediaBtn{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
-QToolButton#mediaBtn:hover{{border:1px solid {u['accent']};}}
+QFrame#mediaRow{{background:transparent;border:1px solid transparent;border-radius:12px;}}
+QFrame#mediaRow:hover{{background:{u['tile']};border:1px solid {u['btn_border']};}}
+MarqueeLabel#mediaTitle{{font-size:13px;font-weight:800;color:{u['title']};}}
+QToolButton#mediaPlay{{background:{u['accent']};border:0;border-radius:17px;padding:0;}}
+QToolButton#mediaPlay:hover{{background:{u['accent_hover']};}}
+QPushButton#acUpdates{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:14px;padding:8px;font-weight:800;color:{u['title']};}}
+QPushButton#acUpdates:hover{{border:1px solid {u['accent']};}}
+QToolButton#mediaBtn{{background:transparent;border:0;border-radius:14px;padding:0;}}
+QToolButton#mediaBtn:hover{{background:{u['btn_hover']};}}
 QToolButton#mediaBtn:checked{{background:#e5484d;border:1px solid #e5484d;}}
 QFrame#acClock{{background:{u['cal']};border:1px solid {u['btn_border']};border-radius:18px;}}
 QLabel#acTime{{font-size:46px;font-weight:800;color:{u['title']};}}
@@ -1296,6 +1734,12 @@ QToolButton#acSession{{background:{u['tile']};border:1px solid {u['btn_border']}
 QToolButton#acSession:hover{{background:{u['accent']};border:1px solid {u['accent']};color:#ffffff;}}
 QToolButton#acSession[danger="true"]:hover{{background:#e5484d;border:1px solid #e5484d;}}
 QLabel#calTitle{{font-size:14px;font-weight:800;color:{u['title']};}}
+QLabel#agendaTitle{{font-size:12px;font-weight:800;color:{u['sub']};}}
+QFrame#agendaRow{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:10px;}}
+QLabel#agendaTime{{font-weight:800;color:{u['accent']};min-width:38px;}}
+QFrame#agendaForm{{background:{u['tile']};border:1px solid {u['accent']};border-radius:12px;}}
+QFrame#agendaForm QLineEdit,QFrame#agendaForm QTimeEdit{{background:{u['field']};border:1px solid {u['btn_border']};border-radius:9px;padding:5px 8px;color:{u['text']};}}
+QPushButton#agendaSave{{background:{u['accent']};color:#ffffff;border:0;border-radius:11px;padding:4px 14px;font-weight:800;}}
 QToolButton#calNav{{background:transparent;border:1px solid transparent;border-radius:14px;padding:4px;}}
 QToolButton#calNav:hover{{background:{u['cal_hover']};border:1px solid {u['btn_border']};}}
 QPushButton#calToday{{padding:3px 10px;border-radius:11px;font-size:11px;}}
@@ -1337,16 +1781,21 @@ class ActionCenter(PopupFrame):
         self.clock_card=QFrame(); self.clock_card.setObjectName('acClock')
         card_lay=QVBoxLayout(self.clock_card); card_lay.setContentsMargins(0,0,0,0)
         self.clock_stack=QStackedWidget(); card_lay.addWidget(self.clock_stack)
-        clock_page=QWidget(); self.ck=QGridLayout(clock_page); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
+        clock_page=WeatherBackdrop(); self.weather_bg=clock_page; self.ck=QGridLayout(clock_page); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
         self.face=ClockFace(); self.face.clicked.connect(self.show_globe)
         self.greeting=QLabel(); self.greeting.setObjectName('acGreeting'); self.greeting.setWordWrap(True)
         self.date_label=QLabel(); self.date_label.setObjectName('acDate')
         self.date_label.setWordWrap(True); self._dense=None
         self.clock_stack.addWidget(clock_page)
         globe_page=QWidget(); gl=QVBoxLayout(globe_page); gl.setContentsMargins(8,8,8,8); gl.setSpacing(4)
-        self.globe=GlobeWidget(176); self.globe.clicked.connect(self.show_clock); gl.addWidget(self.globe, 0, Qt.AlignHCenter)
+        self.globe=GlobeWidget(176); self.globe.clicked.connect(self.show_zones); gl.addWidget(self.globe, 0, Qt.AlignHCenter)
         self.globe_info=QLabel(''); self.globe_info.setObjectName('acDate'); self.globe_info.setAlignment(Qt.AlignCenter); gl.addWidget(self.globe_info)
         self.clock_stack.addWidget(globe_page)
+        # Third page: the time zone map (click the globe again).
+        zone_page=QWidget(); zl=QVBoxLayout(zone_page); zl.setContentsMargins(8,8,8,8); zl.setSpacing(4)
+        self.zone_map=TimeZoneMap(); self.zone_map.clicked.connect(self.show_clock); zl.addWidget(self.zone_map, 0, Qt.AlignHCenter)
+        self.zone_info=QLabel(''); self.zone_info.setObjectName('acDate'); self.zone_info.setAlignment(Qt.AlignCenter); self.zone_info.setWordWrap(True); zl.addWidget(self.zone_info)
+        self.clock_stack.addWidget(zone_page)
         # A stacked widget is as tall as its tallest page: size only by the visible one.
         self.clock_stack.currentChanged.connect(self._stack_sizes); self._stack_sizes(0)
         self.clock_card.setContextMenuPolicy(Qt.CustomContextMenu); self.clock_card.customContextMenuRequested.connect(self.clock_menu)
@@ -1359,6 +1808,14 @@ class ActionCenter(PopupFrame):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll.setWidget(self.body)
         self.scroll.setObjectName('acScroll'); self.scroll.viewport().setAutoFillBackground(False); self.body.setAutoFillBackground(False)
         self.clock_opts=clock_options(); self.clock_format=self.clock_opts['format']
+
+        # Playing music or video first: previous / play-pause / next.
+        self.media_card=QFrame(); self.media_card.setObjectName('acCard')
+        self.media_lay=QVBoxLayout(self.media_card); self.media_lay.setContentsMargins(6,6,6,6); self.media_lay.setSpacing(4)
+        self.media_box=self.media_card
+        self.media_rows={}; self.media_card.setVisible(False)
+        self.bv.addWidget(self.media_card)
+        MEDIA_WANTED['on']=True
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
@@ -1375,8 +1832,12 @@ class ActionCenter(PopupFrame):
         self._led=True
         self.blink=QTimer(self); self.blink.timeout.connect(self.blink_led)
 
-        # One sound control and brightness below it.
-        card=QFrame(); card.setObjectName('acCard'); cl=QGridLayout(card); cl.setContentsMargins(10,8,10,10); cl.setHorizontalSpacing(8); cl.setVerticalSpacing(6)
+        self.update_button=QPushButton(''); self.update_button.setObjectName('acUpdates'); self.update_button.setVisible(False)
+        self.update_button.setCursor(Qt.PointingHandCursor); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus()))
+        self.bv.addWidget(self.update_button)
+
+        # Sound and brightness at the bottom, always in reach (not scrolled).
+        card=QFrame(); card.setObjectName('acCard'); self.sound_card=card; cl=QGridLayout(card); cl.setContentsMargins(10,8,10,10); cl.setHorizontalSpacing(8); cl.setVerticalSpacing(6)
         self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(18,18)); self.mute.setFixedSize(34,34)
         self.mute.setAccessibleName('Mute'); self.mute.setToolTip('Mute / unmute'); self.mute.clicked.connect(self.toggle_mute)
         self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume')
@@ -1391,14 +1852,6 @@ class ActionCenter(PopupFrame):
         cl.addWidget(self.bri_icon,1,0); cl.addWidget(self.bri_slider,1,1); cl.addWidget(self.bri_value,1,2)
         self.battery_label=QLabel(''); cl.addWidget(self.battery_label,2,0,1,4)
         self.battery_label.setObjectName('popHint')
-        # Applications playing sound (players, browsers, games): each with
-        # its own volume and mute, and play/pause when the player allows it.
-        self.media_box=QWidget(); self.media_lay=QVBoxLayout(self.media_box); self.media_lay.setContentsMargins(0,2,0,0); self.media_lay.setSpacing(2)
-        self.media_rows={}; self.media_box.setVisible(False)
-        cl.addWidget(self.media_box,4,0,1,4)
-        MEDIA_WANTED['on']=True
-        self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,3,0,1,4)
-        self.bv.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
         self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
         self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self.update_sound_icon(), self._vol_timer.start(70)))
@@ -1416,8 +1869,10 @@ class ActionCenter(PopupFrame):
         self.cal_holder=QWidget(); hl=QVBoxLayout(self.cal_holder); hl.setContentsMargins(0,0,0,0)
         self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar; hl.addWidget(self.calendar_card)
         self.cal_full=self.calendar_card.sizeHint().height()
+        self.calendar_card.changed.connect(self.agenda_changed)
         self.bv.addWidget(self.cal_holder)
         self.v.addWidget(self.scroll)
+        self.v.addWidget(card)
 
         # Session: Lock, Log Out, Restart, Shut Down.
         session=QHBoxLayout(); session.setSpacing(6)
@@ -1430,6 +1885,7 @@ class ActionCenter(PopupFrame):
 
         self.update_time()
         self.refresh(panel.last_status or {})
+        self.weather_bg.set_weather(panel.weather)
         self.compact=None
         self.apply_clock_style()
         self.set_compact(bool(read_panel_state().get('action_center_compact', False)) or self.too_tall())
@@ -1446,6 +1902,11 @@ class ActionCenter(PopupFrame):
     def set_clock_layout(self, dense):
         """With the month calendar: one row (clock left, greeting and date
         right). Without it: a big clock in the middle."""
+        # A wide face (LED or seconds) leaves no room beside it: greeting and
+        # date then go under the clock instead of wrapping into a narrow column.
+        o=self.clock_opts
+        if dense and (o.get('style') == 'led' or o.get('seconds')):
+            dense=False
         if dense == self._dense:
             return
         self._dense=dense
@@ -1476,6 +1937,9 @@ class ActionCenter(PopupFrame):
     def show_clock(self):
         self.clock_stack.setCurrentIndex(0); self.replace_soon()
 
+    def show_zones(self):
+        self.clock_stack.setCurrentIndex(2); self.update_time(); self.replace_soon()
+
     def replace_soon(self):
         # The clock card learns its new height only after Qt handles the
         # layout events; measure again then, so the Action Center keeps its
@@ -1498,6 +1962,15 @@ class ActionCenter(PopupFrame):
             self.place(); QTimer.singleShot(0, self.place)
 
     CAL_MIN=128   # smallest calendar that still shows all six weeks
+
+    def agenda_changed(self):
+        # The agenda below the month grows or shrinks the calendar card.
+        self.calendar_card.layout().activate()
+        self.cal_full=self.calendar_card.sizeHint().height()
+        if not self.compact:
+            self.set_calendar_height(self.cal_full)
+        self.replace_soon()
+        self.panel.check_agenda()
 
     def set_calendar_height(self, h):
         """Calendar holder height; the month grid shrinks with it."""
@@ -1558,7 +2031,9 @@ class ActionCenter(PopupFrame):
                 self.notif_card.setVisible(False); free=self.room()-self.base_height()
             # The calendar the user asked for always stays; when it does not
             # fit completely the body scrolls instead of folding it away.
-            self.set_calendar_height(max(self.CAL_MIN, min(self.cal_full, free))); self.cal_holder.setVisible(True)
+            # The body scrolls when space is short, so the calendar (with its
+            # agenda) keeps its full height instead of being squeezed.
+            self.set_calendar_height(self.cal_full); self.cal_holder.setVisible(True)
         if self.fixed_height()+self.body_height() > self.room() and self.notif_card.isVisible():
             self.notif_card.setVisible(False)
         # The body takes the room that is left; it scrolls when that is less.
@@ -1583,8 +2058,8 @@ class ActionCenter(PopupFrame):
     # -------------------------------------------------------------- clock
     def apply_clock_style(self):
         self.clock_opts=clock_options(); self.clock_format=self.clock_opts['format']
-        dense=self._dense; self._dense=None
-        self.set_clock_layout(bool(dense) if dense is not None else False)
+        self._dense=None
+        self.set_clock_layout(not self.compact if self.compact is not None else False)
 
     def clock_menu(self, pos):
         o=clock_options()
@@ -1626,6 +2101,13 @@ class ActionCenter(PopupFrame):
         if self.clock_stack.currentIndex() == 1:
             utc=QDateTime.currentDateTimeUtc()
             self.globe_info.setText(f"{format_clock(now.time(), self.clock_format)} here • UTC {utc.toString('HH:mm')} • lit side is day")
+        elif self.clock_stack.currentIndex() == 2:
+            z=zone_info()
+            if z['dst_now']: dst=_('Daylight saving time now')
+            elif z['uses_dst']: dst=_('Daylight saving time later in the year')
+            else: dst=_('No daylight saving time here')
+            name=z['name'].replace('_', ' ')
+            self.zone_info.setText(f"{name} • {format_clock(now.time(), self.clock_format)} • {z['offset']} {z['abbr'] if not z['abbr'].startswith(('+','-')) else ''}".rstrip()+f"\n{dst}")
 
     # -------------------------------------------------------------- tiles
     def set_tile(self, key, on, enabled=True, tip=''):
@@ -1701,6 +2183,10 @@ class ActionCenter(PopupFrame):
         bat=st.get('battery')
         info=[f"Battery {bat['capacity']}% ({bat['status']})" if bat else 'Power: AC', f"Keyboard {st.get('layout','EN')}"]
         if st.get('printers'): info.append('Printer ready')
+        pc=getattr(self.panel, 'parental', {}) or {}
+        if pc.get('enabled') and pc.get('phase') in ('ok', 'warn'):
+            from eduka_parental import minutes_text
+            info.append('⏳ '+minutes_text(pc.get('remaining', 0)))
         self.battery_label.setText('  •  '.join(_(x) for x in info))
         count=int(self.panel.eus_status.get('count',0) or 0) if self.panel.eus_status else 0
         self.update_button.setVisible(count > 0)
@@ -2038,37 +2524,185 @@ class SoundPopup(PopupFrame):
         super().closeEvent(e)
 
 
+class HoverCard(QFrame):
+    """Small card that appears when the pointer rests on a button of
+    Eduka-Panel: a picture of the window (task buttons) or the icon, the
+    title and the details. Clicking a window picture opens that window."""
+    clicked=pyqtSignal()
+    def __init__(self, panel):
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.panel=panel
+        composited=compositor_running()
+        if composited: self.setAttribute(Qt.WA_TranslucentBackground)
+        u=ui_colors()
+        self.setStyleSheet(f"""
+            QFrame#hoverBox{{background:{u['cal']};border:1px solid {u['btn_border']};border-radius:14px;}}
+            QLabel{{background:transparent;color:{u['text']};}}
+            QLabel#hoverTitle{{font-size:12px;font-weight:800;color:{u['title']};}}
+            QLabel#hoverSub{{font-size:11px;color:{u['sub']};}}
+            QLabel#hoverShot{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:8px;}}
+        """)
+        outer=QVBoxLayout(self); outer.setContentsMargins(*((4,4,4,4) if composited else (0,0,0,0)))
+        self.box=QFrame(); self.box.setObjectName('hoverBox'); outer.addWidget(self.box)
+        v=QVBoxLayout(self.box); v.setContentsMargins(10,8,10,10); v.setSpacing(6)
+        self.shot=QLabel(); self.shot.setObjectName('hoverShot'); self.shot.setAlignment(Qt.AlignCenter); v.addWidget(self.shot)
+        row=QHBoxLayout(); row.setSpacing(8)
+        self.icon=QLabel(); self.icon.setFixedSize(22,22); row.addWidget(self.icon)
+        texts=QVBoxLayout(); texts.setSpacing(0)
+        self.title=QLabel(''); self.title.setObjectName('hoverTitle'); self.title.setTextFormat(Qt.PlainText)
+        self.sub=QLabel(''); self.sub.setObjectName('hoverSub'); self.sub.setTextFormat(Qt.PlainText); self.sub.setWordWrap(True)
+        texts.addWidget(self.title); texts.addWidget(self.sub); row.addLayout(texts, 1); v.addLayout(row)
+        if not composited: round_window_shape(self, 14)
+
+    def show_for(self, anchor, title, sub='', icon=None, shot=None):
+        fm=self.title.fontMetrics()
+        self.title.setText(fm.elidedText(title, Qt.ElideRight, 230))
+        self.sub.setText(sub); self.sub.setVisible(bool(sub))
+        self.icon.setPixmap(icon.pixmap(22,22) if icon is not None and not icon.isNull() else QPixmap()); self.icon.setVisible(icon is not None and not icon.isNull())
+        if shot is not None and not shot.isNull():
+            self.shot.setPixmap(shot); self.shot.setFixedSize(shot.width()+6, shot.height()+6); self.shot.setVisible(True)
+        else:
+            self.shot.setVisible(False)
+        self.setCursor(Qt.PointingHandCursor if not self.shot.isHidden() else Qt.ArrowCursor)
+        # Shrink back after a window picture (the card is reused).
+        self.box.layout().activate(); self.layout().activate(); self.resize(self.sizeHint())
+        g=anchor.mapToGlobal(QPoint(anchor.width()//2, anchor.height()//2))
+        self.move(self.panel.popup_position(self.width(), self.height(), g, gap=6))
+        if not self.isVisible():
+            self.show(); fade_in(self, 120)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton: self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def leaveEvent(self, e):
+        self.panel.hide_hover_soon(); super().leaveEvent(e)
+
+    def enterEvent(self, e):
+        self.panel._hover_hide.stop(); super().enterEvent(e)
+
+
 class ClockButton(QPushButton):
-    """Panel clock: the time in bold, the date smaller and softer below it."""
+    """Panel clock in the style of the Action Center clock: digital (time in
+    bold, date below), LED digits or a small analog dial with the date.
+    A new minute slides in; a new style fades in; an agenda alarm makes it
+    blink in the accent color."""
     def __init__(self, parent=None):
-        super().__init__(parent); self.lines=['', '']
+        super().__init__(parent)
+        self.lines=['', '']; self.old=''; self.slide=1.0; self.fade=1.0; self.alarm=False
+        self.opts=clock_options(); self.vertical=False
+        self.anim=QTimer(self); self.anim.setInterval(16); self.anim.timeout.connect(self.step); self._clock=QElapsedTimer()
+
+    def set_options(self, opts):
+        key=(opts['style'], opts['color'], opts['format'])
+        if key != (self.opts['style'], self.opts['color'], self.opts['format']):
+            self.opts=dict(opts); self.fade=0.0; self.start(); self.updateGeometry()
+        self.opts=dict(opts)
 
     def set_lines(self, lines):
         lines=list(lines)
         if lines != self.lines:
+            if self.lines[0] and lines[0] != self.lines[0] and not self.vertical:
+                self.old=self.lines[0]; self.slide=0.0; self.start()
             self.lines=lines; self.updateGeometry(); self.update()
+
+    def start(self):
+        self._clock.restart()
+        if not self.anim.isActive(): self.anim.start()
+
+    def step(self):
+        dt=self._clock.restart()/1000.0
+        self.slide=min(1.0, self.slide+dt/0.35); self.fade=min(1.0, self.fade+dt/0.45)
+        if self.slide >= 1.0 and self.fade >= 1.0: self.anim.stop()
+        self.update()
 
     def fonts(self):
         big=QFont(self.font()); big.setBold(True); big.setPixelSize(13 if self.height() >= 40 else 12)
         small=QFont(self.font()); small.setBold(False); small.setPixelSize(10 if self.height() >= 40 else 9)
         return big, small
 
+    def led_width(self, h):
+        t=self.lines[0].split(' ')[0]
+        return sum(h*0.22 if ch == ':' else h*0.52 for ch in t)+h*0.16*max(0, len(t)-1)
+
     def sizeHint(self):
-        big, small=self.fonts()
-        w=max([QFontMetrics(big).horizontalAdvance(self.lines[0])]+[QFontMetrics(small).horizontalAdvance(t) for t in self.lines[1:]])
-        return QSize(w+20, 34)
+        big, small=self.fonts(); style=self.opts.get('style')
+        date_w=max([0]+[QFontMetrics(small).horizontalAdvance(t) for t in self.lines[1:]])
+        if self.vertical or style == 'digital' or style not in ('led', 'analog'):
+            w=max([QFontMetrics(big).horizontalAdvance(self.lines[0]), date_w])
+            return QSize(w+20, 34)
+        if style == 'analog':
+            return QSize(26+8+max(QFontMetrics(big).horizontalAdvance(self.lines[0]), date_w)+18, 34)
+        return QSize(int(max(self.led_width(17)+(16 if 'M' in self.lines[0] else 0), date_w))+22, 34)
+
+    def ink(self):
+        if self.alarm: return QColor('#ffffff')
+        c=self.opts.get('color'); return QColor(c) if c else self.palette().color(QPalette.ButtonText)
 
     def paintEvent(self, e):
         super().paintEvent(e)
-        p=QPainter(self); p.setRenderHint(QPainter.TextAntialiasing)
-        big, small=self.fonts(); ink=self.palette().color(QPalette.ButtonText)
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.TextAntialiasing)
+        if self.alarm:
+            p.setPen(Qt.NoPen); p.setBrush(QColor(theme_accent())); p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 12, 12)
+        p.setOpacity(0.25+0.75*self.fade)
+        style=self.opts.get('style')
+        if self.vertical or style not in ('led', 'analog'):
+            self.paint_text(p, QRectF(self.rect()), Qt.AlignCenter)
+        elif style == 'analog':
+            self.paint_dial(p, QRectF(8, (self.height()-26)/2, 26, 26))
+            self.paint_text(p, QRectF(42, 0, self.width()-48, self.height()), Qt.AlignLeft | Qt.AlignVCenter)
+        else:
+            self.paint_led(p)
+
+    def paint_text(self, p, rect, align):
+        big, small=self.fonts(); ink=self.ink()
         fm_b=QFontMetrics(big); fm_s=QFontMetrics(small)
         total=fm_b.height()+sum(fm_s.height() for _ in self.lines[1:])
-        y=(self.height()-total)/2
-        p.setFont(big); p.setPen(ink); p.drawText(QRectF(0, y, self.width(), fm_b.height()), Qt.AlignCenter, self.lines[0]); y+=fm_b.height()
-        soft=QColor(ink); soft.setAlpha(170); p.setFont(small); p.setPen(soft)
+        y=rect.y()+(rect.height()-total)/2; h=fm_b.height()
+        p.save(); p.setClipRect(QRectF(rect.x(), y, rect.width(), h)); p.setFont(big)
+        # The new minute slides up into place, the old one leaves upwards.
+        off=(1.0-self.slide)*h
+        if self.slide < 1.0 and self.old:
+            c=QColor(ink); c.setAlphaF(1.0-self.slide); p.setPen(c)
+            p.drawText(QRectF(rect.x(), y+off-h, rect.width(), h), align, self.old)
+        p.setPen(ink); p.drawText(QRectF(rect.x(), y+off, rect.width(), h), align, self.lines[0]); p.restore()
+        y+=h; soft=QColor(ink); soft.setAlpha(170); p.setFont(small); p.setPen(soft)
         for t in self.lines[1:]:
-            p.drawText(QRectF(0, y, self.width(), fm_s.height()), Qt.AlignCenter, t); y+=fm_s.height()
+            p.drawText(QRectF(rect.x(), y, rect.width(), fm_s.height()), align, t); y+=fm_s.height()
+
+    def paint_dial(self, p, r):
+        now=QTime.currentTime(); ink=self.ink(); acc=QColor(self.opts.get('color') or theme_accent()) if not self.alarm else QColor('#ffffff')
+        c=r.center(); rad=r.width()/2
+        p.setPen(QPen(acc, 2)); p.setBrush(Qt.NoBrush); p.drawEllipse(c, rad-1, rad-1)
+        for i in range(12):
+            a=math.radians(i*30); p.setPen(QPen(ink, 1.4 if i % 3 == 0 else 0.8))
+            p.drawLine(QPointF(c.x()+math.sin(a)*(rad-4), c.y()-math.cos(a)*(rad-4)), QPointF(c.x()+math.sin(a)*(rad-6), c.y()-math.cos(a)*(rad-6)))
+        def hand(angle, length, width, color):
+            a=math.radians(angle); p.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(c, QPointF(c.x()+math.sin(a)*length, c.y()-math.cos(a)*length))
+        hand(30.0*((now.hour()%12)+now.minute()/60.0), rad*0.5, 2.2, ink)
+        hand(6.0*now.minute(), rad*0.75, 1.6, ink)
+        p.setPen(Qt.NoPen); p.setBrush(acc); p.drawEllipse(c, 1.8, 1.8)
+
+    def paint_led(self, p):
+        h=17; color=self.ink(); off=QColor(color); off.setAlpha(28)
+        t=self.lines[0]; ap=''
+        if ' ' in t: t, ap=t.split(' ', 1)
+        tw=self.led_width(h)+(16 if ap else 0); x=(self.width()-tw)/2; y=(self.height()-h)/2
+        big, small=self.fonts()
+        if self.lines[1:]:
+            y=(self.height()-h-QFontMetrics(small).height()-1)/2
+        for ch in t:
+            if ch == ':':
+                p.setPen(Qt.NoPen); p.setBrush(color); d=h*0.1
+                p.drawEllipse(QPointF(x+h*0.11, y+h*0.32), d, d); p.drawEllipse(QPointF(x+h*0.11, y+h*0.70), d, d); x+=h*0.22+h*0.16
+            else:
+                ClockFace.seven(ClockFace, p, ch, x, y, h*0.52, h, color, off); x+=h*0.52+h*0.16
+        if ap:
+            f=QFont(big); f.setPixelSize(9); p.setFont(f); p.setPen(color); p.drawText(QPointF(x+1, y+h), ap)
+        if self.lines[1:]:
+            soft=QColor(self.ink()); soft.setAlpha(170); p.setFont(small); p.setPen(soft)
+            p.drawText(QRectF(0, y+h+1, self.width(), QFontMetrics(small).height()), Qt.AlignHCenter, self.lines[1])
 
 
 class EdukaPanel(QWidget):
@@ -2095,6 +2729,18 @@ class EdukaPanel(QWidget):
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.update_clock); self.clock_timer.start(1000); self.update_clock()
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
+        # Weather for the clock card: cached, refreshed every 30 minutes when online.
+        self.weather=cached_weather(); self._weather_worker=None
+        self.weather_timer=QTimer(self); self.weather_timer.timeout.connect(self.update_weather); self.weather_timer.start(30*60*1000)
+        QTimer.singleShot(8000, self.update_weather)
+        # Parental Control: warnings and the message screen when time is up.
+        self._parental_lock=None; self._parental_warned=set(); self.parental={}
+        self.parental_timer=QTimer(self); self.parental_timer.timeout.connect(self.check_parental); self.parental_timer.start(5000)
+        QTimer.singleShot(3000, self.check_parental)
+        # Agenda alarms of the calendar.
+        self._alarm_blink=QTimer(self); self._alarm_blink.timeout.connect(self.blink_alarm); self._alarm_phase=False
+        self.agenda_timer=QTimer(self); self.agenda_timer.timeout.connect(self.check_agenda); self.agenda_timer.start(15000)
+        QTimer.singleShot(4000, self.check_agenda)
         self.workarea_timer=QTimer(self); self.workarea_timer.timeout.connect(self.enforce_window_space); self.workarea_timer.start(1400)
         self.start_window_spy()
         # Software brightness (no backlight) is lost at logout: re-apply it.
@@ -2142,6 +2788,12 @@ class EdukaPanel(QWidget):
         self.desktop_button=QPushButton(); self.desktop_button.setObjectName('desktopButton'); self.desktop_button.setFixedWidth(10)
         self.desktop_button.setToolTip('Show desktop'); self.desktop_button.setAccessibleName('Show desktop'); self.desktop_button.clicked.connect(self.toggle_show_desktop)
         self.layout.addWidget(self.desktop_button)
+        # Hover cards instead of plain tooltips (window pictures on tasks).
+        self.hover=None; self._hover_target=None; self.thumbs={}; self._thumb_at=0.0
+        self._hover_show=QTimer(self); self._hover_show.setSingleShot(True); self._hover_show.timeout.connect(self.show_hover)
+        self._hover_hide=QTimer(self); self._hover_hide.setSingleShot(True); self._hover_hide.timeout.connect(self.hide_hover)
+        for w in [self.start, *self.quick_launchers.values(), self.net, self.bt, self.printer, self.battery, self.vol, self.eus, self.notif, self.clock, self.desktop_button]:
+            w.installEventFilter(self)
     def setup_screen_tracking(self):
         """Re-layout when the resolution changes or a projector is connected."""
         self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.load_config)
@@ -2507,7 +3159,67 @@ class EdukaPanel(QWidget):
             app=getattr(obj, '_eduka_app', None)
             if app:
                 launch_app(app.get('exec',''), app.get('name','')); return True
+        et=event.type()
+        if et == QEvent.ToolTip and isinstance(obj, QAbstractButton):
+            return True     # the hover card replaces the plain tooltip
+        if et == QEvent.Enter and isinstance(obj, QAbstractButton) and hasattr(self, '_hover_show'):
+            self._hover_target=obj; self._hover_hide.stop()
+            self._hover_show.start(120 if (self.hover is not None and self.hover.isVisible()) else 550)
+        elif et in (QEvent.Leave, QEvent.MouseButtonPress) and obj is self._hover_target:
+            self._hover_show.stop()
+            if et == QEvent.MouseButtonPress: self.hide_hover()
+            else: self.hide_hover_soon()
         return super().eventFilter(obj, event)
+
+    # ---------------------------------------------------------- hover cards
+    def hide_hover_soon(self):
+        self._hover_hide.start(250)
+
+    def hide_hover(self):
+        if self.hover is not None: self.hover.hide()
+
+    def window_thumbnail(self, wid, live=True):
+        """Picture of a window: taken now when it is on screen, otherwise the
+        last picture taken while it was open (minimized windows have none)."""
+        if live and '_NET_WM_STATE_HIDDEN' not in self.window_states(wid):
+            try:
+                pix=QApplication.primaryScreen().grabWindow(int(wid, 16))
+                if not pix.isNull() and pix.width() > 20:
+                    self.thumbs[wid]=pix.scaled(260, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            except Exception:
+                pass
+        return self.thumbs.get(wid)
+
+    def remember_active_window(self, wid):
+        # Keep a fresh picture of the window in front, for when it is minimized.
+        if not wid or wid not in self.buttons or time.monotonic()-self._thumb_at < 4.0: return
+        self._thumb_at=time.monotonic(); self.window_thumbnail(wid, True)
+
+    def show_hover(self):
+        obj=self._hover_target
+        if obj is None or not obj.isVisible() or not obj.underMouse() or self._tray_compact and obj is self.clock:
+            return
+        if self.hover is None:
+            self.hover=HoverCard(self); self.hover.clicked.connect(self.hover_clicked)
+        wid=next((w for w, b in self.buttons.items() if b is obj), None)
+        self.hover.wid=wid
+        if wid:
+            title=obj.toolTip() or obj.accessibleName(); app=getattr(obj, '_eduka_app', None)
+            minimized='_NET_WM_STATE_HIDDEN' in self.window_states(wid)
+            shot=self.window_thumbnail(wid, not minimized)
+            sub=(app.get('name','') if app else '')+(' • '+_('Minimized') if minimized else '')
+            self.hover.show_for(obj, title, sub.strip(' •'), obj.icon(), shot)
+        else:
+            tip=obj.toolTip() or obj.accessibleName()
+            if not tip: return
+            first, _sep, rest=tip.partition('\n')
+            if ' — ' in first and not rest: first, rest=first.split(' — ', 1)
+            self.hover.show_for(obj, first, rest, obj.icon() if obj is not self.clock else get_icon('x-office-calendar', 'office-calendar'))
+
+    def hover_clicked(self):
+        wid=getattr(self.hover, 'wid', None); self.hide_hover()
+        if wid:
+            self.restore_window(wid)
 
     def toggle_menu(self):
         # 0.9.7: direct in-process command with the resident menu daemon for normal response time.
@@ -2596,12 +3308,80 @@ class EdukaPanel(QWidget):
 
     def start_context(self,pos):
         self.panel_context(pos)
+    def check_parental(self):
+        from eduka_parental import read_state, ParentalLockScreen, minutes_text
+        st=read_state(); self.parental=st; phase=st.get('phase')
+        if phase not in ('warn', 'lock'):
+            self._parental_warned.clear()
+        if phase == 'warn':
+            left=int(st.get('remaining', 0))
+            for mark in (600, 300, 60):
+                if left <= mark and mark not in self._parental_warned:
+                    self._parental_warned.update(m for m in (600, 300, 60) if m >= mark)
+                    try:
+                        self.notify_server.notify(_('Parental Control'), 0, 'appointment-soon', '⏰ '+_('Parental Control'),
+                                                  _('{t} left on this computer.').replace('{t}', minutes_text(left)), [], {'urgency': 2}, 0)
+                    except Exception:
+                        pass
+                    break
+        if phase == 'lock' and self._parental_lock is None:
+            self._parental_lock=ParentalLockScreen(st.get('message', ''), st.get('emoji', '😊'), st.get('shutdown_at'))
+            self._parental_lock.destroyed.connect(lambda *_: setattr(self, '_parental_lock', None))
+            self._parental_lock.show_locked()
+        elif phase != 'lock' and self._parental_lock is not None:
+            lock=self._parental_lock; self._parental_lock=None
+            lock.releaseKeyboard(); lock.releaseMouse(); lock.hide(); lock.deleteLater()
+
+    def update_weather(self):
+        if self._weather_worker is not None or read_panel_config().get('weather', True) is False:
+            return
+        if (self.last_status or {}).get('net', 'offline') == 'offline' and self.last_status:
+            return
+        w=WeatherWorker(self); w.ready.connect(self.weather_ready); w.finished.connect(lambda: setattr(self, '_weather_worker', None))
+        self._weather_worker=w; w.start()
+
+    def weather_ready(self, data):
+        if data:
+            self.weather=data
+            if self.action_center is not None:
+                self.action_center.weather_bg.set_weather(data)
+
+    def check_agenda(self):
+        """Ring the agenda of today: at its time, or at login for entries
+        without a time. Each entry rings once."""
+        items=read_agenda(); now=QDateTime.currentDateTime()
+        today=now.date().toString('yyyy-MM-dd'); hm=now.time().toString('HH:mm'); changed=False
+        for e in items:
+            if e['date'] != today or e['fired'] == today: continue
+            if e['time'] and e['time'] > hm: continue
+            e['fired']=today; changed=True
+            title=('⏰ ' if e['alarm'] == 'sound' else '🔔 ')+(_('Agenda')+(f" {e['time']}" if e['time'] else ''))
+            try:
+                self.notify_server.notify(_('Agenda'), 0, 'x-office-calendar', title, e['text'], [], {'urgency': 2}, 0)
+            except Exception:
+                pass
+            if e['alarm'] == 'sound':
+                play_alarm_sound(4)
+            if e['alarm'] in ('blink', 'sound'):
+                self._alarm_blink.start(500)
+        if changed:
+            write_agenda(items)
+
+    def blink_alarm(self):
+        # The clock on Eduka-Panel blinks until the Action Center is opened.
+        if self.action_center is not None and self.action_center.isVisible():
+            self._alarm_blink.stop(); self.clock.alarm=False; self.clock.update(); return
+        self._alarm_phase=not self._alarm_phase
+        self.clock.alarm=self._alarm_phase; self.clock.update()
+
     def update_clock(self):
         now=QDateTime.currentDateTime()
         if getattr(self, 'vertical', False):
             text=now.toString('HH\nmm') if clock_settings()[1] == '24h' else now.toString('h:mm\nAP')
         else:
             text=format_clock(now.time(), clock_settings()[1])+'\n'+QLocale().toString(now.date(), 'ddd d MMM')
+        self.clock.vertical=getattr(self, 'vertical', False)
+        self.clock.set_options(clock_options())
         self.clock.set_lines(text.split('\n'))
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.update_time()
@@ -2719,6 +3499,7 @@ class EdukaPanel(QWidget):
         if not aw or aw == panel_wid:
             aw=self._last_active_wid
         if aw and wid == self.normalize_window_id(aw):
+            self.window_thumbnail(wid, True)   # its picture for the hover card
             self.minimize_window(wid)
         else:
             self.restore_window(wid)
@@ -2786,6 +3567,7 @@ class EdukaPanel(QWidget):
         active_wid=self.active_window_id()
         if active_wid and active_wid != self.normalize_window_id(hex(int(self.winId()))):
             self._last_active_wid=active_wid
+            self.remember_active_window(self.normalize_window_id(active_wid))
         for key in list(self.pinned_buttons.keys()):
             if key not in visible_pins:
                 self.pinned_buttons.pop(key).deleteLater()
@@ -3001,6 +3783,12 @@ class EdukaPanel(QWidget):
 
     def battery_context(self, pos):
         m=RoundedMenu(self)
+        show=m.addMenu('Show')
+        mode=self.current_cfg.get('battery_display', 'percent')
+        for key, label in (('percent', 'Percentage (57%)'), ('time', 'Time left (2:15)'), ('both', 'Percentage and time')):
+            act=show.addAction(label); act.setCheckable(True); act.setChecked(mode == key)
+            act.triggered.connect(lambda _=False, k=key: (save_panel_config({'battery_display': k}), self.current_cfg.update(battery_display=k), self.apply_status(self.last_status or {})))
+        m.addSeparator()
         m.addAction(get_icon('battery'), 'Battery Information', self.battery_popup)
         m.addAction(get_icon('preferences-system-power-management'), 'Power Settings', lambda: launch_app('lxqt-config-powermanagement'))
         self._show_context(m, self.battery, pos)
@@ -3096,14 +3884,24 @@ class EdukaPanel(QWidget):
         self.net.setText((' '+(st.get('connection') if net == 'wifi' else 'LAN' if net == 'ethernet' else tr('offline'))) if self.hearing_accessibility else '')
         info=st.get('battery'); self.battery.setVisible(info is not None)
         if info:
-            status=str(info['status']).lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery')); self.battery.setText(f" {info['capacity']}%")
-            self.battery.setToolTip(f"Battery {info['capacity']}% • {info['status']}")
+            status=str(info['status']).lower(); self.battery.setIcon(get_icon('battery-good-charging' if 'charg' in status else 'battery-good', 'battery'))
+            # Percentage, time left (or until full) or both (right-click → Show).
+            mode=self.current_cfg.get('battery_display', 'percent'); left=battery_time_text(info)
+            if mode == 'time' and left: text=f' {left}'
+            elif mode == 'both' and left: text=f" {info['capacity']}% • {left}"
+            else: text=f" {info['capacity']}%"
+            self.battery.setText(text)
+            extra=''
+            if left: extra=' • '+(_('{t} until full') if 'charg' in status and 'dis' not in status else _('{t} left')).replace('{t}', left)
+            self.battery.setToolTip(f"Battery {info['capacity']}% ({info['status']})"+extra)
         self.bt.setVisible(bool(st.get('bt_hw'))); self.bt.setIcon(get_icon('bluetooth','preferences-system-bluetooth'))
         self.bt.setToolTip('Bluetooth on' if st.get('bt_on') else 'Bluetooth off')
         self.printer.setVisible(bool(st.get('printers'))); self.printer.setIcon(get_icon('printer','printer'))
         muted=bool(st.get('muted')); vol=st.get('volume')
         volume_status=('Muted' if muted else 'Volume')+(f': {vol}%' if vol is not None else '')
-        self.vol.setIcon(get_icon('audio-volume-muted' if muted else 'audio-volume-high','audio-volume-medium')); self.vol.setToolTip(volume_status); self.vol.setAccessibleName(volume_status); self.vol.setText(' '+volume_status if self.hearing_accessibility else '')
+        # Same level icon as the Action Center: muted, low, medium or high.
+        level='audio-volume-muted' if muted or vol == 0 else ('audio-volume-high' if vol is None else 'audio-volume-low' if vol < 34 else 'audio-volume-medium' if vol < 67 else 'audio-volume-high')
+        self.vol.setIcon(get_icon(level,'audio-volume-medium')); self.vol.setToolTip(volume_status); self.vol.setAccessibleName(volume_status); self.vol.setText(' '+volume_status if self.hearing_accessibility else '')
         self.notif.setText(((f' {self.notifications.unread} new' if self.notifications.unread else ' Alerts')) if self.hearing_accessibility else '')
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.refresh(st)
@@ -3188,7 +3986,15 @@ class EdukaPanel(QWidget):
             self.notif.setText(f' {count} new' if count else ' Alerts')
     def battery_info(self):
         return battery_info()
-    def battery_popup(self): info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>')); p.v.addWidget(QLabel(f"{info['capacity']}% • {info['status']}" if info else 'No battery detected')); self.show_popup_above(p,self.battery)
+    def battery_popup(self):
+        info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>'))
+        if info:
+            left=battery_time_text(info)
+            p.v.addWidget(QLabel(f"{info['capacity']}% • {_(info['status'])}"))
+            if left: p.v.addWidget(QLabel((_('{t} until full') if info['status'].lower() == 'charging' else _('{t} left')).replace('{t}', left)))
+        else:
+            p.v.addWidget(QLabel('No battery detected'))
+        self.show_popup_above(p,self.battery)
     def bluetooth_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Bluetooth</b>')); p.v.addWidget(QLabel('Use Bluetooth manager to pair devices.')); b=QPushButton('Open Bluetooth'); b.clicked.connect(lambda: launch_app('blueman-manager')); p.v.addWidget(b); self.show_popup_above(p,self.bt)
     def network_popup(self):
         self.show_popup_above(NetworkPopup(self), self.net)

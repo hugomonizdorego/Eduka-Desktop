@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.19_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.20_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.19_all.deb
+   rm ./edukasaun-desktop-menu_0.9.20_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -150,6 +150,33 @@ and other greeters.
   `tools/gen-globe-map.py` from Natural Earth 1:110m land (public domain).
 - Per-application sound: `pactl list sink-inputs` (pulseaudio-utils) and
   MPRIS players through `dbus-send`, read only while the Action Center is open.
+
+## Accent color, agenda, weather and time zones
+
+- `accent_color` (`#rrggbb`, empty = theme color) in the desktop settings.
+  `accentize()` in `eduka_common.py` replaces the built-in accent colors of
+  every stylesheet, so new code only needs the usual green tokens.
+- Agenda: `~/.config/eduka-desktop/agenda.json`; Eduka-Panel checks it every
+  15 s and rings once per entry (`alarm`: `notify`, `sound`, `blink`).
+- Weather: GeoJS (`get.geojs.io`) for the location, falling back to the time
+  zone's city from `zone1970.tab`; forecast from `api.open-meteo.com`
+  (no key, CC BY 4.0). Cache: `~/.cache/eduka-desktop/weather.json`.
+  `"weather": false` in the panel settings switches it off.
+- Time zone map: `zoneinfo` (IANA tzdata) gives offset and daylight saving.
+
+## Parental Control
+
+- `eduka-parental.service` (root) runs `/usr/lib/edukasaun-desktop/eduka-parental-daemon`,
+  counts active graphical sessions (`loginctl`) and writes
+  `/run/edukasaun-parental/state.json`; at the limit it waits 90 s and runs
+  `systemctl poweroff`.
+- Settings: `/etc/edukasaun-desktop/parental.json`, written only by
+  `pkexec /usr/lib/edukasaun-desktop/eduka-parental-apply` (polkit action
+  `org.edukasaun.desktop.parental`, always `auth_admin`, no exception rule).
+  Used time: `/var/lib/edukasaun-desktop/parental-usage.json`.
+- Eduka-Panel shows the warnings (10, 5, 1 minutes) and the message screen
+  (keyboard and mouse grabbed). Ctrl+Alt+P on that screen asks for an
+  administrator password and adds 30 minutes.
 
 ## Theme sources
 

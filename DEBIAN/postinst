@@ -122,6 +122,21 @@ elif command -v systemctl >/dev/null 2>&1; then
     systemctl enable eduka-live-autologin.service >/dev/null 2>&1 || true
 fi
 
+# --- Parental Control -----------------------------------------------------
+# The time limit is counted by a root service, so closing Eduka-Panel does
+# not stop it. Off until a parent switches it on in Eduka-Settings.
+mkdir -p /etc/edukasaun-desktop /var/lib/edukasaun-desktop
+if command -v deb-systemd-helper >/dev/null 2>&1; then
+    deb-systemd-helper enable eduka-parental.service >/dev/null 2>&1 || true
+elif command -v systemctl >/dev/null 2>&1; then
+    systemctl enable eduka-parental.service >/dev/null 2>&1 || true
+fi
+# Restart it on upgrades when systemd runs (not inside the Cubic chroot).
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart eduka-parental.service >/dev/null 2>&1 || true
+fi
+
 # --- Standard account edukasaun / edukasaun --------------------------------
 # Only while the ISO is built: no personal account exists yet (the Cubic
 # chroot). An installed computer with its own users is never changed; there

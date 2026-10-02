@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon, QPainterPath, QRegion
 from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.19"
+VERSION = "0.9.20"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -725,7 +725,7 @@ def install_translations(app=None):
     """Translate texts the Eduka programs set at run time. Only exact
     interface texts from the catalogs change; names, titles and paths stay."""
     from PyQt5.QtWidgets import QLabel, QAbstractButton, QWidget, QLineEdit, QMenu, QMessageBox, QAction
-    round_tooltips(app)
+    round_tooltips(app); install_accent()
     if _ORIG:
         return
     _ORIG.update(label=QLabel.setText, button=QAbstractButton.setText, tooltip=QWidget.setToolTip,
@@ -797,7 +797,7 @@ def clock_options():
     color=str(cfg.get('clock_color', '') or '')
     if color and not re.fullmatch(r'#[0-9a-fA-F]{6}', color): color=''
     return {'style': style, 'format': fmt, 'seconds': bool(cfg.get('clock_seconds', False)),
-            'blink': bool(cfg.get('clock_blink', False)), 'color': color, 'led_color': color or '#00e676'}
+            'blink': bool(cfg.get('clock_blink', False)), 'color': color, 'led_color': color or theme_accent()}
 
 def format_clock(qtime, fmt=None, seconds=False, colon=':'):
     """'14:05' (24 hours) or '2:05 PM' (12 hours); colon=' ' hides the
@@ -936,8 +936,143 @@ def set_icon_theme(name):
 
 THEME_ACCENTS = {THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c'}
 
+# ---------------------------------------------------------------------------
+# Accent color. Eduka-Settings → Appearance → Accent color replaces the green
+# (or the theme's own accent) everywhere: every Eduka stylesheet passes
+# through accentize(), so all greens of the themes follow the choice.
+# ---------------------------------------------------------------------------
+ACCENT_CHOICES = [
+    ('', 'Theme color'), ('#10b981', 'Emerald'), ('#0d9488', 'Teal'), ('#0891b2', 'Cyan'),
+    ('#0284c7', 'Sky blue'), ('#2563eb', 'Blue'), ('#4f46e5', 'Indigo'), ('#7c3aed', 'Violet'),
+    ('#a21caf', 'Purple'), ('#db2777', 'Pink'), ('#e11d48', 'Rose'), ('#dc2626', 'Red'),
+    ('#ea580c', 'Orange'), ('#d97706', 'Amber'), ('#65a30d', 'Lime'), ('#92400e', 'Brown'),
+    ('#475569', 'Slate'),
+]
+_ACCENT_PRIMARY = ('#00a879', '#26a69a', '#1e9bd7', '#315bef')
+_ACCENT_LIGHT = ('#00b683', '#4db6ac', '#14bd8e', '#3fbfa0', '#35aee6', '#4a6ff2')
+_ACCENT_DARK = ('#00946b', '#00966c', '#00916a', '#008f68', '#00785a', '#00805f', '#126f9c', '#2a4fd6')
+_ACCENT_STATE = {'stamp': None, 'accent': '', 'rx': None, 'map': {}}
+
+def custom_accent():
+    """'#rrggbb' chosen in Eduka-Settings, or '' for the theme's own color."""
+    try:
+        st=desktop_config_path().stat().st_mtime_ns
+    except Exception:
+        st=None
+    if st != _ACCENT_STATE['stamp'] or st is None:
+        try:
+            value=str(read_desktop_config().get('accent_color', '') or '')
+        except Exception:
+            value=''
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value): value=''
+        _ACCENT_STATE.update(stamp=st, accent=value.lower(), rx=None, map={})
+    return _ACCENT_STATE['accent']
+
+def _shade(hex_color, factor):
+    from PyQt5.QtGui import QColor
+    c=QColor(hex_color)
+    return (c.lighter(factor) if factor > 100 else c.darker(int(10000/factor))).name()
+
+def accentize(text):
+    """Replace the built-in accent greens of a stylesheet (hex and rgb()) by
+    the chosen accent color. Unchanged when the theme color is used."""
+    if not isinstance(text, str) or not text:
+        return text
+    accent=custom_accent()
+    if not accent:
+        return text
+    if _ACCENT_STATE['rx'] is None:
+        from PyQt5.QtGui import QColor
+        light=_shade(accent, 118); dark=_shade(accent, 82); deep=_shade(accent, 68)
+        c=QColor(accent); d=QColor(deep)
+        m={}
+        for h in _ACCENT_PRIMARY: m[h]=accent
+        for h in _ACCENT_LIGHT: m[h]=light
+        for h in _ACCENT_DARK: m[h]=dark
+        m['0,168,121']=f'{c.red()},{c.green()},{c.blue()}'
+        m['0, 168, 121']=f'{c.red()}, {c.green()}, {c.blue()}'
+        m['0,120,90']=f'{d.red()},{d.green()},{d.blue()}'
+        for rgb in ('30,155,215', '38,166,154', '49,91,239'):
+            m[rgb]=m['0,168,121']
+        m['77,182,172']=','.join(str(x) for x in (lambda q: (q.red(), q.green(), q.blue()))(QColor(light)))
+        _ACCENT_STATE['map']=m
+        _ACCENT_STATE['rx']=re.compile('|'.join(re.escape(k) for k in sorted(m, key=len, reverse=True)), re.I)
+    m=_ACCENT_STATE['map']
+    return _ACCENT_STATE['rx'].sub(lambda mo: m.get(mo.group(0).lower(), mo.group(0)), text)
+
+def accent_rgb():
+    from PyQt5.QtGui import QColor
+    c=QColor(theme_accent()); return (c.red(), c.green(), c.blue())
+
 def theme_accent():
-    return THEME_ACCENTS.get(current_theme(), '#00a879')
+    return custom_accent() or THEME_ACCENTS.get(current_theme(), '#00a879')
+
+_STYLE_ORIG={}
+
+# ---------------------------------------------------------------------------
+# Agenda of the Action Center calendar: ~/.config/eduka-desktop/agenda.json
+#   [{"id": "...", "date": "2026-10-02", "time": "14:30" or "", "text": "...",
+#     "alarm": "notify" | "sound" | "blink", "fired": "2026-10-02" or ""}]
+# ---------------------------------------------------------------------------
+AGENDA_ALARMS = [('notify', 'Notification'), ('sound', 'Notification and alarm sound'), ('blink', 'Blinking notification')]
+
+def agenda_path():
+    return BASE_CONFIG/'agenda.json'
+
+def read_agenda():
+    try:
+        data=json.loads(agenda_path().read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    out=[]
+    for e in data if isinstance(data, list) else []:
+        if not isinstance(e, dict): continue
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(e.get('date', ''))): continue
+        t=str(e.get('time', '') or '')
+        if t and not re.fullmatch(r'\d{2}:\d{2}', t): t=''
+        out.append({'id': str(e.get('id') or f"{e['date']}-{len(out)}"), 'date': e['date'], 'time': t,
+                    'text': str(e.get('text', ''))[:200], 'alarm': e.get('alarm') if e.get('alarm') in dict(AGENDA_ALARMS) else 'notify',
+                    'fired': str(e.get('fired', '') or '')})
+    return sorted(out, key=lambda e: (e['date'], e['time'] or '00:00'))
+
+def write_agenda(items):
+    BASE_CONFIG.mkdir(parents=True, exist_ok=True)
+    write_json(agenda_path(), list(items))
+
+def add_agenda(date, time_text, text, alarm='notify'):
+    items=read_agenda()
+    items.append({'id': f'{date}-{int(time.time()*1000)}', 'date': date, 'time': time_text, 'text': text.strip()[:200], 'alarm': alarm, 'fired': ''})
+    write_agenda(items)
+
+def remove_agenda(item_id):
+    write_agenda([e for e in read_agenda() if e['id'] != item_id])
+
+def alarm_sound_file():
+    for f in ('/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga', '/usr/share/sounds/freedesktop/stereo/complete.oga',
+              '/usr/share/sounds/freedesktop/stereo/bell.oga', '/usr/share/sounds/Oxygen-Im-Nudge.ogg'):
+        if os.path.exists(f): return f
+    return ''
+
+def play_alarm_sound(times=3):
+    """Ring a few times with whichever player exists (paplay, pw-play, ogg123)."""
+    f=alarm_sound_file()
+    if not f: return False
+    for player in ('paplay', 'pw-play', 'canberra-gtk-play', 'ogg123'):
+        if shutil.which(player):
+            arg=['-f', f] if player == 'canberra-gtk-play' else [f]
+            script='for i in $(seq 1 "$1"); do shift 0; "$2" "${@:3}" >/dev/null 2>&1 || break; done'
+            subprocess.Popen(['bash', '-c', script, 'ring', str(int(times)), player, *arg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+    return False
+
+def install_accent():
+    """Every stylesheet set by an Eduka program follows the accent color."""
+    from PyQt5.QtWidgets import QWidget, QApplication
+    if _STYLE_ORIG:
+        return
+    _STYLE_ORIG.update(widget=QWidget.setStyleSheet, app=QApplication.setStyleSheet)
+    QWidget.setStyleSheet=lambda self, qss: _STYLE_ORIG['widget'](self, accentize(qss))
+    QApplication.setStyleSheet=lambda self, qss: _STYLE_ORIG['app'](self, accentize(qss))
 
 def round_combo(combo, radius=10):
     """Rounded drop-down list for a QComboBox (needs a compositor; without
@@ -1087,7 +1222,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble"}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": ""}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),
@@ -2193,3 +2328,143 @@ def confirm_session_action(action):
     if action == 'lock':
         return session_action('lock')
     return safe_popen(['eduka-session-action', action])
+
+
+# ---------------------------------------------------------------------------
+# Time zone of this computer and its place on the map (zone1970.tab).
+# ---------------------------------------------------------------------------
+def local_timezone_name():
+    tz=os.environ.get('TZ', '').lstrip(':')
+    if tz and '/' in tz:
+        return tz
+    try:
+        name=Path('/etc/timezone').read_text().strip()
+        if name: return name
+    except Exception:
+        pass
+    try:
+        link=os.path.realpath('/etc/localtime')
+        if '/zoneinfo/' in link:
+            return link.split('/zoneinfo/', 1)[1]
+    except Exception:
+        pass
+    return 'Etc/UTC'
+
+def _iso6709(text):
+    """'-0833+12535' or '+394538-1045901' -> (lat, lon) in degrees."""
+    m=re.fullmatch(r'([+-])(\d{2})(\d{2})(\d{2})?([+-])(\d{3})(\d{2})(\d{2})?', text)
+    if not m: return None
+    sa, d1, m1, s1, so, d2, m2, s2 = m.groups()
+    lat=int(d1)+int(m1)/60+int(s1 or 0)/3600; lon=int(d2)+int(m2)/60+int(s2 or 0)/3600
+    return (-lat if sa == '-' else lat, -lon if so == '-' else lon)
+
+_ZONES={}
+
+def zone_table():
+    """{zone name: (lat, lon, country codes)} from tzdata."""
+    if _ZONES: return _ZONES
+    for name in ('/usr/share/zoneinfo/zone1970.tab', '/usr/share/zoneinfo/zone.tab'):
+        try:
+            for line in open(name, encoding='utf-8'):
+                if line.startswith('#') or not line.strip(): continue
+                parts=line.rstrip('\n').split('\t')
+                if len(parts) >= 3:
+                    pos=_iso6709(parts[1])
+                    if pos and parts[2] not in _ZONES: _ZONES[parts[2]]=(pos[0], pos[1], parts[0])
+        except Exception:
+            pass
+    return _ZONES
+
+def zone_position(name=None):
+    name=name or local_timezone_name()
+    return zone_table().get(name)
+
+def zone_info(name=None, when=None):
+    """Offset, abbreviation and daylight saving of a zone (zoneinfo follows
+    each country's own DST rules)."""
+    import datetime
+    name=name or local_timezone_name()
+    try:
+        from zoneinfo import ZoneInfo
+        tz=ZoneInfo(name)
+    except Exception:
+        tz=datetime.timezone.utc; name='UTC'
+    now=(when or datetime.datetime.now(datetime.timezone.utc)).astimezone(tz)
+    off=now.utcoffset() or datetime.timedelta(0); dst=now.dst() or datetime.timedelta(0)
+    mins=int(off.total_seconds()//60); sign='+' if mins >= 0 else '-'; mins=abs(mins)
+    # Does this zone use daylight saving at all this year?
+    uses=False
+    try:
+        jan=datetime.datetime(now.year, 1, 15, tzinfo=tz); jul=datetime.datetime(now.year, 7, 15, tzinfo=tz)
+        uses=jan.utcoffset() != jul.utcoffset()
+    except Exception:
+        pass
+    return {'name': name, 'local': now, 'offset': f'UTC{sign}{mins//60:02d}:{mins%60:02d}', 'abbr': now.tzname() or '',
+            'dst_now': bool(dst.total_seconds()), 'uses_dst': uses, 'hours': (off.total_seconds()/3600.0)}
+
+
+# ---------------------------------------------------------------------------
+# Weather: location from the internet address (GeoJS, open source), else the
+# time zone's city; forecast from Open-Meteo (open source, no key, CC BY 4.0).
+# ---------------------------------------------------------------------------
+WEATHER_CACHE = CACHE_DIR/'weather.json'
+WEATHER_KINDS = {0: 'clear', 1: 'partly', 2: 'partly', 3: 'cloudy', 45: 'fog', 48: 'fog',
+                 51: 'drizzle', 53: 'drizzle', 55: 'drizzle', 56: 'drizzle', 57: 'drizzle',
+                 61: 'rain', 63: 'rain', 65: 'rain', 66: 'rain', 67: 'rain', 80: 'rain', 81: 'rain', 82: 'rain',
+                 71: 'snow', 73: 'snow', 75: 'snow', 77: 'snow', 85: 'snow', 86: 'snow',
+                 95: 'thunder', 96: 'thunder', 99: 'thunder'}
+WEATHER_TEXT = {'clear': 'Clear sky', 'partly': 'Partly cloudy', 'cloudy': 'Cloudy', 'fog': 'Fog', 'drizzle': 'Drizzle',
+                'rain': 'Rain', 'snow': 'Snow', 'thunder': 'Thunderstorm'}
+
+def _get_json(url, timeout=6):
+    import urllib.request
+    req=urllib.request.Request(url, headers={'User-Agent': f'Eduka-Desktop/{VERSION} (Edukasaun OS)'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read(200000).decode('utf-8', 'replace'))
+
+def weather_location():
+    """(lat, lon, city) of this computer."""
+    for url, keys in (('https://get.geojs.io/v1/ip/geo.json', ('latitude', 'longitude', 'city')),
+                      ('https://ipapi.co/json/', ('latitude', 'longitude', 'city'))):
+        try:
+            d=_get_json(url)
+            lat=float(d[keys[0]]); lon=float(d[keys[1]])
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                return lat, lon, str(d.get(keys[2]) or '')[:40]
+        except Exception:
+            continue
+    pos=zone_position()
+    if pos:
+        return pos[0], pos[1], local_timezone_name().split('/')[-1].replace('_', ' ')
+    return None
+
+def fetch_weather():
+    """Current weather and today's range, or None without internet."""
+    loc=weather_location()
+    if not loc: return None
+    lat, lon, city=loc
+    url=('https://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f'
+         '&current=temperature_2m,weather_code,is_day,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min'
+         '&timezone=auto&forecast_days=1' % (lat, lon))
+    d=_get_json(url)
+    cur=d.get('current') or {}
+    code=int(cur.get('weather_code', 0))
+    daily=d.get('daily') or {}
+    out={'code': code, 'kind': WEATHER_KINDS.get(code, 'cloudy'), 'temp': float(cur.get('temperature_2m', 0.0)),
+         'is_day': bool(cur.get('is_day', 1)), 'wind': float(cur.get('wind_speed_10m', 0.0) or 0.0),
+         'tmax': (daily.get('temperature_2m_max') or [None])[0], 'tmin': (daily.get('temperature_2m_min') or [None])[0],
+         'city': city, 'lat': lat, 'lon': lon, 'time': time.time()}
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True); write_json(WEATHER_CACHE, out)
+    except Exception:
+        pass
+    return out
+
+def cached_weather(max_age=3*3600):
+    try:
+        d=json.loads(WEATHER_CACHE.read_text(encoding='utf-8'))
+        if isinstance(d, dict) and time.time()-float(d.get('time', 0)) < max_age and d.get('kind') in WEATHER_TEXT:
+            return d
+    except Exception:
+        pass
+    return None
