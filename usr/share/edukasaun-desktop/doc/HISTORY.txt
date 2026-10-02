@@ -1,3 +1,17 @@
+Edukasaun Desktop Suite 0.9.19
+- Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Settings at version 0.9.19.
+- New login screen (SDDM): a row of user pictures (click one, or "Other user…" to type a name), a password field with the login arrow, and a bottom bar with session, keyboard layout, Language, Accessibility (larger text, high contrast, on-screen keyboard) and Power (suspend, hibernate, restart, shut down). The login screen speaks English, Portuguese (PT/BR), Tetun, Indonesian, Malay, Filipino, Thai, Vietnamese and Chinese (simplified/traditional).
+- Languages: Eduka-Desktop now follows the language chosen when the computer starts (or on the login screen) instead of staying in English. Portuguese, Brazilian Portuguese, Indonesian and Tetun are fully translated; Malay, Filipino, Thai, Vietnamese and Chinese cover the most visible texts. Dates follow the language too.
+- Tetun is built into Eduka-Desktop (there is no system language pack): Eduka-Settings → Language & Startup offers only "System language" and "Tetun (Tetum)"; other programs fall back to Portuguese with Tetun.
+- The language picked on the login screen is used for the desktop after login (only for that user, and only languages from the list).
+- Clock: the LED clock has no black box any more, and one clock color now applies to the digital, analog and LED clock ("A" follows the theme).
+- Action Center: clicking the clock for the globe no longer pushes the Action Center below Eduka-Panel or off the screen; the middle part scrolls when space is short, tiles never hide under the scroll bar and the greeting wraps instead of being cut.
+- Action Center opens at once: icon lookups used to search the icon folders again and again (several seconds on slow disks and in VirtualBox); icons are now indexed once.
+- Helpers of virtual machines (VirtualBox guest additions, VMware, SPICE, QEMU agent) no longer appear in Eduka-Desktop or on the taskbar.
+- Rounded corners everywhere: tooltips, menus, popups, notification bubbles and Eduka-Panel are rounded also without a compositor (Eduka-Low-Theme, VirtualBox without 3D); drop-down lists in Eduka-Settings are rounded.
+- Smoother themes: the categories of Eduka-Desktop fit on 1366x768 and 1024x600 screens without a scroll bar, the clock button on Eduka-Panel shows time and date, rounded handle buttons in the Action Center.
+- Development continues toward the final version 1.1.12 (November 2026).
+
 Edukasaun Desktop Suite 0.9.18
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Settings at version 0.9.18.
 - Fixed (serious): with Eduka-Settings open, the taskbar showed "Eduka-Update-System" with its icon. Eduka's own windows are now recognised by name, and generic words such as "Eduka", "Settings" or "System" no longer decide which application a window belongs to.
@@ -13,7 +27,7 @@ Edukasaun Desktop Suite 0.9.18
 - Window buttons (minimize, maximize, close) are clearly visible in the dark themes: new xfwm4 and Openbox borders with fixed colors, round buttons and a red close button (the Orchis xfwm4 files used GTK colors that LXQt cannot provide, so the white buttons sat on a light title bar).
 - New theme Eduka-Low-Theme for very low spec computers, built from Yaru-remix (Muqtxdir; GTK 2/3/4 GPL-3.0, assets CC BY-SA 4.0): flat and opaque, no transparency, no compositor (picom not started, xfwm4 compositing off), no effects.
 - New theme Eduka-Transparan after Transparent-Shell-Theme (mrbrownstone07): smoky dark glass for Eduka-Panel, Eduka-Desktop, the Action Center and popups; GTK applications use Edukasaun-Dark; falls back to Edukasaun-Dark without a compositor.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.17
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Settings at version 0.9.17.
@@ -27,7 +41,7 @@ Edukasaun Desktop Suite 0.9.17
 - Eduka-Panel is the notification server of Eduka-Desktop sessions: LXQt's notification daemon is stopped and every notification appears as an Eduka bubble above the panel (actions, urgent notifications stay, hover keeps it open), goes to the history and can be silenced with Do Not Disturb (Action Center tile, Notifications popup or Eduka-Settings). Duration and history are set in Eduka-Settings → Notifications, with a test button.
 - Login Screen page: live preview that changes at once, status of the active SDDM theme and greeter, and automatic saving for administrators (polkit rule, no password per change). Saving also makes sure SDDM really uses the Edukasaun theme (/etc/sddm.conf.d/zz-edukasaun-theme.conf and /etc/sddm.conf) and marks the theme QtVersion=6 when only the Qt 6 greeter is installed (SDDM 0.21).
 - Login screen pre-fills a user only when that account is listed by SDDM (no locked live account after installation).
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.16
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.16.
@@ -44,7 +58,7 @@ Edukasaun Desktop Suite 0.9.16
 - Eduka-Panel follows settings changes reliably (the settings file watch is renewed after each save) and refreshes the icon theme and launcher icons.
 - New login screen design (SDDM, Qt 5 and Qt 6 greeters): large clock, card with logo and user initial, password field with a login arrow, Caps Lock hint, panel-style bottom bar with restart and shut down buttons; light, dark and glass styles with a selectable accent color.
 - Live session autologin is also written into the [Autologin] section of /etc/sddm.conf (live-config writes one there and SDDM reads it last), so the live system always logs straight into Eduka-Desktop.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.15
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.15.
@@ -60,7 +74,7 @@ Edukasaun Desktop Suite 0.9.15
 - Live session: SDDM (and LightDM) log straight into Eduka-Desktop without user name or password (eduka-live-autologin.service, only when booted with boot=live; removed again on installed systems).
 - Standard account: while the ISO is built (no personal account yet) the package creates the user edukasaun with the password edukasaun; the login screen pre-fills edukasaun. On other systems run 'sudo eduka-default-user'.
 - Fixed Eduka-Desktop theme switching leaving parts of the old theme in place.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.14
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.14.
@@ -73,7 +87,7 @@ Edukasaun Desktop Suite 0.9.14
 - Removed the heavy drop-shadow effect from Liquid Glass that made the panel and Eduka-Desktop sluggish.
 - Tooltips are opaque so they never appear as black boxes.
 - Recommends xfwm4 | openbox and picom; Eduka-Desktop keeps working without them.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.13
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.13.
@@ -89,7 +103,7 @@ Edukasaun Desktop Suite 0.9.13
 - Eduka-Panel: redesigned Sound popup (mute button, volume, output device selection) and Network popup (Wi-Fi switch, network list with signal, lock and connected state, password prompt, disconnect). Wi-Fi scans run in the background.
 - Eduka-Panel: Show Desktop corner button and middle-click on a task or pinned app to open a new window.
 - Wayland support stays available as a preview through Suggests (lxqt-wayland-session, labwc) and is no longer pulled in by default.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.12
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.12.
@@ -106,7 +120,7 @@ Edukasaun Desktop Suite 0.9.12
 - Sessions: Eduka-Desktop (X11) is the default LightDM session; slick-greeter shows an Eduka-Desktop badge.
 - LXQt: Eduka-Desktop sessions hide lxqt-panel through session-scoped XDG settings (a normal LXQt session is unchanged), and Eduka-Menu Settings appears in the LXQt Configuration Center.
 - Wayland (preview): Eduka components run through XWayland so the panel and taskbar keep working; launched applications use native Wayland.
-- Development continues toward Final Version 1.1.25.
+- Development continued toward the final version (now 1.1.12, November 2026).
 
 Edukasaun Desktop Suite 0.9.11
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Menu-Settings at version 0.9.11.

@@ -10,6 +10,7 @@ from PyQt5.QtDBus import QDBusConnection, QDBusConnectionInterface, QDBusAbstrac
 from PyQt5.QtCore import Q_CLASSINFO
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
+from eduka_common import _
 
 LIGHT_UI = {
     'text': '#1f2d2a', 'title': '#10231e', 'sub': '#536a64',
@@ -137,9 +138,11 @@ class PopupFrame(QFrame):
         if composited: self.setAttribute(Qt.WA_TranslucentBackground)
         self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(*((6,6,6,6) if composited else (0,0,0,0))); lay.addWidget(self.box)
         self.v=QVBoxLayout(self.box); self.v.setContentsMargins(16,14,16,14); self.v.setSpacing(10)
-        # Without a compositor a translucent popup gets black corners: use a
-        # square opaque popup instead.
-        self.setStyleSheet(popup_qss() if composited else popup_qss().replace('border-radius:18px','border-radius:0px'))
+        # Without a compositor a translucent popup gets black corners: the
+        # popup stays opaque and its corners are cut off with a mask.
+        self.setStyleSheet(popup_qss())
+        if not composited:
+            round_window_shape(self, 18)
         self._fade=None
         # Popup shadows disabled in low resource mode to avoid sluggish LXQt/QEMU sessions.
         if read_panel_config().get('enable_shadows', False) and not read_panel_config().get('low_resource_mode', True):
@@ -147,11 +150,10 @@ class PopupFrame(QFrame):
 
     def showEvent(self, e):
         super().showEvent(e)
+        translate_tree(self)
         # A short fade makes popups feel smooth; without a compositor Qt
         # simply shows the popup at full opacity.
-        self.setWindowOpacity(0.0)
-        self._fade=QPropertyAnimation(self, b'windowOpacity', self); self._fade.setDuration(130)
-        self._fade.setStartValue(0.0); self._fade.setEndValue(1.0); self._fade.setEasingCurve(QEasingCurve.OutCubic); self._fade.start()
+        self._fade=fade_in(self, 130)
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
@@ -621,7 +623,8 @@ class NotificationBubble(QFrame):
         if composited: self.setAttribute(Qt.WA_TranslucentBackground)
         u=ui_colors(); dark=is_dark_theme()
         card='rgba(44,44,44,242)' if dark else 'rgba(255,255,255,246)'
-        radius=18 if composited else 0
+        radius=18
+        if not composited: round_window_shape(self, radius)   # rounded without a compositor too
         self.setStyleSheet(f"""
             QFrame#bubble{{background:{card};border:1px solid {u['btn_border']};border-radius:{radius}px;}}
             QFrame#bubble[critical="true"]{{border:1px solid #e5484d;}}
@@ -678,9 +681,9 @@ class NotificationBubble(QFrame):
         super().mouseReleaseEvent(e)
 
     def show_animated(self):
+        translate_tree(self)
         self.setWindowOpacity(0.0); self.show()
-        self._fade=QPropertyAnimation(self, b'windowOpacity', self); self._fade.setDuration(160)
-        self._fade.setStartValue(0.0); self._fade.setEndValue(1.0); self._fade.start()
+        self._fade=fade_in(self, 160)
 
 
 class NotificationServer(QObject):
@@ -898,6 +901,9 @@ class ClockFace(QWidget):
 
     def set_options(self, opts, big):
         self.opts=dict(opts); self.big=big
+        u=ui_colors(); chosen=self.opts.get('color')
+        self.ink=QColor(chosen) if chosen else qcolor(u['title'])
+        self.accent=QColor(chosen) if chosen else qcolor(u['accent'])
         self.setFixedSize(self.sizeHint()); self.update()
 
     def sizeHint(self):
@@ -950,9 +956,8 @@ class ClockFace(QWidget):
 
     def paint_led(self, p):
         t, ap=self.text_parts()
-        color=QColor(self.opts['led_color']); off=QColor(color); off.setAlpha(26)
-        r=QRectF(self.rect()).adjusted(1,1,-1,-1)
-        p.setPen(QPen(QColor(255,255,255,30), 1)); p.setBrush(QColor('#0d0f0e')); p.drawRoundedRect(r, 10, 10)
+        color=QColor(self.opts['led_color']); off=QColor(color); off.setAlpha(22)
+        # No panel behind the digits: the segments float on the card.
         h=self.height()-16; dw=h*0.52; gap=h*0.16; colw=h*0.22
         widths=[colw if ch in ': ' and i in (2, 5) else dw for i, ch in enumerate(t)]
         total=sum(widths)+gap*(len(t)-1)+(h*0.7 if ap else 0)
@@ -996,7 +1001,7 @@ class ClockFace(QWidget):
         hand(30.0*((now.hour()%12)+now.minute()/60.0), 46, 7, self.ink)
         hand(6.0*(now.minute()+now.second()/60.0), 66, 5, self.ink)
         if self.opts['seconds'] or self.big:
-            hand(6.0*now.second(), 72, 2, self.accent)
+            hand(6.0*now.second(), 72, 2, QColor('#e5484d') if self.opts.get('color') else self.accent)
         p.setPen(Qt.NoPen); p.setBrush(self.accent); p.drawEllipse(QPointF(0,0), 6, 6)
 
 
@@ -1270,7 +1275,7 @@ def network_pixmap(kind, led_on=True, size=24, color='#2d4a43', signal=None):
 def ac_qss():
     u=ui_colors()
     return f"""
-QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;margin-top:4px;}}
+QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
 QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
 QFrame#mediaRow{{background:{u['tile']};border:1px solid {u['btn_border']};border-radius:10px;}}
 QLabel#mediaTitle{{font-size:12px;font-weight:700;color:{u['title']};}}
@@ -1334,7 +1339,7 @@ class ActionCenter(PopupFrame):
         self.clock_stack=QStackedWidget(); card_lay.addWidget(self.clock_stack)
         clock_page=QWidget(); self.ck=QGridLayout(clock_page); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
         self.face=ClockFace(); self.face.clicked.connect(self.show_globe)
-        self.greeting=QLabel(); self.greeting.setObjectName('acGreeting')
+        self.greeting=QLabel(); self.greeting.setObjectName('acGreeting'); self.greeting.setWordWrap(True)
         self.date_label=QLabel(); self.date_label.setObjectName('acDate')
         self.date_label.setWordWrap(True); self._dense=None
         self.clock_stack.addWidget(clock_page)
@@ -1347,18 +1352,26 @@ class ActionCenter(PopupFrame):
         self.clock_card.setContextMenuPolicy(Qt.CustomContextMenu); self.clock_card.customContextMenuRequested.connect(self.clock_menu)
         self.clock_card.setToolTip('Click the clock for the world globe • Right-click: clock style')
         self.v.addWidget(self.clock_card)
+        # Everything between the clock and the session buttons scrolls when
+        # the screen is too small, so the Action Center never runs off screen.
+        self.body=QWidget(); self.body.setObjectName('acBody'); self.bv=QVBoxLayout(self.body); self.bv.setContentsMargins(0,0,0,0); self.bv.setSpacing(8)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll.setWidget(self.body)
+        self.scroll.setObjectName('acScroll'); self.scroll.viewport().setAutoFillBackground(False); self.body.setAutoFillBackground(False)
         self.clock_opts=clock_options(); self.clock_format=self.clock_opts['format']
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
         for i,(key,label,icon) in enumerate(self.TILES):
             t=QToolButton(); t.setObjectName('acTile'); t.setText(tr('dnd') if key == 'dnd' else label)
             t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system-notifications' if key == 'dnd' else 'preferences-system'))
-            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); t.setFixedSize(108,54)
+            t.setIconSize(QSize(24,24)); t.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            # Tiles share the width, so a scroll bar never cuts the last column.
+            t.setMinimumWidth(92); t.setFixedHeight(54); t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             t.setAccessibleName(label); t.setProperty('on', False); t.setCursor(Qt.PointingHandCursor)
             t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
             t.setContextMenuPolicy(Qt.CustomContextMenu); t.customContextMenuRequested.connect(lambda _pos,k=key: self.tile_settings(k))
             grid.addWidget(t, i//3, i%3); self.tiles[key]=t
-        self.v.addLayout(grid)
+        self.bv.addLayout(grid)
         self._led=True
         self.blink=QTimer(self); self.blink.timeout.connect(self.blink_led)
 
@@ -1385,7 +1398,7 @@ class ActionCenter(PopupFrame):
         cl.addWidget(self.media_box,4,0,1,4)
         MEDIA_WANTED['on']=True
         self.update_button=QPushButton(''); self.update_button.setVisible(False); self.update_button.clicked.connect(lambda: (self.close(), panel.open_eus())); cl.addWidget(self.update_button,3,0,1,4)
-        self.v.addWidget(card)
+        self.bv.addWidget(card)
         self._vol_timer=QTimer(self); self._vol_timer.setSingleShot(True); self._vol_timer.timeout.connect(self.apply_volume)
         self._bri_timer=QTimer(self); self._bri_timer.setSingleShot(True); self._bri_timer.timeout.connect(self.apply_brightness)
         self.vol_slider.valueChanged.connect(lambda v: (self.vol_value.setText(f'{v}%'), self.update_sound_icon(), self._vol_timer.start(70)))
@@ -1396,14 +1409,15 @@ class ActionCenter(PopupFrame):
         self.notif_icon=QLabel(); self.notif_icon.setFixedSize(26,26); nl.addWidget(self.notif_icon)
         self.notif_text=QLabel(''); self.notif_text.setWordWrap(True); self.notif_text.setTextFormat(Qt.PlainText); nl.addWidget(self.notif_text, 1)
         self.notif_open=QPushButton('All'); self.notif_open.setObjectName('linkButton'); self.notif_open.clicked.connect(lambda: (self.close(), panel.notification_popup())); nl.addWidget(self.notif_open)
-        self.v.addWidget(self.notif_card)
+        self.bv.addWidget(self.notif_card)
         panel.notifications.changed.connect(self.update_notifications); self.update_notifications()
 
         # Month calendar in a holder whose height follows the grip.
         self.cal_holder=QWidget(); hl=QVBoxLayout(self.cal_holder); hl.setContentsMargins(0,0,0,0)
         self.calendar_card=CalendarCard(); self.calendar=self.calendar_card.calendar; hl.addWidget(self.calendar_card)
         self.cal_full=self.calendar_card.sizeHint().height()
-        self.v.addWidget(self.cal_holder)
+        self.bv.addWidget(self.cal_holder)
+        self.v.addWidget(self.scroll)
 
         # Session: Lock, Log Out, Restart, Shut Down.
         session=QHBoxLayout(); session.setSpacing(6)
@@ -1454,15 +1468,20 @@ class ActionCenter(PopupFrame):
         for i in range(self.clock_stack.count()):
             self.clock_stack.widget(i).setSizePolicy(QSizePolicy.Preferred if i == index else QSizePolicy.Ignored,
                                                      QSizePolicy.Preferred if i == index else QSizePolicy.Ignored)
-        self.clock_stack.adjustSize()
+        self.clock_stack.updateGeometry(); self.clock_stack.adjustSize(); self.clock_card.updateGeometry()
 
     def show_globe(self):
-        self.clock_stack.setCurrentIndex(1); self.update_time()
-        if self.isVisible(): self.place()
+        self.clock_stack.setCurrentIndex(1); self.update_time(); self.replace_soon()
 
     def show_clock(self):
-        self.clock_stack.setCurrentIndex(0)
-        if self.isVisible(): self.place()
+        self.clock_stack.setCurrentIndex(0); self.replace_soon()
+
+    def replace_soon(self):
+        # The clock card learns its new height only after Qt handles the
+        # layout events; measure again then, so the Action Center keeps its
+        # place above Eduka-Panel instead of growing past the screen.
+        if self.isVisible():
+            self.place(); QTimer.singleShot(0, self.place); QTimer.singleShot(60, self.place)
 
     def set_compact(self, compact, remember=False):
         compact=bool(compact)
@@ -1502,13 +1521,25 @@ class ActionCenter(PopupFrame):
 
     def settle(self):
         # Layout changes are applied lazily: settle them before measuring.
-        self.ck.activate(); self.v.activate(); self.layout().activate()
-        self.box.adjustSize(); self.adjustSize()
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        self.ck.activate(); self.bv.activate(); self.v.activate(); self.layout().activate()
+        self.body.adjustSize()
+
+    def fixed_height(self):
+        """Height of everything except the scrolling body."""
+        self.settle()
+        # The layout counts the scroll area with its fixed height, not its hint.
+        sh=self.scroll.sizeHint().height()
+        sh=max(self.scroll.minimumHeight(), min(self.scroll.maximumHeight(), sh))
+        return self.sizeHint().height()-sh
+
+    def body_height(self):
+        self.settle()
+        return self.body.sizeHint().height()
 
     def base_height(self):
         """Height of the Action Center without the calendar."""
-        self.settle()
-        return self.sizeHint().height()-(self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else 0)
+        return self.fixed_height()+self.body_height()-(self.cal_holder.maximumHeight() if self.cal_holder.isVisible() else 0)
 
     def room(self):
         return self.panel.popup_room()
@@ -1525,15 +1556,20 @@ class ActionCenter(PopupFrame):
                 # Make room for the calendar the user asked for: the latest
                 # notification is still behind the bell on the panel.
                 self.notif_card.setVisible(False); free=self.room()-self.base_height()
-            if free >= self.CAL_MIN:
-                self.set_calendar_height(min(self.cal_full, free)); self.cal_holder.setVisible(True)
-            else:
-                self.compact=True; self.cal_holder.setVisible(False); self.set_calendar_height(0)
-                self.mode_button.setIcon(QIcon(arrow_icon_path('up', self.ink))); self.set_clock_layout(False)
-        self.settle()
-        if self.sizeHint().height() > self.room() and self.notif_card.isVisible():
-            self.notif_card.setVisible(False); self.settle()
-        h=min(self.sizeHint().height(), self.room()) if self.panel.edge in ('Bottom','Top') else self.sizeHint().height()
+            # The calendar the user asked for always stays; when it does not
+            # fit completely the body scrolls instead of folding it away.
+            self.set_calendar_height(max(self.CAL_MIN, min(self.cal_full, free))); self.cal_holder.setVisible(True)
+        if self.fixed_height()+self.body_height() > self.room() and self.notif_card.isVisible():
+            self.notif_card.setVisible(False)
+        # The body takes the room that is left; it scrolls when that is less.
+        avail=max(90, self.room()-self.fixed_height())
+        scrolls=self.body_height() > avail
+        # Keep the cards clear of the scroll bar.
+        self.bv.setContentsMargins(0, 0, 10 if scrolls else 0, 0)
+        self.scroll.setFixedHeight(min(self.body_height(), avail))
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn if scrolls else Qt.ScrollBarAlwaysOff)
+        self.settle(); self.box.adjustSize(); self.adjustSize()
+        h=self.sizeHint().height()
         anchor=self.panel.clock.mapToGlobal(QPoint(self.panel.clock.width()//2, self.panel.clock.height()//2))
         pos=self.panel.popup_position(self.width(), h, anchor)
         self.setGeometry(pos.x(), pos.y(), self.width(), h)
@@ -1563,11 +1599,12 @@ class ActionCenter(PopupFrame):
         m.addSeparator()
         sec=m.addAction('Show seconds'); sec.setCheckable(True); sec.setChecked(o['seconds']); sec.triggered.connect(lambda on: self.set_clock('clock_seconds', bool(on)))
         blink=m.addAction('Blinking colon'); blink.setCheckable(True); blink.setChecked(o['blink']); blink.triggered.connect(lambda on: self.set_clock('clock_blink', bool(on)))
-        colors=m.addMenu('LED color')
+        colors=m.addMenu('Clock color')
+        auto=colors.addAction('Theme color'); auto.setCheckable(True); auto.setChecked(not o['color']); auto.triggered.connect(lambda: self.set_clock('clock_color', ''))
         for value, name in LED_COLORS:
             pix=QPixmap(14,14); pix.fill(QColor(value))
-            act=colors.addAction(QIcon(pix), name); act.setCheckable(True); act.setChecked(o['led_color'].casefold() == value)
-            act.triggered.connect(lambda _=False, v=value: (self.set_clock('clock_led_color', v), self.set_clock('clock_style', 'led')))
+            act=colors.addAction(QIcon(pix), name); act.setCheckable(True); act.setChecked(o['color'].casefold() == value)
+            act.triggered.connect(lambda _=False, v=value: self.set_clock('clock_color', v))
         m.addSeparator()
         m.addAction(get_icon('applications-internet', 'globe'), 'World globe', self.show_globe)
         m.addAction(get_icon('preferences-system'), 'Clock settings…', lambda: self.launch('eduka-settings --page clock'))
@@ -1664,7 +1701,7 @@ class ActionCenter(PopupFrame):
         bat=st.get('battery')
         info=[f"Battery {bat['capacity']}% ({bat['status']})" if bat else 'Power: AC', f"Keyboard {st.get('layout','EN')}"]
         if st.get('printers'): info.append('Printer ready')
-        self.battery_label.setText('  •  '.join(info))
+        self.battery_label.setText('  •  '.join(_(x) for x in info))
         count=int(self.panel.eus_status.get('count',0) or 0) if self.panel.eus_status else 0
         self.update_button.setVisible(count > 0)
         if count: self.update_button.setText(f'  {count} update{"s" if count != 1 else ""} available'); self.update_button.setIcon(get_icon(str(EUS_ICON_DIR/'eus-update-available.png'),'system-software-update'))
@@ -2001,6 +2038,39 @@ class SoundPopup(PopupFrame):
         super().closeEvent(e)
 
 
+class ClockButton(QPushButton):
+    """Panel clock: the time in bold, the date smaller and softer below it."""
+    def __init__(self, parent=None):
+        super().__init__(parent); self.lines=['', '']
+
+    def set_lines(self, lines):
+        lines=list(lines)
+        if lines != self.lines:
+            self.lines=lines; self.updateGeometry(); self.update()
+
+    def fonts(self):
+        big=QFont(self.font()); big.setBold(True); big.setPixelSize(13 if self.height() >= 40 else 12)
+        small=QFont(self.font()); small.setBold(False); small.setPixelSize(10 if self.height() >= 40 else 9)
+        return big, small
+
+    def sizeHint(self):
+        big, small=self.fonts()
+        w=max([QFontMetrics(big).horizontalAdvance(self.lines[0])]+[QFontMetrics(small).horizontalAdvance(t) for t in self.lines[1:]])
+        return QSize(w+20, 34)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p=QPainter(self); p.setRenderHint(QPainter.TextAntialiasing)
+        big, small=self.fonts(); ink=self.palette().color(QPalette.ButtonText)
+        fm_b=QFontMetrics(big); fm_s=QFontMetrics(small)
+        total=fm_b.height()+sum(fm_s.height() for _ in self.lines[1:])
+        y=(self.height()-total)/2
+        p.setFont(big); p.setPen(ink); p.drawText(QRectF(0, y, self.width(), fm_b.height()), Qt.AlignCenter, self.lines[0]); y+=fm_b.height()
+        soft=QColor(ink); soft.setAlpha(170); p.setFont(small); p.setPen(soft)
+        for t in self.lines[1:]:
+            p.drawText(QRectF(0, y, self.width(), fm_s.height()), Qt.AlignCenter, t); y+=fm_s.height()
+
+
 class EdukaPanel(QWidget):
     def __init__(self):
         super().__init__(); ensure_dirs(); icon_theme_setup(); self.setWindowTitle('Eduka-Panel')
@@ -2018,7 +2088,7 @@ class EdukaPanel(QWidget):
         self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
-        self.build_ui(); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
+        self.build_ui(); translate_tree(self); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
         QApplication.instance().aboutToQuit.connect(self.notifications.stop)
         # Eduka-Panel shows every notification itself (LXQt's daemon is stopped).
         self.notify_server=NotificationServer(self, self.notifications)
@@ -2059,7 +2129,7 @@ class EdukaPanel(QWidget):
         self.eus=QPushButton(); self.eus.setObjectName('updateButton'); self.eus.setVisible(False); self.eus.clicked.connect(self.open_eus); self.eus.setContextMenuPolicy(Qt.CustomContextMenu); self.eus.customContextMenuRequested.connect(self.eus_context)
         self.notif=QPushButton(); self.notif.setObjectName('trayButton'); self.notif.setIcon(get_icon('preferences-system-notifications')); self.notif.clicked.connect(self.notification_popup); self.notif.setContextMenuPolicy(Qt.CustomContextMenu); self.notif.customContextMenuRequested.connect(self.notification_context)
         self.lang=QLabel('EN'); self.lang.setObjectName('langLabel'); self.lang.setContextMenuPolicy(Qt.CustomContextMenu); self.lang.customContextMenuRequested.connect(self.language_context)
-        self.clock=QPushButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.toggle_action_center); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
+        self.clock=ClockButton(); self.clock.setObjectName('clockButton'); self.clock.clicked.connect(self.toggle_action_center); self.clock.setContextMenuPolicy(Qt.CustomContextMenu); self.clock.customContextMenuRequested.connect(self.clock_context)
         for button,name in [(self.net,'Network'),(self.bt,'Bluetooth'),(self.printer,'Printers'),(self.battery,'Battery'),(self.vol,'Volume'),(self.eus,'Eduka Update System'),(self.notif,'Notifications'),(self.clock,'Clock and calendar')]: button.setAccessibleName(name)
         # Status icons and the clock sit together in one rounded tray group.
         self.tray=QFrame(); self.tray.setObjectName('trayGroup'); self.tray.setContextMenuPolicy(Qt.CustomContextMenu); self.tray.customContextMenuRequested.connect(self.panel_context)
@@ -2136,7 +2206,13 @@ class EdukaPanel(QWidget):
             w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2)
             y=screen.y()+5 if edge == 'Top' else screen.y()+screen.height()-h-5
             self.setGeometry(x,y,w,h); self.setFixedSize(w,h); self.thickness=h
-        radius=int(min(self.width(), self.height())/2.3) if self._composited else 0; bg_alpha=int(alpha*255)
+        radius=int(min(self.width(), self.height())/2.3); bg_alpha=int(alpha*255)
+        if self._composited:
+            self.clearMask()
+        else:
+            # No compositor: the panel is opaque, its rounded ends are cut with a mask.
+            path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), radius, radius)
+            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
         sb=max(13,int(h/2.7)); fs=11 if h < 46 else 12
         # 0.9.16 look: bright surface, accent start button, flat task buttons
         # with an accent indicator. Plain stylesheets only (no effects), so it
@@ -2525,9 +2601,8 @@ class EdukaPanel(QWidget):
         if getattr(self, 'vertical', False):
             text=now.toString('HH\nmm') if clock_settings()[1] == '24h' else now.toString('h:mm\nAP')
         else:
-            text=format_clock(now.time(), clock_settings()[1])+'\n'+now.toString('dd/MM/yyyy')
-        if self.clock.text() != text:
-            self.clock.setText(text)
+            text=format_clock(now.time(), clock_settings()[1])+'\n'+QLocale().toString(now.date(), 'ddd d MMM')
+        self.clock.set_lines(text.split('\n'))
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.update_time()
     def _window_type_is_desktop(self, wid):
@@ -2585,6 +2660,8 @@ class EdukaPanel(QWidget):
         low = (tclean+' '+cclean+' '+dclean).casefold()
         norm_title = re.sub(r'[^a-z0-9]+', ' ', tclean).strip()
         if not tclean and not cclean:
+            return False
+        if any(m in (cclean+' '+tclean) for m in VM_HELPER_MARKERS):
             return False
         # True desktop/background windows are filtered by EWMH type instead of
         # hiding every window named "Desktop". This lets PCManFM-Qt file-manager
@@ -3156,6 +3233,6 @@ if __name__ == '__main__':
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
+    app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
     if not panel._fullscreen_hidden: panel.show()
     registry_update('panel', {'pid': os.getpid(), 'running': True}); sys.exit(app.exec_())

@@ -9,13 +9,13 @@ from PyQt5.QtWidgets import (
 )
 
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
-from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup
+from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, _
 
 
 class AboutDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('About Edukasaun Desktop')
+        self.setWindowTitle(_('About Edukasaun Desktop'))
         self.setWindowIcon(get_icon(START_ICON, 'help-about'))
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setModal(True)
@@ -34,38 +34,33 @@ class AboutDialog(QDialog):
         header_layout.addWidget(logo)
         title = QLabel(
             f"<b style='font-size:22px'>Edukasaun Desktop</b><br>"
-            f"<span style='font-size:15px;color:#008b68'>Suite Version {VERSION}</span>"
+            f"<span style='font-size:15px;color:#008b68'>{_('Suite Version')} {VERSION}</span>"
         )
         header_layout.addWidget(title, 1)
         root.addWidget(header)
 
         details = QTextBrowser()
         details.setOpenExternalLinks(True)
-        details.setHtml(f"""
-        <h3>About Edukasaun Desktop Suite</h3>
-        <p><b>Visible system name:</b> Edukasaun Desktop<br>
-        <b>Internal launcher engine:</b> Eduka-Desktop<br>
-        <b>Release target:</b> Final Version 1.1 — November 2026</p>
-
-        <table cellspacing='4' cellpadding='5' width='100%'>
-          <tr><td><b>Eduka-Desktop</b></td><td>{VERSION}</td><td>Start menu and application launcher</td></tr>
-          <tr><td><b>Eduka-Panel</b></td><td>{VERSION}</td><td>Panel, taskbar and status controls</td></tr>
-          <tr><td><b>Eduka-Menu</b></td><td>{VERSION}</td><td>Launcher button and toggle bridge</td></tr>
-          <tr><td><b>Eduka-Settings</b></td><td>{VERSION}</td><td>Configuration center</td></tr>
-        </table>
-
-        <h3>Version {VERSION}</h3>
-        <ul>
-          <li>Eduka-Settings (formerly Eduka-Menu Settings) configures Eduka-Desktop, Eduka-Panel, notifications, the cursor and the login screen.</li>
-          <li>The Action Center has a big digital or analog clock with a greeting in your language, a smart network tile and Lock, Log Out, Restart and Shut Down.</li>
-          <li>Drag the handle at the top of the Action Center to show or hide the month calendar.</li>
-          <li>Eduka-Panel shows every notification of the desktop, with history and Do Not Disturb.</li>
-          <li>The login screen follows Eduka-Settings right away, with a live preview.</li>
-        </ul>
-
-        <p><b>Developer:</b> Hugo Moniz do Rego<br>
-        <b>Organizations:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>
-        """)
+        notes = [
+            _('Eduka-Desktop follows the language chosen when the computer starts; Tetun is built in.'),
+            _('New login screen with user pictures, keyboard layout, accessibility and power menu.'),
+            _('The Action Center never leaves the screen: its content scrolls when space is short.'),
+            _('One clock color for the digital, analog and LED clock.'),
+            _('Rounded drop-down lists, softer themes and helpers of virtual machines hidden.'),
+        ]
+        rows = [('Eduka-Desktop', _('Start menu and application launcher')), ('Eduka-Panel', _('Panel, taskbar and status controls')),
+                ('Eduka-Menu', _('Launcher button and toggle bridge')), ('Eduka-Settings', _('Configuration center'))]
+        details.setHtml(
+            f"<h3>{_('About Edukasaun Desktop Suite')}</h3>"
+            f"<p><b>{_('Visible system name')}:</b> Edukasaun Desktop<br>"
+            f"<b>{_('Internal launcher engine')}:</b> Eduka-Desktop<br>"
+            f"<b>{_('Release target')}:</b> {_('Final Version')} 1.1.12 — {_('November 2026')}</p>"
+            "<table cellspacing='4' cellpadding='5' width='100%'>"
+            + ''.join(f"<tr><td><b>{n}</b></td><td>{VERSION}</td><td>{d}</td></tr>" for n, d in rows)
+            + f"</table><h3>{_('Version')} {VERSION}</h3><ul>"
+            + ''.join(f'<li>{x}</li>' for x in notes)
+            + f"</ul><p><b>{_('Developer')}:</b> Hugo Moniz do Rego<br>"
+            f"<b>{_('Organizations')}:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>")
         root.addWidget(details, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -84,6 +79,7 @@ class AboutDialog(QDialog):
 
 def main():
     app = QApplication(sys.argv)
+    install_translations(app)
     app.setApplicationName('Eduka-About')
     icon_theme_setup(force=True)
     dialog = AboutDialog()

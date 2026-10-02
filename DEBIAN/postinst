@@ -74,6 +74,13 @@ mkdir -p /usr/share/Edukasaun/SDDM
 if [ -d /etc/sddm.conf.d ] || command -v sddm >/dev/null 2>&1; then
     mkdir -p /etc/sddm.conf.d
     printf '# Edukasaun OS: use the Edukasaun login screen (read last).\n[Theme]\nCurrent=edukasaun\n' > /etc/sddm.conf.d/zz-edukasaun-theme.conf
+    # The login screen stores the language picked there for the session
+    # (eduka-desktop-session checks the user name and the language).
+    if getent passwd sddm >/dev/null 2>&1; then
+        mkdir -p /var/lib/edukasaun-desktop/login
+        chown sddm: /var/lib/edukasaun-desktop/login 2>/dev/null || true
+        chmod 0755 /var/lib/edukasaun-desktop/login
+    fi
 fi
 # SDDM 0.21 with only the Qt 6 greeter loads a theme only with QtVersion=6;
 # the Edukasaun theme runs on both greeters.

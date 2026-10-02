@@ -7,7 +7,7 @@ from PyQt5.QtGui import *
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
-from eduka_common import _get_ini_value
+from eduka_common import _get_ini_value, _
 
 SDDM_THEME_DIR = Path('/usr/share/sddm/themes/edukasaun')
 SDDM_HELPER = '/usr/lib/edukasaun-desktop/eduka-sddm-apply'
@@ -370,6 +370,12 @@ class Settings(QDialog):
         self.load_values()
         self.apply_theme_style()
         self.status_timer=QTimer(self); self.status_timer.setSingleShot(True); self.status_timer.timeout.connect(lambda: self.status.setText(''))
+        for combo in self.findChildren(QComboBox):
+            round_combo(combo)
+            # Items with data are interface words: translate their labels.
+            for i in range(combo.count()):
+                if combo.itemData(i) is not None: combo.setItemText(i, _(combo.itemText(i)))
+        translate_tree(self)
 
     # ------------------------------------------------------------------ layout
     def build(self):
@@ -436,8 +442,11 @@ class Settings(QDialog):
         self.language=QComboBox()
         for code, label in LANGUAGES: self.language.addItem(label, code)
         f.addRow('Language:', self.language)
-        f.addRow('', hint_label('Used for greetings (Selamat pagi, Bondia, …), the clock card and the leave screen.'))
-        self.default_section=QComboBox(); self.default_section.addItems([x[0] for x in CATEGORY_ORDER if x[0] != 'Favorites']); f.addRow('Open with:', self.default_section)
+        f.addRow('', hint_label('Edukasaun OS follows the language chosen when the computer starts. Tetun has no system language pack yet, so Eduka carries its own Tetun translation.'))
+        self.default_section=QComboBox()
+        for x in CATEGORY_ORDER:
+            if x[0] != 'Favorites': self.default_section.addItem(x[0], x[0])
+        f.addRow('Open with:', self.default_section)
         p.v.addLayout(f)
         p.v.addWidget(hint_label('Eduka-Desktop is the start menu engine of Edukasaun OS; the visible system name stays Edukasaun Desktop.'))
         return p.finish()
@@ -593,7 +602,9 @@ class Settings(QDialog):
         fp=form()
         self.panel_height=QSpinBox(); self.panel_height.setRange(34,58); self.panel_height.setSuffix(' px'); fp.addRow('Panel height:', self.panel_height)
         self.panel_width=QSpinBox(); self.panel_width.setRange(70,100); self.panel_width.setSuffix(' %'); fp.addRow('Panel width:', self.panel_width)
-        self.taskbar_style=QComboBox(); self.taskbar_style.addItems(['Icon and Text','Icon only','Text only']); fp.addRow('Taskbar style:', self.taskbar_style)
+        self.taskbar_style=QComboBox()
+        for v in ('Icon and Text','Icon only','Text only'): self.taskbar_style.addItem(v, v)
+        fp.addRow('Taskbar style:', self.taskbar_style)
         panel.addLayout(fp)
         return p.finish()
 
@@ -608,12 +619,15 @@ class Settings(QDialog):
         self.clock_seconds=QCheckBox('Show seconds'); f.addRow('', self.clock_seconds)
         self.clock_blink=QCheckBox('Blinking colon ( : )'); f.addRow('', self.clock_blink)
         swatches=QHBoxLayout(); swatches.setSpacing(8); self.led_swatches={}; lgroup=QButtonGroup(self)
-        for value, name in LED_COLORS:
+        for value, name in [('', 'Theme color')]+LED_COLORS:
             b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(26,26); b.setToolTip(name)
-            b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}'); lgroup.addButton(b); swatches.addWidget(b); self.led_swatches[value]=b
-            # Picking an LED color switches the clock to the LED face.
-            b.clicked.connect(lambda _=False: self.clock_style.setCurrentIndex(self.clock_style.findData('led')))
-        swatches.addStretch(); f.addRow('LED color:', swatches)
+            if value:
+                b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}')
+            else:
+                b.setText('A'); b.setStyleSheet('QToolButton#ledSwatch{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #00a879,stop:1 #26a69a);color:white;font-weight:800;}')
+            lgroup.addButton(b); swatches.addWidget(b); self.led_swatches[value]=b
+        swatches.addStretch(); f.addRow('Clock color:', swatches)
+        f.addRow('', hint_label('Used by the digital, analog and LED clock. "A" follows the theme.'))
         p.v.addLayout(f)
         self.clock_preview=QLabel(); self.clock_preview.setObjectName('capability'); self.clock_preview.setAlignment(Qt.AlignCenter)
         p.v.addWidget(self.clock_preview)
@@ -625,16 +639,16 @@ class Settings(QDialog):
     def led_color(self):
         for value, b in self.led_swatches.items():
             if b.isChecked(): return value
-        return '#00e676'
+        return ''
 
     def update_clock_preview(self):
         if not hasattr(self, 'clock_preview'): return
         now=QTime.currentTime(); colon=':' if not self.clock_blink.isChecked() or now.second() % 2 == 0 else ' '
         text=format_clock(now, self.clock_format.currentData(), self.clock_seconds.isChecked(), colon)
         style=self.clock_style.currentData()
-        color=self.led_color() if style == 'led' else ''
+        color=self.led_color() or ('#00e676' if style == 'led' else '')
         self.clock_preview.setText(f'Preview: {text}')
-        self.clock_preview.setStyleSheet(f'font-family:monospace;font-size:20px;font-weight:800;' + (f'background:#0d0f0e;color:{color};' if color else ''))
+        self.clock_preview.setStyleSheet(f'font-family:monospace;font-size:22px;font-weight:800;' + (f'color:{color};' if color else ''))
         pass
 
     # ------------------------------------------------------------------ effects
@@ -700,7 +714,9 @@ class Settings(QDialog):
     def page_behavior(self):
         p=Page('Eduka-Desktop', 'Size and layout of Eduka-Desktop (the start menu). Lock, Log Out, Restart and Shut Down are in the Action Center (click the clock).')
         f=form()
-        self.layout_default=QComboBox(); self.layout_default.addItems(['Grid','List']); f.addRow('Default layout:', self.layout_default)
+        self.layout_default=QComboBox()
+        for v in ('Grid','List'): self.layout_default.addItem(v, v)
+        f.addRow('Default layout:', self.layout_default)
         # Ranges match the limits Eduka-Desktop and Eduka-Panel enforce.
         self.width=QSpinBox(); self.width.setRange(94,99); self.width.setSuffix(' %'); f.addRow('Desktop width:', self.width)
         self.height=QSpinBox(); self.height.setRange(78,95); self.height.setSuffix(' %'); f.addRow('Desktop height:', self.height)
@@ -816,7 +832,7 @@ class Settings(QDialog):
         auto=sddm_conf_value('Autologin', 'User')
         lines.append(f'Automatic login: {auto}' if auto else 'Automatic login: off (live session: always on)')
         lines.append('Changes are saved automatically.' if self.realtime else 'Saving asks for an administrator password.')
-        self.sddm_state.setText('\n'.join(lines))
+        self.sddm_state.setText('\n'.join(_(l) for l in lines))
         self.sddm_fix.setVisible(not ok and greeter is not None)
         self.sddm_apply.setVisible(not self.realtime)
 
@@ -1058,7 +1074,7 @@ class Settings(QDialog):
         panel, desktop, menu = self.panel, self.desktop, self.menu
         self.start_login.setChecked(menu_daemon_autostart_enabled())
         idx=self.language.findData(menu.get('language','system')); self.language.setCurrentIndex(max(0, idx))
-        self.default_section.setCurrentText(desktop.get('last_category','Edukasaun'))
+        self.default_section.setCurrentIndex(max(0, self.default_section.findData(desktop.get('last_category','Edukasaun'))))
         theme=normalize_theme_style(desktop.get('theme_style'))
         self.theme.blockSignals(True); self.theme.setCurrentText(theme); self.theme.blockSignals(False)
         current_icons=icon_theme_setup(force=True)
@@ -1087,16 +1103,16 @@ class Settings(QDialog):
         self.show_text.setChecked(bool(panel.get('show_menu_text',True)))
         self.icon_size.setValue(int(panel.get('menu_icon_size',26)))
         self.keep_aspect.setChecked(bool(panel.get('menu_icon_keep_aspect',True)))
-        self.layout_default.setCurrentText(desktop.get('layout','Grid'))
+        self.layout_default.setCurrentIndex(max(0, self.layout_default.findData(desktop.get('layout','Grid'))))
         self.width.setValue(int(desktop.get('width_percent',98)))
         self.height.setValue(int(desktop.get('height_percent',92)))
         self.panel_height.setValue(int(panel.get('height',42)))
         self.panel_width.setValue(int(panel.get('width_percent',96)))
-        self.taskbar_style.setCurrentText(panel.get('taskbar_style','Icon and Text'))
+        self.taskbar_style.setCurrentIndex(max(0, self.taskbar_style.findData(panel.get('taskbar_style','Icon and Text'))))
         self.clock_style.setCurrentIndex(max(0, self.clock_style.findData(panel.get('clock_style','digital'))))
         self.clock_format.setCurrentIndex(max(0, self.clock_format.findData(panel.get('clock_format','24h'))))
         self.clock_seconds.setChecked(bool(panel.get('clock_seconds', False))); self.clock_blink.setChecked(bool(panel.get('clock_blink', False)))
-        (self.led_swatches.get(str(panel.get('clock_led_color','#00e676')).lower()) or self.led_swatches['#00e676']).setChecked(True)
+        (self.led_swatches.get(str(panel.get('clock_color','') or '').lower()) or self.led_swatches['']).setChecked(True)
         self.pos_cards[panel_position(panel)].setChecked(True)
         self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
         self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
@@ -1138,8 +1154,8 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentText(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_led_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentText(),'last_category':self.default_section.currentText(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData()}
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 
@@ -1240,7 +1256,7 @@ def activate_running_settings(socket_name, page=''):
     return False
 
 def run_single_instance():
-    ensure_dirs(); app=QApplication(sys.argv); app.setApplicationName('eduka-settings'); app.setDesktopFileName('eduka-settings'); socket_name=f'eduka-settings-{os.getuid()}'
+    ensure_dirs(); app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-settings'); app.setDesktopFileName('eduka-settings'); socket_name=f'eduka-settings-{os.getuid()}'
     lock_file=open(SETTINGS_LOCK, 'w')
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)

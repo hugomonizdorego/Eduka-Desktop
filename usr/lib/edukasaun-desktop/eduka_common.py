@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import os, sys, json, glob, configparser, subprocess, shlex, time, re, html, shutil
 from pathlib import Path
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtGui import QIcon, QPainterPath, QRegion
+from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.18"
+VERSION = "0.9.19"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -572,47 +572,123 @@ def apply_desktop_theme(theme=None):
     except Exception: pass
     return True
 
-LANGUAGES = [('system', 'System language'), ('en', 'English'), ('id', 'Bahasa Indonesia'),
-             ('tet', 'Tetun'), ('pt', 'Português')]
+# ---------------------------------------------------------------------------
+# Languages. Eduka follows the system language chosen at boot (live) or by
+# the installer (locales, LANG). Tetun has no system language pack yet, so
+# Eduka carries its own Tetun translation; it can be chosen in Eduka-Settings.
+# Catalogs: /usr/share/edukasaun-desktop/i18n/<lang>.json {"English": "..."}.
+# ---------------------------------------------------------------------------
+LANGUAGES = [('system', 'System language'), ('tet', 'Tetun (Tetum)')]
+I18N_DIRS = [Path('/usr/share/edukasaun-desktop/i18n'),
+             Path(__file__).resolve().parents[2]/'share'/'edukasaun-desktop'/'i18n']
+CTX = '\x04'      # 'context\x04English' for words that need two translations
 
 STRINGS = {
-    'morning':   {'en': 'Good morning', 'id': 'Selamat pagi', 'tet': 'Bondia', 'pt': 'Bom dia'},
-    'midday':    {'en': 'Good afternoon', 'id': 'Selamat siang', 'tet': 'Botarde', 'pt': 'Boa tarde'},
-    'afternoon': {'en': 'Good afternoon', 'id': 'Selamat sore', 'tet': 'Botarde', 'pt': 'Boa tarde'},
-    'evening':   {'en': 'Good evening', 'id': 'Selamat malam', 'tet': 'Bonoite', 'pt': 'Boa noite'},
-    'net_off':   {'en': 'Network not connected', 'id': 'Jaringan tidak terhubung', 'tet': 'Rede la konekta', 'pt': 'Rede não ligada'},
-    'net_wifi':  {'en': 'Connected to Wi-Fi', 'id': 'Terhubung ke Wi-Fi', 'tet': 'Konekta ba Wi-Fi', 'pt': 'Ligado ao Wi-Fi'},
-    'net_lan':   {'en': 'Connected by cable (Ethernet)', 'id': 'Terhubung lewat kabel (Ethernet)', 'tet': 'Konekta ho kabu (Ethernet)', 'pt': 'Ligado por cabo (Ethernet)'},
-    'offline':   {'en': 'Offline', 'id': 'Tidak terhubung', 'tet': 'La konekta', 'pt': 'Desligado'},
-    'lock':      {'en': 'Lock', 'id': 'Kunci', 'tet': 'Xavi', 'pt': 'Bloquear'},
-    'logout':    {'en': 'Log Out', 'id': 'Keluar', 'tet': 'Sai', 'pt': 'Terminar sessão'},
-    'restart':   {'en': 'Restart', 'id': 'Mulai Ulang', 'tet': 'Hahu fali', 'pt': 'Reiniciar'},
-    'shutdown':  {'en': 'Shut Down', 'id': 'Matikan', 'tet': 'Hamate', 'pt': 'Desligar'},
-    'dnd':       {'en': 'Do Not Disturb', 'id': 'Jangan Ganggu', 'tet': 'Labele hanehan', 'pt': 'Não incomodar'},
-    'no_notif':  {'en': 'No new notifications', 'id': 'Tidak ada notifikasi baru', 'tet': 'Notifikasaun foun la iha', 'pt': 'Sem notificações novas'},
+    'morning': 'Good morning', 'midday': 'midday\x04Good afternoon', 'afternoon': 'Good afternoon',
+    'evening': 'Good evening', 'net_off': 'Network not connected', 'net_wifi': 'Connected to Wi-Fi',
+    'net_lan': 'Connected by cable (Ethernet)', 'offline': 'Offline', 'lock': 'Lock', 'logout': 'Log Out',
+    'restart': 'Restart', 'shutdown': 'Shut Down', 'dnd': 'Do Not Disturb', 'no_notif': 'No new notifications',
 }
 
-def ui_language():
-    """Language chosen in Eduka-Settings (General), or the system one."""
-    try:
-        lang=str(read_menu_config().get('language', 'system') or 'system')
-    except Exception:
-        lang='system'
-    if lang in ('en', 'id', 'tet', 'pt'):
-        return lang
+def system_language():
+    """Language of the session: 'pt_BR', 'pt', 'id', 'zh_CN', ... or 'en'."""
     for var in ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
         value=os.environ.get(var, '')
-        if value:
-            code=value.split(':')[0].split('.')[0].split('_')[0].lower()
-            return code if code in ('id', 'tet', 'pt') else 'en'
+        for part in value.split(':'):
+            first=part.split('.')[0].split('@')[0]
+            # 'tet' in LANGUAGE comes from the Tetun choice itself, not the system.
+            if first and first not in ('C', 'POSIX', 'tet'):
+                return first
     return 'en'
 
+_LANG_CACHE={'stamp': None, 'lang': 'en'}
+
+def ui_language():
+    """'tet' when Tetun is chosen in Eduka-Settings, otherwise the system language."""
+    try:
+        st=menu_config_path().stat().st_mtime_ns
+    except Exception:
+        st=None
+    if _LANG_CACHE['stamp'] != st or _LANG_CACHE['stamp'] is None:
+        try:
+            choice=str(read_menu_config().get('language', 'system') or 'system')
+        except Exception:
+            choice='system'
+        # Tetun is chosen in Eduka-Settings or on the login screen.
+        login_tet=os.environ.get('EDUKA_LOGIN_LANGUAGE') == 'tet'
+        _LANG_CACHE['lang']='tet' if choice == 'tet' or login_tet else system_language()
+        _LANG_CACHE['stamp']=st if st is not None else time.time()
+    return _LANG_CACHE['lang']
+
+_CATALOGS={}
+
+def _catalog(lang=None):
+    lang=lang or ui_language()
+    if lang in _CATALOGS:
+        return _CATALOGS[lang]
+    data={}; patterns=[]
+    names=[]
+    base=lang.split('_')[0]
+    if base != lang: names.append(base)
+    names.append(lang)
+    if lang == 'tet': names=['tet']
+    for name in names:
+        for d in I18N_DIRS:
+            path=d/f'{name}.json'
+            if path.is_file():
+                try:
+                    data.update(json.loads(path.read_text(encoding='utf-8')))
+                except Exception:
+                    pass
+                break
+    for key, value in data.items():
+        if '{' in key:
+            rx='^'+re.sub(r'\\\{(\w+)\\\}', lambda m: f'(?P<{m.group(1)}>.+?)', re.escape(key))+'$'
+            try: patterns.append((re.compile(rx, re.S), value))
+            except re.error: pass
+    _CATALOGS[lang]=(data, patterns)
+    return _CATALOGS[lang]
+
+_RECORD=os.environ.get('EDUKA_I18N_RECORD')
+
+def _(text, lang=None):
+    """Translate an English interface text into the interface language.
+    Spaces around the text, a trailing ':' and '&&' are kept as they are."""
+    if not isinstance(text, str) or not text.strip():
+        return text
+    lang=lang or ui_language()
+    m=re.match(r'^(\s*)(.*?)(:?)(\s*)$', text, re.S)
+    lead, core, colon, trail=m.groups()
+    core_key=core.replace('&&', '&')
+    if lang.startswith('en') and not _RECORD:
+        return text.split(CTX, 1)[-1]
+    data, patterns=_catalog(lang)
+    out=data.get(core_key)
+    if out is None and colon:
+        out=data.get(core_key+':')
+        if out is not None: colon=''
+    if out is None:
+        for rx, value in patterns:
+            mm=rx.match(core_key)
+            if mm:
+                try: out=value.format(**{k: _(v, lang) for k, v in mm.groupdict().items()})
+                except Exception: out=None
+                break
+    if out is None:
+        if _RECORD and core_key.strip() and not core_key.startswith(('/', 'http')):
+            try:
+                with open(_RECORD, 'a', encoding='utf-8') as f: f.write(json.dumps(core_key)+'\n')
+            except Exception:
+                pass
+        return text.split(CTX, 1)[-1] if CTX in text else text
+    if '&' in core and '&&' in core: out=out.replace('&', '&&')
+    return lead+out+colon+trail
+
 def tr(key, lang=None):
-    entry=STRINGS.get(key, {})
-    return entry.get(lang or ui_language()) or entry.get('en') or key
+    return _(STRINGS.get(key, key), lang)
 
 def greeting_text(hour=None, lang=None):
-    """Selamat pagi / siang / sore / malam (and the other languages)."""
+    """Selamat pagi / siang / sore / malam, Bondia / Botarde / Bonoite, ..."""
     import datetime
     hour=datetime.datetime.now().hour if hour is None else int(hour)
     if 4 <= hour < 11: key='morning'
@@ -620,6 +696,80 @@ def greeting_text(hour=None, lang=None):
     elif 15 <= hour < 18: key='afternoon'
     else: key='evening'
     return tr(key, lang)
+
+def translate_tree(root):
+    """Translate texts set in constructors (QLabel('...'), QPushButton('...'))
+    of a window and its children. Later setText() calls are translated by
+    install_translations()."""
+    if ui_language().startswith('en') and not _RECORD:
+        return root
+    from PyQt5.QtWidgets import QWidget, QLabel, QAbstractButton, QLineEdit
+    widgets=[root]+root.findChildren(QWidget)
+    for w in widgets:
+        try:
+            if isinstance(w, (QLabel, QAbstractButton)) and not w.property('eduka_tr'):
+                t=w.text()
+                if t: _ORIG['label'](w, _(t)) if isinstance(w, QLabel) else _ORIG['button'](w, _(t))
+                w.setProperty('eduka_tr', True)
+            if isinstance(w, QLineEdit) and w.placeholderText():
+                _ORIG['placeholder'](w, _(w.placeholderText()))
+            if w.toolTip(): _ORIG['tooltip'](w, _(w.toolTip()))
+            if w.isWindow() and w.windowTitle(): _ORIG['title'](w, _(w.windowTitle()))
+        except Exception:
+            pass
+    return root
+
+_ORIG={}
+
+def install_translations(app=None):
+    """Translate texts the Eduka programs set at run time. Only exact
+    interface texts from the catalogs change; names, titles and paths stay."""
+    from PyQt5.QtWidgets import QLabel, QAbstractButton, QWidget, QLineEdit, QMenu, QMessageBox, QAction
+    round_tooltips(app)
+    if _ORIG:
+        return
+    _ORIG.update(label=QLabel.setText, button=QAbstractButton.setText, tooltip=QWidget.setToolTip,
+                 title=QWidget.setWindowTitle, placeholder=QLineEdit.setPlaceholderText,
+                 add_action=QMenu.addAction, add_menu=QMenu.addMenu, action_text=QAction.setText)
+    if ui_language().startswith('en') and not _RECORD:
+        return
+    if ui_language() == 'tet':
+        # Dates in Timor-Leste are written with the Portuguese month names.
+        from PyQt5.QtCore import QLocale
+        QLocale.setDefault(QLocale(QLocale.Portuguese, QLocale.Portugal))
+    QLabel.setText=lambda self, t: _ORIG['label'](self, _(t))
+    QAbstractButton.setText=lambda self, t: _ORIG['button'](self, _(t))
+    QWidget.setToolTip=lambda self, t: _ORIG['tooltip'](self, _(t))
+    QWidget.setWindowTitle=lambda self, t: _ORIG['title'](self, _(t))
+    QLineEdit.setPlaceholderText=lambda self, t: _ORIG['placeholder'](self, _(t))
+    QAction.setText=lambda self, t: _ORIG['action_text'](self, _(t))
+    def _first_str(args):
+        args=list(args)
+        for i, a in enumerate(args):
+            if isinstance(a, str):
+                args[i]=_(a); break
+        return args
+    # Widgets made later with a text, e.g. QLabel('No applications found').
+    from PyQt5.QtWidgets import QPushButton, QCheckBox, QRadioButton, QGroupBox
+    for cls in (QLabel, QPushButton, QCheckBox, QRadioButton, QGroupBox, QMenu):
+        def init(self, *a, _o=cls.__init__, **k):
+            _o(self, *_first_str(a), **k)
+        cls.__init__=init
+    QMenu.addAction=lambda self, *a: _ORIG['add_action'](self, *_first_str(a))
+    QMenu.addMenu=lambda self, *a: _ORIG['add_menu'](self, *_first_str(a))
+    for name in ('question', 'warning', 'information', 'critical'):
+        orig=getattr(QMessageBox, name)
+        def wrapped(parent, title, text, *rest, _o=orig):
+            return _o(parent, _(title), _(text), *rest)
+        setattr(QMessageBox, name, staticmethod(wrapped))
+    try:
+        from PyQt5.QtCore import QTranslator, QLibraryInfo, QLocale
+        if app is not None and not ui_language().startswith('tet'):
+            t=QTranslator(app)
+            if t.load(QLocale(system_language()), 'qtbase', '_', QLibraryInfo.location(QLibraryInfo.TranslationsPath)):
+                app.installTranslator(t)
+    except Exception:
+        pass
 
 def user_display_name():
     try:
@@ -642,10 +792,12 @@ def clock_settings():
 def clock_options():
     """Every clock option: style, format, seconds, blinking colon, LED color."""
     cfg=read_panel_config(); style, fmt=clock_settings()
-    color=str(cfg.get('clock_led_color', '#00e676'))
-    if not re.fullmatch(r'#[0-9a-fA-F]{6}', color): color='#00e676'
+    # One color for every clock face; '' = the theme's own text color
+    # (the LED face then uses green).
+    color=str(cfg.get('clock_color', '') or '')
+    if color and not re.fullmatch(r'#[0-9a-fA-F]{6}', color): color=''
     return {'style': style, 'format': fmt, 'seconds': bool(cfg.get('clock_seconds', False)),
-            'blink': bool(cfg.get('clock_blink', False)), 'led_color': color}
+            'blink': bool(cfg.get('clock_blink', False)), 'color': color, 'led_color': color or '#00e676'}
 
 def format_clock(qtime, fmt=None, seconds=False, colon=':'):
     """'14:05' (24 hours) or '2:05 PM' (12 hours); colon=' ' hides the
@@ -782,6 +934,82 @@ def set_icon_theme(name):
     icon_theme_setup(force=True); touch_reload()
     return True
 
+THEME_ACCENTS = {THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c'}
+
+def theme_accent():
+    return THEME_ACCENTS.get(current_theme(), '#00a879')
+
+def round_combo(combo, radius=10):
+    """Rounded drop-down list for a QComboBox (needs a compositor; without
+    one the list stays square so no black corners appear)."""
+    try:
+        view=combo.view(); box=view.parentWidget()
+        if box is None or not compositor_running():
+            return combo
+        box.setWindowFlags(box.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        box.setAttribute(Qt.WA_TranslucentBackground, True)
+        box.setStyleSheet(f'background:transparent;border:0;')
+        dark=is_dark_theme()
+        view.setStyleSheet(f'QAbstractItemView{{border-radius:{radius}px;padding:4px;outline:0;'
+                           f'background:{"#2f2f2f" if dark else "#ffffff"};color:{"#ffffff" if dark else "#1f2d2a"};'
+                           f'border:1px solid {"rgba(255,255,255,40)" if dark else "rgba(0,120,90,60)"};}}'
+                           f'QAbstractItemView::item{{min-height:26px;padding:2px 8px;border-radius:7px;}}'
+                           f'QAbstractItemView::item:selected{{background:{theme_accent()};color:#ffffff;}}')
+    except Exception:
+        pass
+    return combo
+
+class _RoundMask(QObject):
+    """Rounded window shape without a compositor: the corners are cut off
+    with a mask, so no square corner shows behind a rounded style."""
+    def __init__(self, radius, parent=None):
+        super().__init__(parent); self.radius=radius
+    def eventFilter(self, w, e):
+        if e.type() in (QEvent.Resize, QEvent.Show) and w.isWindow():
+            path=QPainterPath(); path.addRoundedRect(QRectF(w.rect()), self.radius, self.radius)
+            w.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        return False
+
+def round_window_shape(widget, radius=12):
+    """Keep a frameless popup rounded on computers without a compositor."""
+    f=_RoundMask(radius, widget); widget.installEventFilter(f)
+    return widget
+
+class _TooltipRounder(QObject):
+    """Tooltips are separate windows (QTipLabel) with square corners."""
+    def eventFilter(self, w, e):
+        # A translucent QTipLabel loses its painted background, so the
+        # corners are cut with a mask (QTipLabel gets no Polish event).
+        if e.type() in (QEvent.Show, QEvent.Resize) and w.metaObject().className() == 'QTipLabel':
+            path=QPainterPath(); path.addRoundedRect(QRectF(w.rect()), 8, 8)
+            w.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        return False
+
+def round_tooltips(app):
+    if app is not None and not getattr(app, '_eduka_tooltips', None):
+        app._eduka_tooltips=_TooltipRounder(app); app.installEventFilter(app._eduka_tooltips)
+
+def fade_in(widget, ms=150):
+    """Fade a window in. Timer steps instead of QPropertyAnimation: in
+    Eduka-Panel the animation clock can stall while the status thread runs,
+    which left popups at opacity 0 (invisible). Always ends fully opaque."""
+    from PyQt5.QtCore import QTimer, QElapsedTimer
+    old=getattr(widget, '_eduka_fade', None)
+    if old is not None:
+        old.stop()
+    clock=QElapsedTimer(); clock.start()
+    timer=QTimer(widget); timer.setInterval(16)
+    def step():
+        t=min(1.0, clock.elapsed()/float(max(1, ms)))
+        widget.setWindowOpacity(1-(1-t)**3)
+        if t >= 1.0:
+            timer.stop(); widget.setWindowOpacity(1.0)
+    timer.timeout.connect(step)
+    widget._eduka_fade=timer
+    widget.setWindowOpacity(0.0); timer.start()
+    QTimer.singleShot(ms+120, lambda: (timer.stop(), widget.setWindowOpacity(1.0)))
+    return timer
+
 def round_menu(menu):
     """Give any QMenu (also Qt's built-in ones) smooth rounded corners.
 
@@ -794,7 +1022,9 @@ def round_menu(menu):
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
         menu.setStyleSheet(qss)
     else:
-        menu.setStyleSheet(qss.replace('border-radius:14px', 'border-radius:0px'))
+        menu.setStyleSheet(qss.replace('border-radius:14px', 'border-radius:10px'))
+        if not menu.property('eduka_mask'):
+            menu.setProperty('eduka_mask', True); round_window_shape(menu, 10)
     return menu
 
 class RoundedMenu(QMenu):
@@ -848,7 +1078,7 @@ DEFAULT_PANEL = {
     "clock_format": "24h",
     "clock_seconds": False,
     "clock_blink": False,
-    "clock_led_color": "#00e676",
+    "clock_color": "",
     "notify_seconds": 7,
     "notify_history": True,
     "reserve_workarea": True,
@@ -1364,33 +1594,45 @@ def icon_theme_setup(force=False):
     return selected or old
 
 
+_ICON_INDEX = {'roots': None, 'files': {}}
+
+def _icon_index(roots):
+    """{name: [(root number, path)]} of every icon file below the roots.
+    Built once per set of icon themes (a recursive glob per lookup took
+    seconds and froze Eduka-Panel when the Action Center opened)."""
+    key=tuple(str(r) for r in roots)
+    if _ICON_INDEX['roots'] != key:
+        files={}
+        for i, root in enumerate(roots):
+            for dirpath, _dirs, names in os.walk(str(root), followlinks=True):
+                for fname in names:
+                    stem, ext=os.path.splitext(fname)
+                    if ext in ('.svg', '.png', '.xpm'):
+                        files.setdefault(stem, []).append((i, os.path.join(dirpath, fname)))
+        _ICON_INDEX.update(roots=key, files=files)
+    return _ICON_INDEX['files']
+
 def _find_icon_file(name):
     if not name: return None
     name=str(name).strip()
     if os.path.exists(name): return name
     base=os.path.splitext(os.path.basename(name))[0]
-    exts=['.svg','.png','.xpm']
     roots=[]
     for theme in _theme_candidates():
         for root in [Path('/usr/share/icons')/theme, Path('/usr/local/share/icons')/theme, Path.home()/'.icons'/theme, Path.home()/'.local/share/icons'/theme]:
             if root.exists(): roots.append(root)
     for root in [Path('/usr/share/pixmaps'), ASSET_DIR]:
         if root.exists(): roots.append(root)
+    found=_icon_index(roots).get(base)
+    if not found:
+        return None
+    ext_rank={'.svg': 0, '.png': 1, '.xpm': 2}
     preferred=['scalable','128x128','96x96','64x64','48x48','32x32','24x24','22x22','16x16']
     for pref in preferred:
-        for root in roots:
-            try:
-                for ext in exts:
-                    matches=list(root.glob(f'**/{pref}/**/{base}{ext}')) if pref != 'scalable' else list(root.glob(f'**/scalable/**/{base}{ext}'))
-                    if matches: return str(matches[0])
-            except Exception: pass
-    for root in roots:
-        try:
-            for ext in exts:
-                matches=list(root.glob(f'**/{base}{ext}'))
-                if matches: return str(matches[0])
-        except Exception: pass
-    return None
+        hits=[(i, ext_rank.get(os.path.splitext(path)[1], 3), path) for i, path in found if f'/{pref}/' in path]
+        if hits:
+            return min(hits)[2]
+    return min((i, ext_rank.get(os.path.splitext(path)[1], 3), path) for i, path in found)[2]
 
 ICON_ALIASES = {
     'view-app-grid': ['view-app-grid','applications-all','application-menu','start-here'],
@@ -1585,7 +1827,13 @@ def is_internal_desktop_entry(desktop_id='', name='', exec_cmd=''):
     if did in {x.casefold() for x in HIDE_IDS}: return True
     if nm in INTERNAL_APP_NAMES: return True
     if any(marker in ex for marker in INTERNAL_EXEC_MARKERS): return True
+    # Virtual machine helpers (VirtualBox Guest Additions, VMware/SPICE agents)
+    # are not applications for students; they work in the background.
+    if any(m in did or m in nm or m in ex for m in VM_HELPER_MARKERS): return True
     return False
+
+VM_HELPER_MARKERS = ('vboxclient', 'virtualbox guest', 'vbox-client', 'vboxservice', 'vboxdrmclient',
+                     'virtualbox-guest', 'vmware-user', 'vmware user', 'spice-vdagent', 'qemu-guest')
 
 def load_apps(force=False):
     """Fast application cache loader.

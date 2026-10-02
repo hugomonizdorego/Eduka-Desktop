@@ -20,6 +20,7 @@ if [ "$1" = purge ]; then
     # administrator's own picture).
     rm -f /usr/share/Edukasaun/SDDM/Logo.png /etc/live/config.conf.d/90-edukasaun.conf \
         /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user
+    rm -rf /var/lib/edukasaun-desktop/login
     rmdir --ignore-fail-on-non-empty /var/lib/edukasaun-desktop 2>/dev/null || true
     if grep -qs 'Disabled by Edukasaun Desktop' /etc/skel/.config/autostart/lxqt-notifications.desktop; then
         rm -f /etc/skel/.config/autostart/lxqt-notifications.desktop

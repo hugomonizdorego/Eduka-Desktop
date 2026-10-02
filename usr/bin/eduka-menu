@@ -6,6 +6,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
+from eduka_common import _
 
 DARK_QSS = """
 QMenu{background:#ffffff;color:#1f2d2a;border:1px solid rgba(0,168,121,80);border-radius:12px;padding:6px;}
@@ -166,7 +167,7 @@ class CategoryDelegate(QStyledItemDelegate):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.row_colors={}; self.phase={}
+        self.row_colors={}; self.phase={}; self.row_h=46
 
     def color_for(self, row):
         return self.row_colors.get(row) or category_color(row)
@@ -253,7 +254,7 @@ class CategoryDelegate(QStyledItemDelegate):
         if isinstance(icon, QIcon):
             icon.paint(painter, icon_rect, Qt.AlignCenter, QIcon.Normal, QIcon.On if selected else QIcon.Off)
 
-        text = str(index.data(Qt.DisplayRole) or '').strip()
+        text = _(str(index.data(Qt.DisplayRole) or '').strip())
         painter.setPen(text_color)
         font = painter.font(); font.setBold(True); font.setPointSize(max(9, font.pointSize()))
         painter.setFont(font)
@@ -262,7 +263,7 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option, index):
-        return QSize(190, 46)
+        return QSize(190, self.row_h)
 
 class AppButton(QToolButton):
     def __init__(self, app, accent=None, parent=None):
@@ -514,6 +515,7 @@ class EdukaMenu(QWidget):
         self.layout_mode = self.desktop_cfg.get('layout','Grid')
         self.apps = read_app_registry_fast()
         self.build()
+        translate_tree(self)
         self.position()
         self.select_category(self.current_category)
         self.refresh_apps()
@@ -584,7 +586,7 @@ class EdukaMenu(QWidget):
         close=QPushButton('✕'); close.setObjectName('closeButton'); close.setToolTip('Close (Esc)'); close.setAccessibleName('Close Eduka-Desktop'); close.clicked.connect(lambda: self.hide_menu(force=True)); close.setFixedSize(38,38)
         hdr.addWidget(close); main.addLayout(hdr)
         body=QHBoxLayout(); body.setSpacing(12); main.addLayout(body,1)
-        self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(210); self.cats.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.cats.setAccessibleName('Application categories')
+        self.cats=QListWidget(); self.cats.setObjectName('categoryList'); self.cats.setIconSize(QSize(25,25)); self.cats.setFixedWidth(224); self.cats.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.cats.setAccessibleName('Application categories')
         self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True); self.cats.viewport().installEventFilter(self); self._hover_row=None
         self._orca_hover_item=None
         self.orca_hover_timer=QTimer(self); self.orca_hover_timer.setSingleShot(True); self.orca_hover_timer.timeout.connect(self._focus_hovered_category)
@@ -957,9 +959,10 @@ class EdukaMenu(QWidget):
         grid=QGridLayout(info); grid.setContentsMargins(10,8,10,8); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(7)
         rows=[('OS:', di['os']), ('Version:', di['version']), ('Codename:', di['codename']), ('Base OS:', di['base']), ('Desktop:', di['desktop'])]
         for r,(k,v) in enumerate(rows):
-            lk=QLabel(k); lk.setObjectName('infoKey')
+            lk=QLabel(k); lk.setObjectName('infoKey'); lk.setWordWrap(True); lk.setMaximumWidth(92)
             lv=QLabel(str(v)); lv.setWordWrap(True); lv.setObjectName('infoValue')
             grid.addWidget(lk,r,0,Qt.AlignTop); grid.addWidget(lv,r,1)
+        grid.setColumnStretch(1, 1)
         # Card look comes from the window stylesheet (light or Edukasaun-Dark).
         self.side_layout.addWidget(info)
 
@@ -1064,8 +1067,20 @@ class EdukaMenu(QWidget):
 
     def resizeEvent(self,e):
         super().resizeEvent(e)
+        QTimer.singleShot(0, self.fit_categories)
         if getattr(self,'layout_mode','Grid')=='Grid' and hasattr(self,'refresh_timer'):
             self.refresh_timer.start(150)
+
+    def fit_categories(self):
+        """Rows get a little lower on small screens, so every category fits
+        without a scroll bar (1366x768 and 1024x600 school screens)."""
+        cats=getattr(self, 'cats', None)
+        if cats is None or cats.count() == 0: return
+        d=cats.itemDelegate()
+        room=cats.viewport().height()-14
+        h=max(34, min(46, room//cats.count()))
+        if getattr(d, 'row_h', h) != h:
+            d.row_h=h; cats.doItemsLayout(); cats.viewport().update()
 
     def show_menu(self):
         now=time.time()
@@ -1074,7 +1089,7 @@ class EdukaMenu(QWidget):
         icon_theme_setup()
         self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
         self._show_guard_until = time.time() + 0.35
-        self.update_greeting(); self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow()
+        self.update_greeting(); self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow(); QTimer.singleShot(0, self.fit_categories)
         QTimer.singleShot(30, self.raise_)
         # Typing right after opening the menu searches, like other start menus.
         QTimer.singleShot(40, lambda: self.search.setFocus(Qt.PopupFocusReason))
@@ -1204,7 +1219,7 @@ def start_daemon(start_visible=False):
         send_menu_command('show' if start_visible else 'toggle')
         return 0
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
+    app=QApplication(sys.argv); install_translations(app); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
     ret=app.exec_()
     try: fcntl.flock(lock_file, fcntl.LOCK_UN)
     except Exception: pass

@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.18_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.19_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.18_all.deb
+   rm ./edukasaun-desktop-menu_0.9.19_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -69,6 +69,15 @@ and other greeters.
   `org.edukasaun.desktop.sddm-config`, administrator password), which checks
   every value and writes `theme.conf.user`, the pictures in
   `/usr/share/Edukasaun/SDDM/` and `/etc/sddm.conf.d/20-eduka-autologin.conf`.
+- The login screen has a user picture row, keyboard layout, Language,
+  Accessibility (larger text, high contrast, Qt Virtual Keyboard when
+  `qml-module-qtquick-virtualkeyboard` is installed) and Power menus. The
+  language picked there is written with the user name to
+  `/var/lib/edukasaun-desktop/login/language` (directory owned by `sddm`;
+  `GreeterEnvironment=QML_XHR_ALLOW_FILE_READ=1,QML_XHR_ALLOW_FILE_WRITE=1`
+  in `10-edukasaun.conf`). `eduka-desktop-session` uses it only when the user
+  matches and the language is in its list; `LANG` is set only when that
+  locale is generated.
 - Test the theme without logging out:
   `sddm-greeter --test-mode --theme /usr/share/sddm/themes/edukasaun`.
 - Live boot (`boot=live`): `eduka-live-autologin.service` writes an SDDM and
@@ -88,6 +97,17 @@ and other greeters.
   (read last) and adds `QtVersion=6` to the theme when only the Qt 6 greeter
   exists. Administrators save without a password prompt
   (`/usr/share/polkit-1/rules.d/50-edukasaun-desktop.rules`).
+
+## Languages
+
+- Eduka follows `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG` (the boot or installer
+  choice). Catalogs: `usr/share/edukasaun-desktop/i18n/<lang>.json`
+  (`{"English text": "translation"}`, `pt_BR.json` only holds the words that
+  differ from `pt.json`). Edit `tools/i18n/catalog_full.py` (pt, id, tet) or
+  `tools/i18n/catalog_core.py` (ms, tl, th, vi, zh_CN, zh_TW) and run
+  `python3 tools/i18n/build-catalogs.py`.
+- Tetun has no system language pack: Eduka-Settings → Language & Startup →
+  Tetun (or Tetun on the login screen) sets `LANGUAGE=tet:pt:...` at login.
 
 ## Window manager and transparency
 
@@ -124,7 +144,8 @@ and other greeters.
   `confetti`, `fade`) in the desktop settings. Used only with 4 GB of memory
   and 4 CPU threads and never with Eduka-Low-Theme.
 - Clock: `clock_style` (`digital`, `analog`, `led`), `clock_format`,
-  `clock_seconds`, `clock_blink`, `clock_led_color`. The globe map
+  `clock_seconds`, `clock_blink`, `clock_color` (one color for every clock face;
+  empty follows the theme). The globe map
   (`usr/share/edukasaun-desktop/assets/world-map.png`) is drawn by
   `tools/gen-globe-map.py` from Natural Earth 1:110m land (public domain).
 - Per-application sound: `pactl list sink-inputs` (pulseaudio-utils) and
