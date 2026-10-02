@@ -43,6 +43,7 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
+            _('Compositor check: which compositor runs, a choice in Eduka-Settings and safe picom settings for every picom version.'),
             _('Accent color for the whole desktop (Eduka-Settings → Appearance).'),
             _('Action Center: music and video on top with previous, play/pause and next; sound and brightness at the bottom.'),
             _('Calendar agenda with alarms; weather behind the clock; time zone map with daylight saving time.'),
@@ -59,6 +60,7 @@ class AboutDialog(QDialog):
             ('Open-Meteo', 'open-meteo.com', 'https://open-meteo.com', 'CC BY 4.0', _('Weather forecast')),
             ('GeoJS', 'geojs.io', 'https://www.geojs.io', _('Free service'), _('Location for the weather')),
             ('IANA Time Zone Database', 'IANA', 'https://www.iana.org/time-zones', _('Public domain'), _('Time zones and daylight saving time')),
+            ('picom', 'Yuxuan Shui (yshui) and contributors', 'https://github.com/yshui/picom', 'MPL-2.0, MIT', _('Compositor: transparency and rounded corners')),
             ('LXQt', 'LXQt team', 'https://lxqt-project.org', 'LGPL-2.1+', _('Desktop session')),
             ('Qt and PyQt5', 'The Qt Company, Riverbank Computing', 'https://www.riverbankcomputing.com/software/pyqt/', 'GPL-3.0', _('Toolkit')),
             ('Debian', 'Debian Project', 'https://www.debian.org', _('Free software'), _('Base system')),

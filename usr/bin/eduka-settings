@@ -500,6 +500,19 @@ class Settings(QDialog):
         self.low=QCheckBox('Low resource mode for older computers'); f.addRow('', self.low)
         self.shadow=QCheckBox('Window shadow for Eduka-Desktop'); f.addRow('', self.shadow)
         p.v.addLayout(f)
+        comp=p.new_card('Compositor')
+        comp.addWidget(hint_label('The compositor draws transparency and rounded corners. Without one Eduka uses an opaque look, never black corners.'))
+        self.comp_status=QLabel(''); self.comp_status.setObjectName('capability'); self.comp_status.setWordWrap(True); self.comp_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        comp.addWidget(self.comp_status)
+        fcomp=form()
+        self.compositor=QComboBox(); self.compositor.setAccessibleName('Compositor')
+        for key, label in COMPOSITOR_CHOICES: self.compositor.addItem(label, key)
+        fcomp.addRow('Compositor:', self.compositor); comp.addLayout(fcomp)
+        crow=QHBoxLayout()
+        b=QPushButton('Restart compositor'); b.clicked.connect(self.restart_compositor); crow.addWidget(b)
+        b=QPushButton('Copy report'); b.setToolTip('Copy the compositor report (for help and bug reports)'); b.clicked.connect(lambda: (QApplication.clipboard().setText(compositor_report()), self.show_status('Compositor report copied.')))
+        crow.addWidget(b); crow.addStretch(1); comp.addLayout(crow)
+        QTimer.singleShot(400, self.update_compositor_status)
         icons=p.new_card('Icons')
         fi=form()
         # Any installed icon theme can be chosen; it is used by the whole
@@ -624,6 +637,27 @@ class Settings(QDialog):
             self.show_status('Parental Control saved.'); QTimer.singleShot(1500, self.update_parental_status)
         else:
             self.show_status('Not saved (no administrator password).', error=True)
+
+    def update_compositor_status(self):
+        i=compositor_info()
+        if i['running']:
+            text=_('✓ In use: {n}').replace('{n}', i['name'])
+            if i['backend']: text+=f" • {i['backend']}"
+            if i['started_by']: text+=' • '+_('started by {x}').replace('{x}', i['started_by'])
+        else:
+            text=_('⚠ No compositor: transparency is off and Eduka uses its opaque look.')
+            if picom_crash_count() >= 3:
+                text+='\n'+_('picom stopped working several times, so it is not started again. Press "Restart compositor" to try again.')
+        details=[_('Window manager: {w}').replace('{w}', i['wm'] or '?')]
+        if i['vm']: details.append(_('Virtual machine: {v} (XRender is used)').replace('{v}', 'VirtualBox' if i['vm'] == 'oracle' else i['vm']))
+        if not i['picom_installed']: details.append(_('picom is not installed'))
+        self.comp_status.setText(text+'\n'+' • '.join(details))
+
+    def restart_compositor(self):
+        save_desktop_config({'compositor': self.compositor.currentData()})
+        clear_picom_crashes(); stop_own_picom(); ensure_compositor()
+        QTimer.singleShot(600, self.update_compositor_status)
+        self.show_status('Compositor restarted.')
 
     THEME_INFO = {
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
@@ -1221,6 +1255,7 @@ class Settings(QDialog):
         if theme in self.theme_cards: self.theme_cards[theme].setChecked(True)
         self.shadow.setChecked(bool(desktop.get('enable_shadows',False)))
         self.set_accent(str(desktop.get('accent_color','') or ''))
+        self.compositor.setCurrentIndex(max(0, self.compositor.findData(desktop.get('compositor', 'auto'))))
         self.visual_access.setChecked(bool(desktop.get('visual_accessibility',False)))
         self.hearing_access.setChecked(bool(desktop.get('hearing_accessibility',False)))
         self.orca.setChecked(bool(desktop.get('orca_enabled',False)))
@@ -1281,7 +1316,7 @@ class Settings(QDialog):
     # ------------------------------------------------------------------ save / apply
     def collect(self):
         panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 
@@ -1312,6 +1347,7 @@ class Settings(QDialog):
             pass
         # Compositor mode follows the theme (picom with blur for Liquid Glass).
         ensure_compositor()
+        QTimer.singleShot(700, self.update_compositor_status)
         icon_theme_setup(force=True)
         self.apply_theme_style(); self.update_preview()
         ok, message = self.sync_orca(desktop)

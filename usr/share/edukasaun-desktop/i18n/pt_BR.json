@@ -3,6 +3,7 @@
  "Brightness is not available on this display": "O brilho não está disponível nesta tela",
  "Changes are saved automatically.": "As alterações são salvas automaticamente.",
  "Clock settings…": "Configurações do relógio…",
+ "Compositor check: which compositor runs, a choice in Eduka-Settings and safe picom settings for every picom version.": "Verificação do compositor: qual está a correr, escolha no Eduka-Settings e configurações seguras do picom para cada versão.",
  "Connected": "Conectado",
  "Connected by cable (Ethernet)": "Conectado por cabo (Ethernet)",
  "Connected to Wi-Fi": "Conectado ao Wi-Fi",
@@ -84,6 +85,10 @@
  "Use Bluetooth manager to pair devices.": "Use o gerenciador de Bluetooth para emparelhar dispositivos.",
  "Use if LXQt asks for a window manager or the theme looks wrong. Your old settings are kept as a backup.": "Use se o LXQt pedir um gerenciador de janelas ou o tema parecer errado. As configurações antigas ficam salvas.",
  "Use the Edukasaun login screen": "Usar a tela de entrada Edukasaun",
+ "Window manager's own compositor (xfwm4, KWin)": "Compositor do gerenciador de janelas (xfwm4, KWin)",
+ "Window manager: {w}": "Gerenciador de janelas: {w}",
+ "picom stopped working several times, so it is not started again. Press \"Restart compositor\" to try again.": "O picom parou várias vezes, por isso não é iniciado de novo. Pressione \"Reiniciar compositor\" para tentar outra vez.",
+ "the window manager": "o gerenciador de janelas",
  "{a} — right-click: network settings": "{a} — clique direito: configurações de rede",
  "✓ Saved — the login screen shows this now.": "✓ Salvo — a tela de entrada já mostra isto.",
  "✓ Saved.": "✓ Salvo."

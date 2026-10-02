@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon, QPainterPath, QRegion
 from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
 from PyQt5.QtWidgets import QMenu
 
-VERSION = "0.9.20"
+VERSION = "0.9.21"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -138,36 +138,303 @@ def ensure_compositor():
     only started when nothing composites. xrender backend, no shadows, no
     fading: light and stable, also in VirtualBox.
     """
-    if not in_eduka_session() or session_type() == 'wayland' or shutil.which('picom') is None:
+    if not in_eduka_session() or session_type() == 'wayland':
+        return False
+    _note_picom_crash()
+    choice=compositor_choice()
+    _wm_compositing(choice)
+    if shutil.which('picom') is None:
         return False
     mode, args = _picom_mode()
     own=_own_picom()
-    if mode == 'none':
-        # Eduka-Low-Theme: no compositor at all (saves memory and CPU).
-        if own:
-            try: os.kill(own[0], 15)
-            except Exception: pass
+    if mode in ('none', 'wm'):
+        # Off, Eduka-Low-Theme or the window manager's own compositor.
+        if own: stop_own_picom()
         return False
     if own and own[1] == mode:
         return True
     if own:
-        # Theme or blur setting changed: restart the picom Eduka started.
-        try: os.kill(own[0], 15)
-        except Exception: pass
-        for _ in range(20):
-            if not compositor_running(force=True): break
-            time.sleep(0.05)
+        # Theme, blur or compositor choice changed: restart our picom.
+        stop_own_picom()
     elif compositor_running(force=True):
         return False        # xfwm4, KWin or a user-started compositor
+    if _picom_crashed_too_often(mode):
+        if mode == 'xrender':
+            return False    # picom keeps crashing here: stay opaque this session
+        mode, args = 'xrender', picom_args('xrender')
     ok=_start_picom(mode, args)
     if not ok and mode != 'xrender':
         # No working OpenGL (e.g. VirtualBox without 3D): glass without blur.
-        fallback_mode, fallback_args = 'xrender', _PICOM_XRENDER
+        fallback_mode, fallback_args = 'xrender', picom_args('xrender')
         ok=_start_picom(fallback_mode, fallback_args)
     return ok
 
 PICOM_STATE = RUNTIME_DIR/'picom.json'
-_PICOM_XRENDER = ['picom','--backend','xrender','--config','/dev/null']
+
+COMPOSITOR_CHOICES = [
+    ('auto', 'Automatic (recommended)'),
+    ('xrender', 'picom — XRender (works everywhere, also VirtualBox)'),
+    ('glx', 'picom — OpenGL (smoother, needs 3D graphics)'),
+    ('wm', "Window manager's own compositor (xfwm4, KWin)"),
+    ('off', 'Off — no transparency (lightest)'),
+]
+
+_PICOM_VERSION={}
+
+def picom_version():
+    """(major, minor) of the installed picom, e.g. (10, 2) or (12, 5);
+    (0, 0) when unknown (development builds, not installed)."""
+    if 'v' not in _PICOM_VERSION:
+        v=(0, 0)
+        if shutil.which('picom'):
+            try:
+                out=subprocess.run(['picom', '--version'], capture_output=True, text=True, timeout=3)
+                m=re.match(r'v?(\d+)(?:\.(\d+))?\b', (out.stdout or out.stderr).strip())
+                if m: v=(int(m.group(1)), int(m.group(2) or 0))
+            except Exception:
+                pass
+        _PICOM_VERSION['v']=v
+    return _PICOM_VERSION['v']
+
+def picom_args(mode):
+    """picom command line for Eduka, matched to the installed version.
+    Based on picom's upstream changelog (github.com/yshui/picom):
+      * v12 refuses to start without --backend: always given.
+      * an option unknown to an older picom makes it exit: newer options are
+        only used on versions that have them.
+      * 12.0 / 12.1 had random delays before the screen updates (#1345,
+        #1330): frame pacing is switched off there.
+      * --unredir-if-possible lets full-screen videos and games bypass the
+        compositor; the delay avoids flicker when they open and close.
+      * --vsync only with real 3D graphics (it can stall virtual machines).
+    No shadows, fading, animations or rules: light for old computers."""
+    major, minor = picom_version()
+    backend='xrender' if mode == 'xrender' else 'glx'
+    args=['picom', '--backend', backend, '--config', '/dev/null']
+    if major >= 8 or major == 0:
+        args += ['--unredir-if-possible', '--unredir-if-possible-delay', '500']
+    if major >= 8:
+        args += ['--log-level', 'warn', '--log-file', str(RUNTIME_DIR/'picom.log')]
+    if major == 12 and minor < 2:
+        args += ['--no-frame-pacing']
+    if backend == 'glx' and not virtual_machine():
+        args += ['--vsync']
+    if mode == 'glx-blur':
+        args += ['--blur-method', 'dual_kawase', '--blur-strength', '4',
+                 '--blur-background-exclude', "class_g != 'eduka-panel' && class_g != 'eduka-menu'"]
+    return args
+
+def restart_picom_after_screen_change():
+    """picom 12.0 stops rendering correctly after the monitors change
+    (upstream #1338, fixed in 12.1): restart the picom Eduka started."""
+    major, minor = picom_version()
+    if major == 12 and minor < 1 and _own_picom():
+        stop_own_picom(); ensure_compositor()
+
+def picom_advice():
+    """Known problems of the installed picom version, for the report."""
+    major, minor = picom_version()
+    if major == 0: return ''
+    if major < 10: return 'picom older than v10: please install a newer picom.'
+    if major == 12 and minor < 3: return 'picom 12.0-12.2 has known crashes (#1350): update to 12.3 or newer if possible.'
+    return ''
+
+def compositor_choice():
+    try:
+        value=str(read_desktop_config().get('compositor', 'auto') or 'auto')
+    except Exception:
+        value='auto'
+    return value if value in dict(COMPOSITOR_CHOICES) else 'auto'
+
+_SYSINFO={}
+
+def virtual_machine():
+    """'oracle' (VirtualBox), 'kvm', 'vmware', ... or '' on real hardware."""
+    if 'virt' not in _SYSINFO:
+        v=''
+        try:
+            out=subprocess.run(['systemd-detect-virt', '--vm'], capture_output=True, text=True, timeout=3)
+            v=out.stdout.strip() if out.returncode == 0 else ''
+        except Exception:
+            pass
+        _SYSINFO['virt']='' if v == 'none' else v
+    return _SYSINFO['virt']
+
+def gl_renderer():
+    """OpenGL renderer from glxinfo (mesa-utils), '' when unknown."""
+    if 'gl' not in _SYSINFO:
+        r=''
+        if shutil.which('glxinfo') and os.environ.get('DISPLAY'):
+            try:
+                out=subprocess.run(['glxinfo', '-B'], capture_output=True, text=True, timeout=5, env=child_env()).stdout
+                m=re.search(r'OpenGL renderer string:\s*(.+)', out)
+                r=m.group(1).strip() if m else ''
+            except Exception:
+                pass
+        _SYSINFO['gl']=r
+    return _SYSINFO['gl']
+
+def opengl_is_good():
+    """False for software rendering (llvmpipe) and virtual machines: picom's
+    OpenGL backend is then slower than XRender or does not work at all."""
+    r=gl_renderer().lower()
+    if virtual_machine() or any(x in r for x in ('llvmpipe', 'softpipe', 'swrast', 'svga3d', 'virgl')):
+        return False
+    return bool(r) or shutil.which('glxinfo') is None
+
+def _wm_compositing(choice):
+    """xfwm4 composites by itself; switch it on or off to match the choice so
+    two compositors never fight (picom is not started while xfwm4 composites)."""
+    if not shutil.which('xfconf-query') or not _process_running('xfwm4'):
+        return
+    try:
+        theme=normalize_theme_style(read_desktop_config().get('theme_style'))
+    except Exception:
+        theme=THEME_DEFAULT
+    want={'wm': 'true', 'auto': 'false' if theme == THEME_LOW else 'true', 'off': 'false', 'xrender': 'false', 'glx': 'false'}[choice]
+    if (_xfwm4_get('/general/use_compositing') or '').lower() != want:
+        _xfwm4_set('/general/use_compositing', 'bool', want)
+        if want == 'false':
+            # Give xfwm4 a moment to release the compositor selection.
+            for _ in range(20):
+                time.sleep(0.05)
+                if not compositor_running(force=True): break
+
+def _process_running(name):
+    uid=os.getuid()
+    for d in Path('/proc').iterdir():
+        if not d.name.isdigit(): continue
+        try:
+            if d.stat().st_uid != uid: continue
+            if (d/'comm').read_text().strip() == name: return int(d.name)
+        except Exception:
+            continue
+    return 0
+
+KNOWN_COMPOSITORS = [('picom', 'picom'), ('compton', 'compton'), ('xcompmgr', 'xcompmgr'), ('xfwm4', 'xfwm4 (built in)'),
+                     ('kwin_x11', 'KWin (built in)'), ('compiz', 'Compiz'), ('marco', 'Marco (built in)'),
+                     ('mutter', 'Mutter (built in)'), ('gnome-shell', 'GNOME Shell'), ('muffin', 'Muffin (built in)')]
+
+def compositor_info():
+    """What composites this desktop right now, for Eduka-Settings and
+    eduka-compositor: name, pid, picom backend, who started it, the window
+    manager, virtual machine and OpenGL renderer."""
+    running=compositor_running(force=True)
+    info={'running': running, 'name': '', 'pid': 0, 'backend': '', 'started_by': '', 'choice': compositor_choice(),
+          'session': session_type(), 'wm': '', 'vm': virtual_machine(), 'renderer': gl_renderer(), 'picom_installed': bool(shutil.which('picom'))}
+    for proc in ('xfwm4', 'kwin_x11', 'openbox', 'marco', 'fluxbox', 'icewm', 'compiz', 'mutter'):
+        if _process_running(proc):
+            info['wm']=proc; break
+    if session_type() == 'wayland':
+        info.update(running=True, name='Wayland compositor'); return info
+    if running:
+        for proc, label in KNOWN_COMPOSITORS:
+            pid=_process_running(proc)
+            if not pid: continue
+            if proc == 'xfwm4' and (_xfwm4_get('/general/use_compositing') or 'true').lower() == 'false':
+                continue
+            info['name']=label; info['pid']=pid
+            if proc in ('picom', 'compton'):
+                try:
+                    args=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                    args=[a.decode('utf-8', 'ignore') for a in args]
+                    info['backend']=args[args.index('--backend')+1] if '--backend' in args else 'xrender'
+                except Exception:
+                    pass
+                own=_own_picom()
+                info['started_by']='Eduka-Desktop' if own and own[0] == pid else _('another program')
+            else:
+                info['started_by']=_('the window manager')
+            break
+        if not info['name']:
+            info['name']=_('unknown compositor')
+    return info
+
+def compositor_report():
+    i=compositor_info(); lines=[f'Eduka-Desktop {VERSION} — compositor report']
+    lines.append(f"Session: {i['session']} • window manager: {i['wm'] or 'unknown'}")
+    if i['running']:
+        lines.append(f"Compositor: {i['name']}" + (f" (backend {i['backend']})" if i['backend'] else '') + (f", started by {i['started_by']}" if i['started_by'] else '') + (f", pid {i['pid']}" if i['pid'] else ''))
+    else:
+        lines.append('Compositor: none — Eduka uses its opaque look (no black corners)')
+    lines.append(f"Choice in Eduka-Settings: {i['choice']}")
+    lines.append(f"Virtual machine: {i['vm'] or 'no'} • OpenGL: {i['renderer'] or 'unknown (install mesa-utils for glxinfo)'}")
+    pv=picom_version()
+    lines.append(f"picom installed: {('v%d.%d' % pv) if i['picom_installed'] and pv != (0, 0) else ('yes' if i['picom_installed'] else 'no')} • OpenGL good for picom: {'yes' if opengl_is_good() else 'no (XRender is used)'}")
+    if picom_advice(): lines.append('Note: '+picom_advice())
+    if i['pid'] and i['started_by'] == 'Eduka-Desktop':
+        try: lines.append('Command: '+' '.join(Path(f"/proc/{i['pid']}/cmdline").read_bytes().decode('utf-8', 'ignore').split('\0')).strip())
+        except Exception: pass
+    try:
+        log=(RUNTIME_DIR/'picom.log').read_text(encoding='utf-8', errors='ignore').strip().splitlines()[-5:]
+        if log: lines.append('Last picom messages:'); lines += ['  '+l for l in log]
+    except Exception:
+        pass
+    try:
+        st=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
+        if st.get('crashes'): lines.append(f"picom stopped unexpectedly {len(st['crashes'])} time(s) recently")
+    except Exception:
+        pass
+    return '\n'.join(lines)
+
+def _picom_crashed_too_often(mode):
+    """picom that keeps dying (bad OpenGL driver) must not make Eduka-Panel
+    restart again and again: after 3 crashes in 5 minutes that mode is
+    skipped for this session."""
+    try:
+        st=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
+    except Exception:
+        return False
+    now=time.time()
+    crashes=[c for c in st.get('crashes', []) if now-c.get('t', 0) < 300 and c.get('mode') == mode]
+    return len(crashes) >= 3
+
+def _note_picom_crash():
+    """Called when the picom Eduka started is gone without being stopped."""
+    try:
+        st=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    if not st.get('pid') or st.get('stopped'): return
+    if _process_alive(st['pid']):
+        return          # still runs
+    crashes=[c for c in st.get('crashes', []) if time.time()-c.get('t', 0) < 300]
+    crashes.append({'t': time.time(), 'mode': st.get('mode', 'xrender')})
+    st.update(pid=0, crashes=crashes)
+    try: write_json(PICOM_STATE, st)
+    except Exception: pass
+
+def picom_crash_count():
+    try:
+        st=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
+        return len([c for c in st.get('crashes', []) if time.time()-c.get('t', 0) < 300])
+    except Exception:
+        return 0
+
+def clear_picom_crashes():
+    """'Restart compositor' tries again even after crashes."""
+    try:
+        st=json.loads(PICOM_STATE.read_text(encoding='utf-8')); st['crashes']=[]; write_json(PICOM_STATE, st)
+    except Exception:
+        pass
+
+def stop_own_picom():
+    own=_own_picom()
+    if own:
+        try:
+            st=json.loads(PICOM_STATE.read_text(encoding='utf-8')); st['stopped']=True; write_json(PICOM_STATE, st)
+        except Exception:
+            pass
+        try: os.kill(own[0], 15)
+        except Exception: pass
+        # Wait until it is really gone (and its compositor selection free).
+        for i in range(40):
+            if not _process_alive(own[0]): break
+            if i == 30:
+                try: os.kill(own[0], 9)
+                except Exception: pass
+            time.sleep(0.05)
+        compositor_running(force=True)
 
 def _picom_mode():
     """xrender (light, works everywhere) or glx with blur behind the glass of
@@ -178,13 +445,28 @@ def _picom_mode():
         blur=theme in (THEME_LIQUID, THEME_TRANSPARENT) and bool(cfg.get('glass_blur', False))
     except Exception:
         theme=THEME_DEFAULT; blur=False
-    if theme == THEME_LOW:
+    choice=compositor_choice()
+    if choice == 'off' or (theme == THEME_LOW and choice == 'auto'):
         return 'none', []
-    if blur:
-        return 'glx-blur', ['picom','--backend','glx','--config','/dev/null',
-                            '--blur-method','dual_kawase','--blur-strength','4',
-                            '--blur-background-exclude',"class_g != 'eduka-panel' && class_g != 'eduka-menu'"]
-    return 'xrender', list(_PICOM_XRENDER)
+    if choice == 'wm':
+        return 'wm', []
+    if choice == 'glx' or (blur and opengl_is_good()):
+        mode='glx-blur' if blur else 'glx'
+        return mode, picom_args(mode)
+    return 'xrender', picom_args('xrender')
+
+def _process_alive(pid):
+    """True while the process runs. A picom that died is a zombie of the
+    Eduka program that started it until it is reaped: reap it here."""
+    try:
+        state=Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[0]
+    except Exception:
+        return False
+    if state in ('Z', 'X'):
+        try: os.waitpid(int(pid), os.WNOHANG)
+        except Exception: pass
+        return False
+    return True
 
 def _own_picom():
     """(pid, mode) of the picom this session's Eduka started, if it runs."""
@@ -192,7 +474,7 @@ def _own_picom():
         data=json.loads(PICOM_STATE.read_text(encoding='utf-8'))
         pid=int(data.get('pid', 0))
         cmdline=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')[0]
-        if pid > 0 and os.path.basename(cmdline.decode('utf-8', 'ignore')) == 'picom':
+        if pid > 0 and _process_alive(pid) and os.path.basename(cmdline.decode('utf-8', 'ignore')) == 'picom':
             return pid, data.get('mode', 'xrender')
     except Exception:
         pass
@@ -212,7 +494,11 @@ def _start_picom(mode, args):
     if proc.poll() is not None:
         return False
     try:
-        write_json(PICOM_STATE, {'pid': proc.pid, 'mode': mode})
+        old=json.loads(PICOM_STATE.read_text(encoding='utf-8')) if PICOM_STATE.exists() else {}
+    except Exception:
+        old={}
+    try:
+        write_json(PICOM_STATE, {'pid': proc.pid, 'mode': mode, 'crashes': old.get('crashes', []), 'stopped': False, 'started': time.time()})
     except Exception:
         pass
     return True
@@ -1222,7 +1508,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": ""}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": "", "compositor": "auto"}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),

@@ -2796,13 +2796,18 @@ class EdukaPanel(QWidget):
             w.installEventFilter(self)
     def setup_screen_tracking(self):
         """Re-layout when the resolution changes or a projector is connected."""
-        self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.load_config)
+        self._screen_timer=QTimer(self); self._screen_timer.setSingleShot(True); self._screen_timer.timeout.connect(self.screen_changed)
         def watch(screen):
             if screen is None:
                 return
             screen.geometryChanged.connect(lambda _g: self._screen_timer.start(300))
         watch(QApplication.primaryScreen())
         QApplication.instance().primaryScreenChanged.connect(lambda scr: (watch(scr), self._screen_timer.start(300)))
+
+    def screen_changed(self):
+        self.load_config()
+        # picom 12.0 stopped drawing correctly after a monitor change (#1338).
+        restart_picom_after_screen_change()
 
     def setup_watcher(self):
         self.watcher=QFileSystemWatcher(self)

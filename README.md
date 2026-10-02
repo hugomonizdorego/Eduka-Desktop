@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.20_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.21_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.20_all.deb
+   rm ./edukasaun-desktop-menu_0.9.21_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -150,6 +150,22 @@ and other greeters.
   `tools/gen-globe-map.py` from Natural Earth 1:110m land (public domain).
 - Per-application sound: `pactl list sink-inputs` (pulseaudio-utils) and
   MPRIS players through `dbus-send`, read only while the Action Center is open.
+
+## Compositor
+
+- `compositor` in the desktop settings: `auto`, `xrender`, `glx`, `wm`, `off`
+  (Eduka-Settings → Appearance → Compositor, or `eduka-compositor set MODE`).
+- `auto`: xfwm4/KWin composite themselves; with Openbox Eduka starts picom
+  (XRender; OpenGL only for Liquid Glass blur on real 3D graphics).
+  Eduka-Low-Theme: no compositor.
+- `picom_args()` builds the picom command for the installed version
+  (`picom --version`), following picom's upstream changelog; see
+  README_0.9.21.txt. Eduka never ships its own picom build: Debian's picom
+  is used, so security updates arrive through apt.
+- `eduka-compositor` prints a report (window manager, compositor, backend,
+  virtual machine, OpenGL renderer, picom version and its last warnings).
+- State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
+  log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
 
 ## Accent color, agenda, weather and time zones
 
