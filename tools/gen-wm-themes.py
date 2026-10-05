@@ -29,6 +29,10 @@ THEMES = {
     'Eduka-Low': dict(title='#323030', title_in='#2b2929', text='#f7f7f7', text_in='#aea79f', border='#3d3d3d',
                       btn='#454343', btn_hover='#5d5d5d', btn_press='#315bef', glyph='#f7f7f7', glyph_in='#aea79f',
                       close='#c7162b', close_hover='#e01b24', accent='#315bef', comment='Yaru-remix colors (CC BY-SA 4.0 / GPL-3.0)'),
+    'Eduka-MultiColor': dict(title='#ffffff', title_in='#f5f5f5', text='#212121', text_in='#8a8a8a', border='#d9d9d9',
+                             btn='#ececec', btn_hover='#dcdcdc', btn_press='#5b6ee1', glyph='#3d3d3d', glyph_in='#a0a0a0',
+                             close='#ef5350', close_hover='#f44336', accent='#5b6ee1',
+                             comment='Graphite light colors by vinceliuice (GPL-3.0)'),
 }
 
 

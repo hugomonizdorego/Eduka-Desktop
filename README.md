@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.21_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.22_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.21_all.deb
+   rm ./edukasaun-desktop-menu_0.9.22_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -160,12 +160,45 @@ and other greeters.
   Eduka-Low-Theme: no compositor.
 - `picom_args()` builds the picom command for the installed version
   (`picom --version`), following picom's upstream changelog; see
-  README_0.9.21.txt. Eduka never ships its own picom build: Debian's picom
+  the 0.9.21 entry of HISTORY.txt. Eduka never ships its own picom build: Debian's picom
   is used, so security updates arrive through apt.
 - `eduka-compositor` prints a report (window manager, compositor, backend,
   virtual machine, OpenGL renderer, picom version and its last warnings).
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
+
+## Drives, touchpad, wallpaper and input devices (0.9.22)
+
+- Removable drives: `lsblk -J` every 3 s in Eduka-Panel; USB sticks, memory
+  cards and external HDD/SSD get a panel icon and a popup with Open
+  (`udisksctl mount`), Eject (unmount) and Safely remove (unmount and
+  `udisksctl power-off`). Disks mounted on system paths and the live medium
+  (`/run/live`, `/lib/live`, `/cdrom`) are never listed or ejected.
+  The drives and touchpad icons stay on the panel while the Action Center is open.
+- Wallpaper: `eduka_wallpaper.py`; settings under `wallpaper` in the desktop
+  settings. Eduka renders the picture with the chosen mode and background
+  color to `~/.cache/eduka-desktop/wallpaper/` and hands the file to
+  pcmanfm-qt (`--set-wallpaper FILE --wallpaper-mode stretch`); the
+  slideshow runs in Eduka-Panel with a fade (only with a compositor).
+- Desktop icons: pcmanfm-qt's `DesktopShortcuts` (Home, Trash, Computer,
+  Network); drives appear as `eduka-drive-*.desktop` links while plugged in
+  (`desktop_drives` in the desktop settings).
+- Keyboard, mouse and touchpad: `eduka_input.py`, settings in
+  `~/.config/eduka-desktop/input.json`, applied with `setxkbmap`, `xset`,
+  `numlockx` and libinput properties through `xinput`; Eduka-Panel applies
+  them at login and when a device is plugged in. The panel touchpad picture
+  follows `xinput test-xi2 --root <id>` (raw motion and button events).
+- Eduka-Settings applies every change at once (debounced); the login screen
+  and Parental Control keep their Save button because they need an
+  administrator password.
+- Eduka-MultiColor: GTK theme built from Graphite (vinceliuice, GPL-3.0,
+  `install.sh -c light`), window borders from `tools/gen-wm-themes.py`;
+  `MULTI_COLORS` / `multicolor_on()` in `eduka_common.py` color the menu
+  categories, Action Center tiles and panel buttons (also available as the
+  `multicolor` switch for the other themes).
+- Parental Control stores `seconds` (60 s – 24 h) besides `minutes`; emoji
+  pictures come from Noto Emoji (Apache-2.0) in
+  `/usr/share/edukasaun-desktop/emoji/`.
 
 ## Accent color, agenda, weather and time zones
 

@@ -4,8 +4,24 @@ from pathlib import Path
 from PyQt5.QtGui import QIcon, QPainterPath, QRegion
 from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
 from PyQt5.QtWidgets import QMenu
+try:
+    from PyQt5 import sip as _sip
+    _sip.setdestroyonexit(False)
+except Exception:
+    pass
 
-VERSION = "0.9.21"
+def exit_now(code=0):
+    """End an Eduka program after its window closed. PyQt5 tears down every
+    Qt object in an arbitrary order while Python shuts down, which can
+    crash (segfault) on the way out; settings are already written, so the
+    process leaves directly."""
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(int(code or 0) if isinstance(code, int) else 0)
+
+VERSION = "0.9.22"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -14,7 +30,25 @@ THEME_LIQUID = "Liquid Glass"
 THEME_DARK = "Edukasaun-Dark"
 THEME_LOW = "Eduka-Low-Theme"          # after Yaru-remix: flat, opaque, no effects
 THEME_TRANSPARENT = "Eduka-Transparan" # after Transparent-Shell-Theme: dark glass
-THEMES = [THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT]
+THEME_MULTI = "Eduka-MultiColor"      # after Graphite (light): a color for every menu
+THEMES = [THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT, THEME_MULTI]
+# Colors of Eduka-MultiColor (and of the "Multi-color" switch in Eduka-Settings):
+# every category, Action Center tile and panel button group gets its own.
+MULTI_COLORS = ['#ef5350', '#ff9800', '#f9a825', '#43a047', '#00acc1', '#1e88e5', '#5b6ee1', '#8e24aa', '#d81b60', '#00897b']
+
+def multi_color(index):
+    return MULTI_COLORS[int(index) % len(MULTI_COLORS)]
+
+def multicolor_on(cfg=None):
+    """Multi-color look: always with Eduka-MultiColor, or switched on in
+    Eduka-Settings → Appearance for the other light and dark themes."""
+    try:
+        cfg=cfg if cfg is not None else read_desktop_config()
+        if cfg.get('visual_accessibility', False): return False
+        theme=normalize_theme_style(cfg.get('theme_style'))
+        return theme == THEME_MULTI or (bool(cfg.get('multicolor', False)) and theme != THEME_LOW)
+    except Exception:
+        return False
 DARK_THEMES = (THEME_DARK, THEME_TRANSPARENT)
 # Themes whose look needs a compositor, and what they fall back to without one.
 GLASS_FALLBACK = {THEME_LIQUID: THEME_DEFAULT, THEME_TRANSPARENT: THEME_DARK}
@@ -724,6 +758,12 @@ LOW_PALETTE = {
     'window_text_color': '#3d3d3d', 'text_color': '#3d3d3d', 'highlighted_text_color': '#ffffff',
     'link_color': '#315bef', 'link_visited_color': '#5d5d5d',
 }
+MULTI_PALETTE = {
+    # Graphite light (vinceliuice, GPL-3.0): white and grey surfaces, near-black text.
+    'window_color': '#f5f5f5', 'base_color': '#ffffff', 'highlight_color': '#5b6ee1',
+    'window_text_color': '#212121', 'text_color': '#212121', 'highlighted_text_color': '#ffffff',
+    'link_color': '#1e88e5', 'link_visited_color': '#8e24aa',
+}
 THEME_BACKUP = BASE_CONFIG/'desktop-theme-backup.json'
 DESKTOP_DARK_THEME = 'Edukasaun-Dark'
 # Eduka theme -> (GTK theme, prefer dark, Qt palette, window border theme)
@@ -731,6 +771,7 @@ SYSTEM_THEMES = {
     THEME_DARK: ('Edukasaun-Dark', True, DARK_PALETTE, 'Edukasaun-Dark'),
     THEME_TRANSPARENT: ('Edukasaun-Dark', True, DARK_PALETTE, 'Eduka-Transparan'),
     THEME_LOW: ('Eduka-Low', False, LOW_PALETTE, 'Eduka-Low'),
+    THEME_MULTI: ('Eduka-MultiColor', False, MULTI_PALETTE, 'Eduka-MultiColor'),
 }
 
 def _home(*parts):
@@ -1220,7 +1261,7 @@ def set_icon_theme(name):
     icon_theme_setup(force=True); touch_reload()
     return True
 
-THEME_ACCENTS = {THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c'}
+THEME_ACCENTS = {THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
 
 # ---------------------------------------------------------------------------
 # Accent color. Eduka-Settings → Appearance → Accent color replaces the green
@@ -1247,10 +1288,14 @@ def custom_accent():
         st=None
     if st != _ACCENT_STATE['stamp'] or st is None:
         try:
-            value=str(read_desktop_config().get('accent_color', '') or '')
+            dcfg=read_desktop_config()
+            value=str(dcfg.get('accent_color', '') or '')
         except Exception:
-            value=''
+            dcfg={}; value=''
         if not re.fullmatch(r'#[0-9a-fA-F]{6}', value): value=''
+        if not value and normalize_theme_style(dcfg.get('theme_style')) == THEME_MULTI:
+            # Eduka-MultiColor is built on the light look with its own indigo.
+            value=THEME_ACCENTS[THEME_MULTI]
         _ACCENT_STATE.update(stamp=st, accent=value.lower(), rx=None, map={})
     return _ACCENT_STATE['accent']
 
@@ -1508,7 +1553,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": "", "compositor": "auto"}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": "", "compositor": "auto", "multicolor": False}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),

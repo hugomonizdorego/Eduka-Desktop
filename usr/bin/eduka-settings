@@ -56,6 +56,13 @@ SETTINGS_PALETTES = {
         'chip': 'rgba(217,217,217,30)', 'chip_text': '#f2f2f2', 'reset': 'rgba(255,193,7,26)', 'reset_text': '#ffe082',
         'groove': 'rgba(255,255,255,40)', 'ok': '#9ad9a0', 'error': '#ef9a9a',
     },
+    THEME_MULTI: {
+        'bg': '#f5f5f5', 'sidebar': '#ececec', 'card': '#ffffff', 'border': '#e0e0e0',
+        'text': '#212121', 'title': '#111111', 'sub': '#616161', 'accent': '#5b6ee1', 'accent_hover': '#7083ec',
+        'field': '#ffffff', 'field_border': '#d6d6d6', 'hover': 'rgba(91,110,225,24)', 'button': '#f2f2f2',
+        'chip': 'rgba(91,110,225,28)', 'chip_text': '#3949ab', 'reset': '#fff4e5', 'reset_text': '#7a4b00',
+        'groove': '#e6e6e6', 'ok': '#2e7d32', 'error': '#c62828',
+    },
 }
 # Small previews of the themes (surface, panel, accent, text) for the theme cards.
 THEME_SWATCHES = {
@@ -64,6 +71,7 @@ THEME_SWATCHES = {
     THEME_LIQUID: ('#dcecf6', '#ffffff', '#1e9bd7', '#1c2b33'),
     THEME_DARK: ('#2c2c2c', '#212121', '#26a69a', '#ffffff'),
     THEME_TRANSPARENT: ('#1a1a1a', '#262626', '#d9d9d9', '#f2f2f2'),
+    THEME_MULTI: ('#fafafa', '#ffffff', '#5b6ee1', '#212121'),
 }
 
 def check_icon_path():
@@ -211,6 +219,85 @@ class RowForm(QVBoxLayout):
         self.addWidget(row); self._last=right; self._count+=1
 
 
+class WallpaperGrid(QListWidget):
+    """Pictures as tiles; the tile under the pointer grows a little so the
+    picture can be seen before choosing it. Thumbnails load in the
+    background, a few at a time."""
+    hovered=pyqtSignal(str)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setViewMode(QListView.IconMode); self.setResizeMode(QListView.Adjust); self.setMovement(QListView.Static)
+        self.setIconSize(QSize(150, 94)); self.setGridSize(QSize(172, 126)); self.setSpacing(4); self.setWordWrap(True)
+        self.setMouseTracking(True); self.setUniformItemSizes(True); self.setObjectName('wallGrid')
+        # Keep the delegate alive as long as the view (PyQt would free it first
+        # at exit and the view would paint with a deleted delegate).
+        self._delegate=WallpaperDelegate(self); self.setItemDelegate(self._delegate); self._hover=-1; self._queue=[]
+        self.loader=QTimer(self); self.loader.timeout.connect(self.load_some)
+        self.setMinimumHeight(290)
+
+    def set_images(self, paths):
+        self.clear(); self._queue=[]
+        for path in paths:
+            it=QListWidgetItem(Path(path).stem.replace('_', ' ').replace('-', ' ')[:22]); it.setData(Qt.UserRole, path); it.setToolTip(path)
+            pm=QPixmap(150, 94); pm.fill(QColor('#d9e4e0')); it.setIcon(QIcon(pm)); self.addItem(it); self._queue.append(it)
+        self.loader.start(15)
+
+    def load_some(self):
+        for _ in range(3):
+            if not self._queue:
+                self.loader.stop(); return
+            it=self._queue.pop(0)
+            reader=QImageReader(it.data(Qt.UserRole)); reader.setAutoTransform(True)
+            size=reader.size()
+            if size.isValid():
+                size.scale(300, 188, Qt.KeepAspectRatioByExpanding); reader.setScaledSize(size)
+            img=reader.read()
+            if not img.isNull():
+                img=img.copy(max(0, (img.width()-300)//2), max(0, (img.height()-188)//2), min(300, img.width()), min(188, img.height()))
+                it.setIcon(QIcon(QPixmap.fromImage(img)))
+
+    def release_delegate(self):
+        try:
+            self.loader.stop(); self.setItemDelegate(QStyledItemDelegate(self))
+        except RuntimeError:
+            pass
+
+    def mouseMoveEvent(self, e):
+        it=self.itemAt(e.pos()); row=self.row(it) if it else -1
+        if row != self._hover:
+            self._hover=row; self.viewport().update()
+            if it: self.hovered.emit(it.data(Qt.UserRole))
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover=-1; self.viewport().update(); super().leaveEvent(e)
+
+
+class WallpaperDelegate(QStyledItemDelegate):
+    def paint(self, p, option, index):
+        grid=self.parent(); hover=index.row() == grid._hover; selected=bool(option.state & QStyle.State_Selected)
+        p.save(); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
+        r=QRectF(option.rect).adjusted(8, 6, -8, -24)
+        if hover:      # grow a little under the pointer
+            r=r.adjusted(-7, -5, 7, 5)
+        path=QPainterPath(); path.addRoundedRect(r, 10, 10)
+        pix=index.data(Qt.DecorationRole).pixmap(300, 188)
+        p.setClipPath(path); p.drawPixmap(r.toRect(), pix); p.setClipping(False)
+        accent=QColor(theme_accent())
+        if selected:
+            p.setPen(QPen(accent, 4)); p.setBrush(Qt.NoBrush); p.drawPath(path)
+            badge=QRectF(r.right()-24, r.top()+6, 18, 18); p.setPen(Qt.NoPen); p.setBrush(accent); p.drawEllipse(badge)
+            p.setPen(QPen(QColor('#ffffff'), 2)); p.drawPolyline(QPolygonF([QPointF(badge.left()+5, badge.center().y()), QPointF(badge.center().x()-1, badge.bottom()-5), QPointF(badge.right()-4, badge.top()+5)]))
+        elif hover:
+            p.setPen(QPen(accent, 2)); p.setBrush(Qt.NoBrush); p.drawPath(path)
+        p.setPen(option.palette.color(QPalette.Text)); f=QFont(option.font); f.setPointSizeF(max(7.5, f.pointSizeF()*0.9)); p.setFont(f)
+        p.drawText(QRectF(option.rect.x(), option.rect.bottom()-20, option.rect.width(), 18), Qt.AlignCenter, index.data(Qt.DisplayRole))
+        p.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(172, 126)
+
+
 class Page(QWidget):
     """A settings page: title, hint and one or more rounded cards.
     `self.v` is the layout of the first card."""
@@ -253,11 +340,19 @@ def theme_preview(theme, w=132, h=78):
     p.setPen(QPen(QColor(255,255,255,90), 1)); p.setBrush(win); p.drawRoundedRect(QRectF(10, 8, w-20, h-30), radius, radius)
     p.setPen(Qt.NoPen); p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(16, 14, 28, 6), 3, 3)
     tc=QColor(text); tc.setAlpha(110); p.setBrush(tc)
-    for i in range(3): p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
+    for i in range(3):
+        if theme == THEME_MULTI: p.setBrush(QColor(MULTI_COLORS[i*3]))
+        p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
     pc=QColor(panel)
     if theme in (THEME_LIQUID, THEME_TRANSPARENT): pc.setAlpha(200)
     p.setBrush(pc); p.drawRoundedRect(QRectF(6, h-16, w-12, 11), 5, 5)
-    p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(9, h-14, 18, 7), 3.5, 3.5)
+    if theme == THEME_MULTI:
+        rb=QLinearGradient(9, 0, 27, 0)
+        for i, c in enumerate(('#ef5350', '#ff9800', '#43a047', '#1e88e5', '#8e24aa')): rb.setColorAt(i/4, QColor(c))
+        p.setBrush(rb)
+    else:
+        p.setBrush(QColor(accent))
+    p.drawRoundedRect(QRectF(9, h-14, 18, 7), 3.5, 3.5)
     p.end()
     return pix
 
@@ -405,11 +500,16 @@ class Settings(QDialog):
         self.stack=QStackedWidget()
         groups=[
             ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',self.page_appearance),
+                             ('wallpaper','Wallpaper','preferences-desktop-wallpaper',self.page_wallpaper),
+                             ('desktopicons','Desktop Icons','user-desktop',self.page_desktop_icons),
                              ('effects','Effects','applications-graphics',self.page_effects)]),
             ('DESKTOP', [('desktop','Eduka-Desktop','start-here',self.page_behavior),
                          ('panel','Eduka-Panel','preferences-desktop',self.page_icon_name),
                          ('clock','Clock','preferences-system-time',self.page_clock),
                          ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
+            ('DEVICES', [('keyboard','Keyboard','input-keyboard',self.page_keyboard),
+                         ('mouse','Mouse','input-mouse',self.page_mouse),
+                         ('touchpad','Touchpad','input-touchpad',self.page_touchpad)]),
             ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',self.page_general),
                         ('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility),
                         ('parental','Parental Control','preferences-system-parental-controls',self.page_parental),
@@ -424,7 +524,10 @@ class Settings(QDialog):
                 page=builder()
                 # Pages scroll on small (1024x600 / 1366x768) school screens.
                 scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
-                self.nav_rows[key]=self.nav.add_item(get_icon(icon,'preferences-system'), name)
+                nav_icon=get_icon(icon,'preferences-system')
+                if key == 'touchpad':
+                    nav_icon=self._ei.touchpad_icon(48, accent=theme_accent())
+                self.nav_rows[key]=self.nav.add_item(nav_icon, name)
                 self.pages.append((name, icon, page)); self.page_keys.append(key); self.stack.addWidget(scroll)
         self.nav.finish()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['appearance'])
@@ -441,6 +544,40 @@ class Settings(QDialog):
         QShortcut(QKeySequence.Save, self, activated=self.apply_settings)
         content.addLayout(bar)
         root.addLayout(content, 1)
+        # Every change is used at once (after a short pause, so dragging a
+        # slider or typing does not restart the panel many times).
+        QTimer.singleShot(0, self.enable_live_apply)
+
+    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad')
+
+    def enable_live_apply(self):
+        """Connects the controls of the pages to a debounced Apply. The login
+        screen and Parental Control need an administrator password, so they keep
+        their own Save button; wallpaper, desktop icons and the input devices
+        apply themselves."""
+        self._live_timer=QTimer(self); self._live_timer.setSingleShot(True); self._live_timer.timeout.connect(self.live_apply)
+        self._live_busy=False
+        kick=lambda *_a: (not self._live_busy) and self._live_timer.start(700)
+        for key, (_name, _icon, page) in zip(self.page_keys, self.pages):
+            if key in self.LIVE_SKIP: continue
+            for w in page.findChildren(QWidget):
+                if isinstance(w, (QCheckBox, QRadioButton)) or (isinstance(w, QToolButton) and w.isCheckable()):
+                    w.toggled.connect(kick)
+                elif isinstance(w, QComboBox) and w is not getattr(self, 'theme', None):
+                    w.currentIndexChanged.connect(kick)
+                elif isinstance(w, (QSpinBox, QDoubleSpinBox, QSlider)):
+                    w.valueChanged.connect(kick)
+                elif isinstance(w, QLineEdit) and not w.isReadOnly() and not isinstance(w.parent(), QAbstractSpinBox):
+                    w.textChanged.connect(lambda *_a: (not self._live_busy) and self._live_timer.start(1200))
+        if hasattr(self, 'theme'): self.theme.currentTextChanged.connect(kick)
+
+    def live_apply(self):
+        if self._live_busy: return
+        self._live_busy=True
+        try:
+            self.apply_settings()
+        finally:
+            self._live_busy=False
 
     # ------------------------------------------------------------------ pages
     def page_general(self):
@@ -460,7 +597,7 @@ class Settings(QDialog):
         return p.finish()
 
     def page_appearance(self):
-        p=Page('Appearance', 'Theme, transparency, icons and mouse cursor. Apply changes the whole desktop at once.')
+        p=Page('Appearance', 'Theme, transparency, icons and mouse cursor. Every change is used on the whole desktop at once.')
         p.v.addWidget(self.card_title('Theme'))
         # The combo box keeps the chosen theme; the cards are its face.
         self.theme=QComboBox(); self.theme.addItems(THEMES); self.theme.setVisible(False)
@@ -497,6 +634,8 @@ class Settings(QDialog):
         self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.50,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Panel opacity:', self.panel_trans)
         self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Desktop opacity:', self.desktop_trans)
         self.glass_blur=QCheckBox('Blur behind Liquid Glass (needs 3D graphics; off in VirtualBox)'); f.addRow('', self.glass_blur)
+        self.multicolor=QCheckBox('Multi-color: every menu category, Action Center tile and panel button gets its own color'); f.addRow('', self.multicolor)
+        self.multicolor.setChecked(bool(self.desktop.get('multicolor', False)))
         self.low=QCheckBox('Low resource mode for older computers'); f.addRow('', self.low)
         self.shadow=QCheckBox('Window shadow for Eduka-Desktop'); f.addRow('', self.shadow)
         p.v.addLayout(f)
@@ -557,19 +696,25 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------ parental control
     def page_parental(self):
-        from eduka_parental import EMOJIS, read_state, minutes_text
+        from eduka_parental import EMOJIS, PRESETS, read_state, minutes_text, emoji_icon
         p=Page('Parental Control', 'Limit how long this computer can be used. When the time is up your message appears over the whole screen, keyboard and mouse stop working and the computer shuts down.')
         self.pc_status=QLabel(''); self.pc_status.setObjectName('capability'); self.pc_status.setWordWrap(True); p.v.addWidget(self.pc_status)
         self.pc_enabled=QCheckBox('Use a time limit on this computer'); p.v.addWidget(self.pc_enabled)
         p.v.addWidget(self.card_title('Time allowed'))
-        row=QHBoxLayout(); row.setSpacing(8); self.pc_presets={}; grp=QButtonGroup(self)
-        for minutes, label in ((30, '30 min'), (60, '1 hour'), (120, '2 hours'), (180, '3 hours')):
+        row=QHBoxLayout(); row.setSpacing(8); self.pc_presets={}
+        for secs, label in PRESETS:
             b=QPushButton(label); b.setObjectName('chip'); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, m=minutes: self.pc_minutes.setValue(m)); grp.addButton(b); row.addWidget(b); self.pc_presets[minutes]=b
-        row.addWidget(QLabel('Other:'))
-        self.pc_minutes=QSpinBox(); self.pc_minutes.setRange(5, 1440); self.pc_minutes.setSingleStep(5); self.pc_minutes.setSuffix(' min'); row.addWidget(self.pc_minutes)
+            b.clicked.connect(lambda _=False, v=secs: self.set_pc_seconds(v)); row.addWidget(b); self.pc_presets[secs]=b
         row.addStretch(1); p.v.addLayout(row)
-        self.pc_minutes.valueChanged.connect(lambda v: [b.setChecked(m == v) for m, b in self.pc_presets.items()])
+        manual=QHBoxLayout(); manual.setSpacing(6)
+        manual.addWidget(QLabel('Or set it yourself:'))
+        self.pc_h=QSpinBox(); self.pc_h.setRange(0, 24); self.pc_h.setSuffix(' h')
+        self.pc_m=QSpinBox(); self.pc_m.setRange(0, 59); self.pc_m.setSuffix(' min')
+        self.pc_s=QSpinBox(); self.pc_s.setRange(0, 59); self.pc_s.setSuffix(' s')
+        for w, tip in ((self.pc_h, 'Hours'), (self.pc_m, 'Minutes'), (self.pc_s, 'Seconds')):
+            w.setToolTip(tip); w.setAccessibleName(tip); w.setMinimumWidth(84); w.valueChanged.connect(self.pc_time_changed); manual.addWidget(w)
+        self.pc_total=QLabel(''); self.pc_total.setObjectName('fieldHint'); manual.addWidget(self.pc_total)
+        manual.addStretch(1); p.v.addLayout(manual)
         f=form()
         self.pc_mode=QComboBox(); self.pc_mode.addItem('Each time the computer starts', 'boot'); self.pc_mode.addItem('In total per day', 'daily')
         f.addRow('Count:', self.pc_mode); p.v.addLayout(f)
@@ -577,11 +722,14 @@ class Settings(QDialog):
         self.pc_message=QPlainTextEdit(); self.pc_message.setPlaceholderText('It is time to rest. See you later!'); self.pc_message.setFixedHeight(76)
         self.pc_message.textChanged.connect(lambda: self.pc_message.toPlainText().__len__() > 300 and self.pc_message.setPlainText(self.pc_message.toPlainText()[:300]))
         msg.addWidget(self.pc_message)
-        er=QHBoxLayout(); er.setSpacing(6); self.pc_emojis={}; eg=QButtonGroup(self)
-        for e in EMOJIS:
-            b=QToolButton(); b.setObjectName('emojiChip'); b.setText(e); b.setCheckable(True); b.setFixedSize(34,34); b.setCursor(Qt.PointingHandCursor)
-            eg.addButton(b); er.addWidget(b); self.pc_emojis[e]=b
-        er.addStretch(1); msg.addLayout(er)
+        er=QGridLayout(); er.setSpacing(6); self.pc_emojis={}; eg=QButtonGroup(self)
+        for i, e in enumerate(EMOJIS):
+            b=QToolButton(); b.setObjectName('emojiChip'); b.setCheckable(True); b.setFixedSize(36,36); b.setCursor(Qt.PointingHandCursor)
+            ic=emoji_icon(e)
+            if ic.isNull(): b.setText(e)
+            else: b.setIcon(ic); b.setIconSize(QSize(24, 24))
+            eg.addButton(b); er.addWidget(b, i//8, i%8); self.pc_emojis[e]=b
+        er.setColumnStretch(8, 1); msg.addLayout(er)
         btns=QHBoxLayout()
         prev=QPushButton('Preview message'); prev.clicked.connect(self.preview_parental); btns.addWidget(prev)
         btns.addStretch(1)
@@ -598,14 +746,37 @@ class Settings(QDialog):
         except Exception:
             conf={}
         self.pc_enabled.setChecked(bool(conf.get('enabled', False)))
-        self.pc_minutes.setValue(int(conf.get('minutes', 60) or 60))
+        try:
+            secs=int(conf['seconds']) if conf.get('seconds') is not None else int(conf.get('minutes', 60) or 60)*60
+        except Exception:
+            secs=3600
+        self.set_pc_seconds(secs)
         idx=self.pc_mode.findData(conf.get('mode', 'boot')); self.pc_mode.setCurrentIndex(max(0, idx))
         self.pc_message.setPlainText(str(conf.get('message', '')))
         b=self.pc_emojis.get(conf.get('emoji', '😊')) or next(iter(self.pc_emojis.values())); b.setChecked(True)
 
+    def pc_seconds(self):
+        return max(60, min(86400, self.pc_h.value()*3600+self.pc_m.value()*60+self.pc_s.value()))
+
+    def set_pc_seconds(self, secs):
+        secs=max(60, min(86400, int(secs)))
+        for w, v in ((self.pc_h, secs//3600), (self.pc_m, secs%3600//60), (self.pc_s, secs%60)):
+            w.blockSignals(True); w.setValue(v); w.blockSignals(False)
+        self.pc_time_changed()
+
+    def pc_time_changed(self, *_a):
+        from eduka_parental import duration_text
+        raw=self.pc_h.value()*3600+self.pc_m.value()*60+self.pc_s.value(); secs=self.pc_seconds()
+        for v, b in self.pc_presets.items(): b.setChecked(v == secs)
+        text='= '+duration_text(secs)
+        if raw < 60: text+='  '+_('(at least 1 minute)')
+        elif raw > 86400: text+='  '+_('(at most 24 hours)')
+        self.pc_total.setText(text)
+
     def parental_request(self):
         emoji=next((e for e, b in self.pc_emojis.items() if b.isChecked()), '😊')
-        return {'enabled': self.pc_enabled.isChecked(), 'minutes': self.pc_minutes.value(), 'mode': self.pc_mode.currentData(),
+        secs=self.pc_seconds()
+        return {'enabled': self.pc_enabled.isChecked(), 'seconds': secs, 'minutes': max(1, -(-secs//60)), 'mode': self.pc_mode.currentData(),
                 'message': self.pc_message.toPlainText().strip()[:300], 'emoji': emoji, 'reset': True}
 
     def update_parental_status(self):
@@ -659,18 +830,309 @@ class Settings(QDialog):
         QTimer.singleShot(600, self.update_compositor_status)
         self.show_status('Compositor restarted.')
 
+    # ------------------------------------------------------------ wallpaper
+    def page_wallpaper(self):
+        import eduka_wallpaper as ew
+        self._ew=ew; cfg=ew.wallpaper_config(); self._wall=cfg
+        p=Page('Wallpaper', 'Pictures from /usr/share/Edukasaun/Backgrounds and your own. Point at a picture to see it bigger; changes show on the desktop at once.')
+        top=QHBoxLayout(); top.setSpacing(14)
+        self.wall_preview=QLabel(); self.wall_preview.setFixedSize(256, 144); self.wall_preview.setObjectName('wallPreview'); self.wall_preview.setAlignment(Qt.AlignCenter)
+        top.addWidget(self.wall_preview)
+        side=QVBoxLayout(); side.setSpacing(8)
+        f=form()
+        self.wall_mode=QComboBox()
+        for key, label in ew.MODES: self.wall_mode.addItem(label, key)
+        f.addRow('Fit:', self.wall_mode)
+        self.wall_color=QPushButton(''); self.wall_color.setObjectName('colorButton'); self.wall_color.setFixedSize(60, 28); self.wall_color.clicked.connect(self.pick_wall_color)
+        f.addRow('Background color:', self.wall_color)
+        side.addLayout(f)
+        add=QPushButton('Add pictures…'); add.clicked.connect(self.add_wallpapers); side.addWidget(add, 0, Qt.AlignLeft)
+        side.addStretch(1); top.addLayout(side, 1); p.v.addLayout(top)
+        self.wall_grid=WallpaperGrid(); p.v.addWidget(self.wall_grid)
+        self.wall_grid.hovered.connect(lambda path: self.update_wall_preview(path))
+        self.wall_hint=hint_label(''); p.v.addWidget(self.wall_hint)
+        sl=p.new_card('Slideshow')
+        self.wall_slide=QCheckBox('Change the wallpaper by itself (choose several pictures above)'); sl.addWidget(self.wall_slide)
+        fs=form()
+        self.wall_interval=QSpinBox(); self.wall_interval.setRange(1, 1440); self.wall_interval.setSuffix(' min'); fs.addRow('Change every:', self.wall_interval)
+        self.wall_transition=QComboBox()
+        for key, label in ew.TRANSITIONS: self.wall_transition.addItem(label, key)
+        fs.addRow('Transition speed:', self.wall_transition)
+        self.wall_random=QCheckBox('Random order'); fs.addRow('', self.wall_random)
+        sl.addLayout(fs)
+        # Load the current choice, then follow every change at once.
+        self.wall_mode.setCurrentIndex(max(0, self.wall_mode.findData(cfg['mode'])))
+        self.set_wall_color(cfg['color'])
+        self.wall_slide.setChecked(cfg['slideshow']); self.wall_interval.setValue(cfg['interval'])
+        self.wall_transition.setCurrentIndex(max(0, self.wall_transition.findData(cfg['transition']))); self.wall_random.setChecked(cfg['random'])
+        self.fill_wall_grid()
+        self._wall_timer=QTimer(self); self._wall_timer.setSingleShot(True); self._wall_timer.timeout.connect(self.apply_wall)
+        for sig in (self.wall_mode.currentIndexChanged, self.wall_interval.valueChanged, self.wall_transition.currentIndexChanged, self.wall_random.toggled):
+            sig.connect(lambda *_: self._wall_timer.start(250))
+        self.wall_slide.toggled.connect(self.wall_slide_toggled)
+        self.wall_grid.itemSelectionChanged.connect(lambda: self._wall_timer.start(250))
+        self.wall_slide_toggled(cfg['slideshow'], apply=False)
+        return p.finish()
+
+    def fill_wall_grid(self):
+        cfg=self._wall; paths=self._ew.list_wallpapers(cfg['extra'] + [i for i in cfg['images'] if i not in cfg['extra']])
+        self.wall_grid.blockSignals(True); self.wall_grid.set_images(paths)
+        for i in range(self.wall_grid.count()):
+            it=self.wall_grid.item(i); it.setSelected(it.data(Qt.UserRole) in cfg['images'])
+        self.wall_grid.blockSignals(False)
+        if not paths:
+            self.wall_hint.setText(_('No pictures in /usr/share/Edukasaun/Backgrounds yet — press "Add pictures…". The background color is used meanwhile.'))
+        else:
+            self.wall_hint.setText(_('{n} pictures. Click one to use it; with the slideshow on, choose several.').replace('{n}', str(len(paths))))
+        self.update_wall_preview()
+
+    def wall_slide_toggled(self, on, apply=True):
+        self.wall_grid.setSelectionMode(QAbstractItemView.MultiSelection if on else QAbstractItemView.SingleSelection)
+        for w in (self.wall_interval, self.wall_transition, self.wall_random): w.setEnabled(on)
+        if not on:
+            sel=self.wall_grid.selectedItems()
+            for it in sel[1:]: it.setSelected(False)
+        if apply: self._wall_timer.start(250)
+
+    def set_wall_color(self, color):
+        self._wall_color=QColor(color).name()
+        self.wall_color.setStyleSheet(f'QPushButton#colorButton{{background:{self._wall_color};border:2px solid #ffffff;border-radius:14px;}}')
+
+    def pick_wall_color(self):
+        c=QColorDialog.getColor(QColor(self._wall_color), self, 'Background color')
+        if c.isValid(): self.set_wall_color(c.name()); self._wall_timer.start(100)
+
+    def add_wallpapers(self):
+        files, _f=QFileDialog.getOpenFileNames(self, 'Add pictures', str(Path.home()/'Pictures'), 'Pictures (*.png *.jpg *.jpeg *.webp *.bmp *.svg)')
+        if files:
+            self._wall['extra']=list(dict.fromkeys(self._wall['extra']+files)); self._ew.save_wallpaper_config(self._wall); self.fill_wall_grid()
+
+    def wall_choice(self):
+        cfg=dict(self._wall)
+        cfg.update(mode=self.wall_mode.currentData(), color=self._wall_color, slideshow=self.wall_slide.isChecked(),
+                   interval=self.wall_interval.value(), transition=self.wall_transition.currentData(), random=self.wall_random.isChecked(),
+                   images=[it.data(Qt.UserRole) for it in self.wall_grid.selectedItems()] or ([] if self.wall_grid.count() else cfg['images']))
+        return cfg
+
+    def update_wall_preview(self, path=None):
+        cfg=self.wall_choice(); img=path if path is not None else (cfg['images'][0] if cfg['images'] else '')
+        sw, sh=self._ew.screen_size(); k=256.0/sw
+        pix=QPixmap.fromImage(self._ew.render(img, cfg['mode'], cfg['color'], (int(sw*k), int(sh*k)))).scaled(256, 144, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.wall_preview.setPixmap(pix)
+
+    def apply_wall(self):
+        cfg=self.wall_choice(); self._wall=cfg
+        self._ew.save_wallpaper_config(cfg); self.update_wall_preview()
+        self._ew.apply_wallpaper(cfg)
+        touch_reload()   # Eduka-Panel starts or stops the slideshow
+        self.show_status(_('Wallpaper applied.'))
+
+    # ------------------------------------------------------------ desktop icons
+    def page_desktop_icons(self):
+        import eduka_wallpaper as ew
+        self._ew=ew
+        p=Page('Desktop Icons', 'Icons shown on the desktop. Every change appears at once.')
+        shown=ew.desktop_shortcuts(); self.desk_icons={}
+        labels={'Home': ('Home folder', 'user-home'), 'Trash': ('Trash', 'user-trash'), 'Computer': ('Computer', 'computer'), 'Network': ('Network', 'network-workgroup')}
+        for key, _f in ew.SHORTCUTS:
+            text, icon=labels[key]
+            cb=QCheckBox(text); cb.setIcon(get_icon(icon, 'folder')); cb.setIconSize(QSize(22, 22)); cb.setChecked(key in shown)
+            cb.toggled.connect(lambda *_: self._desk_timer.start(300)); p.v.addWidget(cb); self.desk_icons[key]=cb
+        self.desk_drives=QCheckBox('USB sticks, memory cards and external disks (HDD / SSD) while they are plugged in')
+        self.desk_drives.setIcon(get_icon('drive-removable-media', 'drive-harddisk')); self.desk_drives.setIconSize(QSize(22, 22))
+        self.desk_drives.setChecked(bool(read_desktop_config().get('desktop_drives', True)))
+        self.desk_drives.toggled.connect(lambda on: (save_desktop_config({'desktop_drives': bool(on)}), touch_reload(), self.show_status(_('Desktop icons updated.'))))
+        p.v.addWidget(self.desk_drives)
+        p.v.addWidget(hint_label('The desktop restarts for a moment when Home, Trash, Computer or Network change.'))
+        self._desk_timer=QTimer(self); self._desk_timer.setSingleShot(True); self._desk_timer.timeout.connect(self.apply_desktop_icons)
+        return p.finish()
+
+    def apply_desktop_icons(self):
+        names={k for k, cb in self.desk_icons.items() if cb.isChecked()}
+        if self._ew.set_desktop_shortcuts(names):
+            self.show_status(_('Desktop icons updated.'))
+
+    # ------------------------------------------------------------ keyboard, mouse, touchpad
+    def _input_slider(self, lo, hi, value, fmt, step=1):
+        box=QHBoxLayout(); box.setSpacing(10)
+        sl=QSlider(Qt.Horizontal); sl.setRange(lo, hi); sl.setSingleStep(step); sl.setPageStep(step*5); sl.setValue(int(value))
+        lab=QLabel(fmt(sl.value())); lab.setObjectName('fieldHint'); lab.setMinimumWidth(92)
+        sl.valueChanged.connect(lambda v: lab.setText(fmt(v)))
+        box.addWidget(sl, 1); box.addWidget(lab)
+        return sl, box
+
+    def _input_changed(self, *_a):
+        self._input_timer.start(250)
+
+    def input_widgets_ready(self):
+        if not hasattr(self, '_input_timer'):
+            self._input_timer=QTimer(self); self._input_timer.setSingleShot(True); self._input_timer.timeout.connect(self.apply_input)
+            import eduka_input
+            self._ei=eduka_input; self.input_cfg=eduka_input.input_config()
+        return self._ei, self.input_cfg
+
+    def page_keyboard(self):
+        ei, cfg=self.input_widgets_ready()
+        p=Page('Keyboard', 'Keyboard layouts, the key that switches them and key repeat. Changes work at once.')
+        f=form()
+        self.kb_list=QListWidget(); self.kb_list.setObjectName('layoutList'); self.kb_list.setFixedHeight(112)
+        names=dict(ei.keyboard_layouts()); self._kb_names=names
+        for code in (cfg['layouts'] or ei.current_layouts() or ['us']):
+            it=QListWidgetItem(get_icon('input-keyboard'), f"{names.get(code, code)}  ({code})"); it.setData(Qt.UserRole, code); self.kb_list.addItem(it)
+        btns=QVBoxLayout(); btns.setSpacing(6)
+        add=QPushButton(get_icon('list-add'), ' Add…'); add.clicked.connect(self.add_kb_layout); btns.addWidget(add)
+        rem=QPushButton(get_icon('list-remove'), ' Remove'); rem.clicked.connect(self.remove_kb_layout); btns.addWidget(rem)
+        up=QPushButton(get_icon('go-up'), ' First'); up.setToolTip('Make this the main layout'); up.clicked.connect(self.first_kb_layout); btns.addWidget(up)
+        btns.addStretch(1)
+        row=QHBoxLayout(); row.addWidget(self.kb_list, 1); row.addLayout(btns)
+        f.addRow('Layouts:', row)
+        f.addRow('', hint_label('The first layout is used when you log in. Eduka-Panel shows the active one (for example US).'))
+        self.kb_switch=QComboBox()
+        for key, label in ei.SWITCH_KEYS: self.kb_switch.addItem(label, key)
+        self.kb_switch.setCurrentIndex(max(0, self.kb_switch.findData(cfg['switch'])))
+        f.addRow('Switch layout with:', self.kb_switch)
+        self.kb_delay, box=self._input_slider(150, 1000, cfg['repeat_delay'], lambda v: _('{n} ms').replace('{n}', str(v)), 10)
+        f.addRow('Repeat delay:', box)
+        self.kb_rate, box=self._input_slider(5, 60, cfg['repeat_rate'], lambda v: _('{n} per second').replace('{n}', str(v)))
+        f.addRow('Repeat speed:', box)
+        self.kb_numlock=QCheckBox('Turn on Num Lock when I log in'); self.kb_numlock.setChecked(bool(cfg['numlock'])); f.addRow('', self.kb_numlock)
+        p.v.addLayout(f)
+        test=QLineEdit(); test.setPlaceholderText(_('Type here to test the layout and the repeat speed')); p.v.addWidget(test)
+        for sig in (self.kb_switch.currentIndexChanged, self.kb_delay.valueChanged, self.kb_rate.valueChanged, self.kb_numlock.toggled):
+            sig.connect(self._input_changed)
+        return p.finish()
+
+    def kb_codes(self):
+        return [self.kb_list.item(i).data(Qt.UserRole) for i in range(self.kb_list.count())]
+
+    def add_kb_layout(self):
+        dlg=QDialog(self); dlg.setWindowTitle(_('Add a keyboard layout')); v=QVBoxLayout(dlg)
+        search=QLineEdit(); search.setPlaceholderText(_('Search, for example Portuguese')); v.addWidget(search)
+        lst=QListWidget(); v.addWidget(lst, 1); dlg.resize(420, 460)
+        have=set(self.kb_codes())
+        for code, name in self._ei.keyboard_layouts():
+            if code in have: continue
+            it=QListWidgetItem(f'{name}  ({code})'); it.setData(Qt.UserRole, code); lst.addItem(it)
+        search.textChanged.connect(lambda t: [lst.item(i).setHidden(t.lower() not in lst.item(i).text().lower()) for i in range(lst.count())])
+        bb=QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel); bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); v.addWidget(bb)
+        lst.itemDoubleClicked.connect(lambda *_: dlg.accept())
+        if dlg.exec_() == QDialog.Accepted and lst.currentItem() and self.kb_list.count() < 4:
+            code=lst.currentItem().data(Qt.UserRole)
+            it=QListWidgetItem(get_icon('input-keyboard'), f"{self._kb_names.get(code, code)}  ({code})"); it.setData(Qt.UserRole, code); self.kb_list.addItem(it)
+            self._input_changed()
+
+    def remove_kb_layout(self):
+        if self.kb_list.count() > 1 and self.kb_list.currentRow() >= 0:
+            self.kb_list.takeItem(self.kb_list.currentRow()); self._input_changed()
+
+    def first_kb_layout(self):
+        row=self.kb_list.currentRow()
+        if row > 0:
+            self.kb_list.insertItem(0, self.kb_list.takeItem(row)); self.kb_list.setCurrentRow(0); self._input_changed()
+
+    def page_mouse(self):
+        ei, cfg=self.input_widgets_ready()
+        p=Page('Mouse', 'Pointer speed, buttons, double-click and the scroll wheel. Changes work at once.')
+        f=form()
+        speed=lambda v: _('Slow') if v < -40 else _('Fast') if v > 40 else _('Normal')
+        self.ms_speed, box=self._input_slider(-100, 100, round(float(cfg['mouse_speed'])*100), speed, 5)
+        f.addRow('Pointer speed:', box)
+        self.ms_left=QCheckBox('Left-handed (swap the left and right buttons)'); self.ms_left.setChecked(bool(cfg['left_handed'])); f.addRow('', self.ms_left)
+        self.ms_natural=QCheckBox('Natural scrolling (content follows the wheel)'); self.ms_natural.setChecked(bool(cfg['mouse_natural'])); f.addRow('', self.ms_natural)
+        self.ms_middle=QCheckBox('Press both buttons together for a middle click'); self.ms_middle.setChecked(bool(cfg['middle_emulation'])); f.addRow('', self.ms_middle)
+        self.ms_dclick, box=self._input_slider(200, 900, cfg['double_click'], lambda v: _('{n} ms').replace('{n}', str(v)), 10)
+        f.addRow('Double-click time:', box)
+        self.ms_wheel=QSpinBox(); self.ms_wheel.setRange(1, 10); self.ms_wheel.setValue(int(cfg['wheel_lines'])); self.ms_wheel.setSuffix(_(' lines'))
+        f.addRow('Wheel scrolls:', self.ms_wheel)
+        p.v.addLayout(f)
+        test=QPushButton(get_icon('face-plain', 'emblem-default'), '  '+_('Double-click here to test')); test.setObjectName('dclickTest'); test.setMinimumHeight(54)
+        self._dclick_state=False
+        def dbl(e, b=test):
+            self._dclick_state=not self._dclick_state
+            b.setIcon(get_icon('face-smile' if self._dclick_state else 'face-plain', 'emblem-default')); b.setText('  '+(_('Well done!') if self._dclick_state else _('Double-click here to test')))
+        test.mouseDoubleClickEvent=dbl; p.v.addWidget(test)
+        found=[d['name'] for d in ei.pointer_devices() if not d['touchpad']]
+        p.v.addWidget(hint_label(_('Found: {d}').replace('{d}', ', '.join(found)) if found else _('Settings are used by every mouse that is plugged in.')))
+        self.ms_speed.valueChanged.connect(self._input_changed); self.ms_dclick.valueChanged.connect(self._input_changed); self.ms_wheel.valueChanged.connect(self._input_changed)
+        for cb in (self.ms_left, self.ms_natural, self.ms_middle): cb.toggled.connect(self._input_changed)
+        self.ms_dclick.valueChanged.connect(lambda v: QApplication.setDoubleClickInterval(v))
+        return p.finish()
+
+    def page_touchpad(self):
+        ei, cfg=self.input_widgets_ready()
+        pads=ei.touchpads()
+        p=Page('Touchpad', 'The touchpad of a laptop. Changes work at once.')
+        top=QHBoxLayout(); top.setSpacing(16)
+        self.tp_view=ei.TouchpadView(accent=theme_accent()); self.tp_view.setFixedSize(150, 116)
+        top.addWidget(self.tp_view)
+        info=QVBoxLayout(); info.setSpacing(6)
+        name=QLabel(', '.join(d['name'] for d in pads) if pads else _('No touchpad found on this computer.')); name.setObjectName('cardTitle'); name.setWordWrap(True); info.addWidget(name)
+        info.addWidget(hint_label('Move a finger or click on the touchpad: the picture copies it.' if pads else 'The settings are kept and used when a laptop touchpad is found.'))
+        info.addStretch(1); top.addLayout(info, 1); p.v.addLayout(top)
+        f=form()
+        self.tp_enabled=QCheckBox('Touchpad on'); self.tp_enabled.setChecked(bool(cfg['tp_enabled'])); f.addRow('', self.tp_enabled)
+        self.tp_tap=QCheckBox('Tap to click (one finger left, two fingers right)'); self.tp_tap.setChecked(bool(cfg['tp_tap'])); f.addRow('', self.tp_tap)
+        self.tp_natural=QCheckBox('Natural scrolling (content follows the fingers)'); self.tp_natural.setChecked(bool(cfg['tp_natural'])); f.addRow('', self.tp_natural)
+        self.tp_dwt=QCheckBox('Turn off while typing'); self.tp_dwt.setChecked(bool(cfg['tp_dwt'])); f.addRow('', self.tp_dwt)
+        self.tp_scroll=QComboBox()
+        for key, label in ei.SCROLL_METHODS: self.tp_scroll.addItem(label, key)
+        self.tp_scroll.setCurrentIndex(max(0, self.tp_scroll.findData(cfg['tp_scroll']))); f.addRow('Scrolling:', self.tp_scroll)
+        speed=lambda v: _('Slow') if v < -40 else _('Fast') if v > 40 else _('Normal')
+        self.tp_speed, box=self._input_slider(-100, 100, round(float(cfg['tp_speed'])*100), speed, 5); f.addRow('Pointer speed:', box)
+        self.tp_icon=QCheckBox('Show the touchpad on Eduka-Panel'); self.tp_icon.setChecked(bool(cfg['tp_icon'])); f.addRow('', self.tp_icon)
+        p.v.addLayout(f)
+        for cb in (self.tp_enabled, self.tp_tap, self.tp_natural, self.tp_dwt, self.tp_icon): cb.toggled.connect(self._input_changed)
+        self.tp_scroll.currentIndexChanged.connect(self._input_changed); self.tp_speed.valueChanged.connect(self._input_changed)
+        self.tp_icon.toggled.connect(lambda *_: QTimer.singleShot(400, touch_reload))
+        if pads and shutil.which('xinput'):
+            self._tp_proc=QProcess(self); self._tp_state={}
+            self._tp_proc.readyReadStandardOutput.connect(self._tp_events)
+            self._tp_proc.start('xinput', ['test-xi2', '--root', str(pads[0]['id'])])
+            QApplication.instance().aboutToQuit.connect(self._tp_proc.kill)
+        return p.finish()
+
+    def _tp_events(self):
+        data=bytes(self._tp_proc.readAllStandardOutput()).decode('utf-8', 'ignore')
+        for ev in self._ei.parse_xi2(data.splitlines(), self._tp_state):
+            if ev[0] == 'move': self.tp_view.motion(ev[1], ev[2])
+            elif ev[0] == 'press': self.tp_view.press(ev[1])
+            else: self.tp_view.release(ev[1])
+
+    def collect_input(self):
+        cfg=dict(self.input_cfg)
+        if hasattr(self, 'kb_list'):
+            cfg.update(layouts=self.kb_codes(), switch=self.kb_switch.currentData() or '', repeat_delay=self.kb_delay.value(), repeat_rate=self.kb_rate.value(), numlock=self.kb_numlock.isChecked())
+        if hasattr(self, 'ms_speed'):
+            cfg.update(mouse_speed=self.ms_speed.value()/100.0, left_handed=self.ms_left.isChecked(), mouse_natural=self.ms_natural.isChecked(),
+                       middle_emulation=self.ms_middle.isChecked(), double_click=self.ms_dclick.value(), wheel_lines=self.ms_wheel.value())
+        if hasattr(self, 'tp_enabled'):
+            cfg.update(tp_enabled=self.tp_enabled.isChecked(), tp_tap=self.tp_tap.isChecked(), tp_natural=self.tp_natural.isChecked(), tp_dwt=self.tp_dwt.isChecked(),
+                       tp_scroll=self.tp_scroll.currentData(), tp_speed=self.tp_speed.value()/100.0, tp_icon=self.tp_icon.isChecked())
+        return cfg
+
+    def apply_input(self):
+        if not hasattr(self, '_ei'): return
+        cfg=self.collect_input(); self.input_cfg=cfg
+        self._ei.save_input_config(cfg); self._ei.apply_all(cfg)
+        if hasattr(self, 'tp_view'): self.tp_view.disabled=not cfg['tp_enabled']; self.tp_view.update()
+        self.show_status(_('Keyboard, mouse and touchpad settings applied.'))
+
     THEME_INFO = {
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
         THEME_LOW: 'Eduka-Low-Theme (after Yaru-remix): flat and fully opaque. Transparency, the compositor and all effects are switched off — for very low spec computers.',
         THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',
         THEME_LIQUID: 'Soft milky glass with light rims. Needs a compositor (started automatically); without one the default theme is used.',
         THEME_DARK: 'Edukasaun-Dark (Orchis dark): Eduka-Panel, Eduka-Desktop, GTK and Qt applications and window borders turn dark.',
+        THEME_MULTI: 'Eduka-MultiColor (after Graphite by vinceliuice): calm light grey for applications, and a different color for every menu category, Action Center tile and panel button.',
     }
 
     def update_theme_info(self):
         name=self.theme.currentText()
         self.theme_info.setText(self.THEME_INFO.get(name, ''))
         self.glass_blur.setEnabled(name in (THEME_LIQUID, THEME_TRANSPARENT))
+        if hasattr(self, 'multicolor'):
+            # Eduka-MultiColor is always multi-colored; Eduka-Low stays flat.
+            self.multicolor.setEnabled(name not in (THEME_MULTI, THEME_LOW))
         opaque=name == THEME_LOW
         for w in (self.panel_trans, self.desktop_trans, self.shadow): w.setEnabled(not opaque)
         if hasattr(self, 'effects_on'): self.update_effects_state()
@@ -1224,7 +1686,8 @@ class Settings(QDialog):
             for name, card in self.theme_cards.items(): card.setIcon(QIcon(theme_preview(name)))
         # Icons follow the (possibly just changed) icon theme.
         for key, (name, icon, _page) in zip(self.page_keys, self.pages):
-            self.nav.item(self.nav_rows[key]).setIcon(get_icon(icon, 'preferences-system'))
+            ic=self._ei.touchpad_icon(48, accent=theme_accent()) if key == 'touchpad' and hasattr(self, '_ei') else get_icon(icon, 'preferences-system')
+            self.nav.item(self.nav_rows[key]).setIcon(ic)
         self.logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(40,40))
 
     def load_values(self):
@@ -1316,7 +1779,7 @@ class Settings(QDialog):
     # ------------------------------------------------------------------ save / apply
     def collect(self):
         panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 
@@ -1445,4 +1908,4 @@ def run_single_instance():
     return result
 
 if __name__ == '__main__':
-    sys.exit(run_single_instance())
+    exit_now(run_single_instance())

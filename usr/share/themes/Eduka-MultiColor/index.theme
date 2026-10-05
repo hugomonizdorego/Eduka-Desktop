@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Eduka-MultiColor
+Comment=Edukasaun OS multi-color theme, based on the Graphite GTK theme (light) by vinceliuice, GPL-3.0
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Eduka-MultiColor
+MetacityTheme=Eduka-MultiColor
+ButtonLayout=:minimize,maximize,close

@@ -69,7 +69,11 @@ def someone_logged_in():
 def main():
     conf = read_json(CONF, {})
     enabled = bool(conf.get('enabled'))
-    limit = max(5, min(1440, int(conf.get('minutes', 60) or 60))) * 60
+    try:
+        limit = int(conf['seconds']) if conf.get('seconds') is not None else int(conf.get('minutes', 60) or 60) * 60
+    except Exception:
+        limit = 3600
+    limit = max(60, min(86400, limit))
     mode = conf.get('mode') if conf.get('mode') in ('boot', 'daily') else 'boot'
     usage = read_json(USAGE, {})
     today = time.strftime('%Y-%m-%d'); bid = boot_id()
@@ -112,7 +116,9 @@ def main():
         if lock_at is not None and time.time() >= lock_at:
             subprocess.run(['systemctl', 'poweroff'])
             time.sleep(120)
-        time.sleep(TICK if phase != 'lock' else 2)
+        # Short limits (a few minutes, set to the second) need a finer tick
+        # near the end.
+        time.sleep(2 if phase == 'lock' else max(1, min(TICK, remaining)))
 
 
 if __name__ == '__main__':

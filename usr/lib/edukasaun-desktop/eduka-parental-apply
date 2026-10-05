@@ -5,7 +5,7 @@ time limit (the polkit action always asks for it).
 
 Reads one JSON object from standard input (written by Eduka-Settings):
   enabled   true / false
-  minutes   time allowed, 5 - 1440
+  seconds   time allowed, 60 - 86400 (or the older 'minutes', 1 - 1440)
   mode      'boot'  = every time the computer starts
             'daily' = in total per day
   message   text shown before the computer shuts down (max 300 characters)
@@ -23,6 +23,18 @@ CONF = '/etc/edukasaun-desktop/parental.json'
 USAGE = '/var/lib/edukasaun-desktop/parental-usage.json'
 EMOJIS = ['😊', '😴', '📚', '⏰', '🌙', '👋', '❤️', '⭐', '🙏', '🏃', '🌈', '🧸', '🎒', '☀️', '🍎', '💤']
 MODES = ('boot', 'daily')
+
+
+def conf_seconds(conf):
+    """Time allowed in seconds (60 s - 24 h)."""
+    try:
+        if conf.get('seconds') is not None:
+            value = int(conf.get('seconds'))
+        else:
+            value = int(conf.get('minutes', 60) or 60) * 60
+    except Exception:
+        value = 3600
+    return max(60, min(86400, value))
 
 
 def clean_text(text, limit):
@@ -61,7 +73,7 @@ def main():
                 conf = json.load(f)
         except Exception:
             pass
-        limit = max(5, min(1440, int(conf.get('minutes', 60) or 60))) * 60
+        limit = conf_seconds(conf)
         boot = ''
         try:
             boot = open('/proc/sys/kernel/random/boot_id').read().strip()
@@ -71,14 +83,10 @@ def main():
         subprocess.run(['systemctl', 'restart', 'eduka-parental.service'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print('ok')
         return 0
-    try:
-        minutes = int(req.get('minutes', 60))
-    except Exception:
-        minutes = 60
-    minutes = max(5, min(1440, minutes))
+    seconds = conf_seconds(req)
     mode = req.get('mode') if req.get('mode') in MODES else 'boot'
     emoji = req.get('emoji') if req.get('emoji') in EMOJIS else EMOJIS[0]
-    conf = {'enabled': bool(req.get('enabled', False)), 'minutes': minutes, 'mode': mode,
+    conf = {'enabled': bool(req.get('enabled', False)), 'seconds': seconds, 'minutes': max(1, -(-seconds // 60)), 'mode': mode,
             'message': clean_text(req.get('message', ''), 300), 'emoji': emoji, 'changed_at': int(time.time())}
     write_atomic(CONF, conf)
     if req.get('reset') or not conf['enabled']:

@@ -9,12 +9,46 @@ password to add 30 minutes.
 import json, os, time, subprocess, shutil
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PyQt5.QtCore import Qt, QTimer, QProcess
-from PyQt5.QtGui import QPainter, QLinearGradient, QColor, QKeySequence
+from PyQt5.QtGui import QPainter, QLinearGradient, QColor, QKeySequence, QPixmap, QIcon
 from eduka_common import _, theme_accent
 
 STATE = '/run/edukasaun-parental/state.json'
 HELPER = '/usr/lib/edukasaun-desktop/eduka-parental-apply'
 EMOJIS = ['😊', '😴', '📚', '⏰', '🌙', '👋', '❤️', '⭐', '🙏', '🏃', '🌈', '🧸', '🎒', '☀️', '🍎', '💤']
+# Pictures from Noto Emoji (Apache-2.0): many computers have no color emoji
+# font, so the characters would show as empty boxes.
+EMOJI_DIR = '/usr/share/edukasaun-desktop/emoji'
+PRESETS = [(5*60, '5 min'), (10*60, '10 min'), (15*60, '15 min'), (30*60, '30 min'), (60*60, '1 hour'), (2*3600, '2 hours'), (3*3600, '3 hours')]
+MIN_SECONDS, MAX_SECONDS = 60, 24*3600
+
+
+def emoji_file(emoji):
+    code = '_'.join(f'{ord(c):x}' for c in str(emoji) if ord(c) != 0xfe0f)
+    path = os.path.join(EMOJI_DIR, f'emoji_u{code}.png')
+    return path if os.path.exists(path) else ''
+
+
+def emoji_pixmap(emoji, size):
+    path = emoji_file(emoji)
+    if not path:
+        return None
+    pix = QPixmap(path)
+    return pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not pix.isNull() else None
+
+
+def emoji_icon(emoji):
+    path = emoji_file(emoji)
+    return QIcon(path) if path else QIcon()
+
+
+def duration_text(seconds):
+    """1 h 5 min 30 s"""
+    s = max(0, int(seconds)); h, rest = divmod(s, 3600); m, sec = divmod(rest, 60)
+    parts = []
+    if h: parts.append(_('{n} h').replace('{n}', str(h)))
+    if m: parts.append(_('{n} min').replace('{n}', str(m)))
+    if sec or not parts: parts.append(_('{n} s').replace('{n}', str(sec)))
+    return ' '.join(parts)
 
 
 def read_state():
@@ -27,6 +61,8 @@ def read_state():
 
 
 def minutes_text(seconds):
+    if 0 < int(seconds) < 60:
+        return duration_text(seconds)
     m = max(0, int(seconds)) // 60
     if m >= 60:
         return _('{h} h {m} min').replace('{h}', str(m // 60)).replace('{m}', str(m % 60))
@@ -51,7 +87,10 @@ class ParentalLockScreen(QWidget):
                            'QLabel#hint{font-size:12px;color:rgba(255,255,255,120);}')
         v = QVBoxLayout(self); v.setContentsMargins(60, 60, 60, 40); v.setSpacing(14)
         v.addStretch(2)
-        self.emoji = QLabel(emoji if emoji in EMOJIS else EMOJIS[0]); self.emoji.setObjectName('emoji'); self.emoji.setAlignment(Qt.AlignCenter); v.addWidget(self.emoji)
+        emoji = emoji if emoji in EMOJIS else EMOJIS[0]
+        self.emoji = QLabel(emoji); self.emoji.setObjectName('emoji'); self.emoji.setAlignment(Qt.AlignCenter); v.addWidget(self.emoji)
+        pix = emoji_pixmap(emoji, 128)
+        if pix is not None: self.emoji.setPixmap(pix)
         title = QLabel(_('Time is up for today') if not preview else _('Preview: time is up')); title.setObjectName('title'); title.setAlignment(Qt.AlignCenter); v.addWidget(title)
         self.message = QLabel(message or _('It is time to rest. See you later!')); self.message.setObjectName('message')
         self.message.setAlignment(Qt.AlignCenter); self.message.setWordWrap(True); self.message.setTextFormat(Qt.PlainText); v.addWidget(self.message)

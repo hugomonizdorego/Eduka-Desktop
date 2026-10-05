@@ -43,17 +43,20 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
+            _('Eduka-Panel shows USB sticks, memory cards and external disks with Open, Eject and Safely remove, and a live touchpad picture.'),
+            _('Eduka-Settings now sets the wallpaper (with slideshow), the desktop icons, keyboard, mouse and touchpad; changes work at once.'),
+            _('New theme Eduka-MultiColor: a different color for every menu category, Action Center tile and panel button.'),
+            _('Parental Control: times from 5 minutes, set to the hour, minute and second; emoji pictures that show on every computer.'),
             _('Compositor check: which compositor runs, a choice in Eduka-Settings and safe picom settings for every picom version.'),
             _('Accent color for the whole desktop (Eduka-Settings → Appearance).'),
-            _('Action Center: music and video on top with previous, play/pause and next; sound and brightness at the bottom.'),
-            _('Calendar agenda with alarms; weather behind the clock; time zone map with daylight saving time.'),
-            _('Eduka-Panel: window pictures on the taskbar, clock in the style of the Action Center, battery time.'),
-            _('Parental Control: a time limit with your own message before the computer shuts down.'),
         ]
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [
             ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark theme')),
             ('Yaru-remix', 'Muqtxdir', 'https://github.com/Muqtxdir/yaru-remix', 'GPL-3.0, CC BY-SA 4.0', _('Eduka-Low-Theme')),
+            ('Graphite GTK theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Graphite-gtk-theme', 'GPL-3.0', _('Eduka-MultiColor theme')),
+            ('Liquid Glass', 'Ryosuke Watanabe (ryohsuke1231)', 'https://github.com/ryohsuke1231/liquid-glass', 'MIT', _('Look of the Liquid Glass theme')),
+            ('Noto Emoji', 'Google', 'https://github.com/googlefonts/noto-emoji', 'Apache-2.0', _('Emoji pictures of Parental Control')),
             ('Transparent-Shell-Theme', 'mrbrownstone07', 'https://github.com/mrbrownstone07/Transparent-Shell-Theme', 'GPL-3.0', _('Eduka-Transparan theme')),
             ('Papirus icon theme', 'Papirus Development Team', 'https://github.com/PapirusDevelopmentTeam/papirus-icon-theme', 'GPL-3.0', _('Icons')),
             ('Natural Earth', 'naturalearthdata.com', 'https://www.naturalearthdata.com', _('Public domain'), _('World map of the globe')),
@@ -110,4 +113,5 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    from eduka_common import exit_now
+    exit_now(main())

@@ -93,7 +93,7 @@ def _mix_dark(rgb, amount, base=(44, 44, 44)):
     """Blend a color toward the Edukasaun-Dark surface."""
     return tuple(int(b + (value - b) * amount) for value, b in zip(rgb, base))
 
-UI = {'dark': False, 'low': False, 'trans': False}
+UI = {'dark': False, 'low': False, 'trans': False, 'multi': False}
 FX = {'hover': 'none', 'launch': 'none'}   # Eduka-Settings → Effects (strong computers only)
 
 
@@ -213,6 +213,13 @@ class CategoryDelegate(QStyledItemDelegate):
                 bg.setColorAt(0, QColor(60, 60, 60)); bg.setColorAt(0.5, deep); bg.setColorAt(1, QColor(52, 52, 52))
                 border = QColor(accent.red(), accent.green(), accent.blue(), 230)
                 text_color = QColor(255, 255, 255)
+        elif UI['multi'] and not high_contrast:
+            # Eduka-MultiColor: every category is a soft block of its own color
+            # with a colored edge; hover makes the color stronger.
+            k=0.30 if hover else 0.17
+            bg = QColor(255-int((255-accent.red())*k), 255-int((255-accent.green())*k), 255-int((255-accent.blue())*k), max(200, SURFACE['alpha']))
+            border = QColor(accent.red(), accent.green(), accent.blue(), 230 if hover else 150)
+            text_color = QColor(26, 26, 26)
         else:
             bg = QColor(255, 255, 255, 252 if high_contrast else max(120, SURFACE['alpha'] - 40))
             border = QColor(70, 93, 87, 220) if high_contrast else QColor(accent.red(), accent.green(), accent.blue(), 70)
@@ -657,7 +664,7 @@ class EdukaMenu(QWidget):
         dark=theme in DARK_THEMES and not accessibility
         low=theme == THEME_LOW and not accessibility
         trans=theme == THEME_TRANSPARENT and composited and not accessibility
-        UI['dark']=dark; UI['low']=low; UI['trans']=trans
+        UI['dark']=dark; UI['low']=low; UI['trans']=trans; UI['multi']=multicolor_on(dcfg) and not low
         fx=effects_settings(); FX['hover']=fx['hover']; FX['launch']=fx['launch']
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
@@ -673,6 +680,9 @@ class EdukaMenu(QWidget):
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{bg_alpha});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
         elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
+        elif theme == THEME_MULTI and not accessibility:
+            # Graphite light: neutral greys, the colors come from the categories.
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,250,250,{bg_alpha});border:1px solid rgba(0,0,0,28);border-radius:{radius}px;}} QLabel{{color:#212121;}}')
         else:
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,253,250,{bg_alpha});border:1px solid rgba(220,235,230,230);border-radius:{radius}px;}} QLabel{{color:#1f2d2a;}}')
         if hasattr(self, 'cats'):
@@ -1228,7 +1238,7 @@ def start_daemon(start_visible=False):
 if __name__ == '__main__':
     ensure_dirs()
     if '--daemon' in sys.argv:
-        sys.exit(start_daemon(start_visible='--show' in sys.argv))
+        exit_now(start_daemon(start_visible='--show' in sys.argv))
     action = 'show' if '--show' in sys.argv else ('hide' if '--hide' in sys.argv else 'toggle')
     if not menu_daemon_alive():
         safe_popen(['eduka-menu','--daemon','--show'] if action != 'hide' else ['eduka-menu','--daemon'])
