@@ -94,7 +94,7 @@ def _mix_dark(rgb, amount, base=(44, 44, 44)):
     return tuple(int(b + (value - b) * amount) for value, b in zip(rgb, base))
 
 UI = {'dark': False, 'low': False, 'trans': False, 'multi': False}
-FX = {'hover': 'none', 'launch': 'none'}   # Eduka-Settings → Effects (strong computers only)
+FX = {'hover': 'none', 'launch': 'none', 'tile': 132, 'speed': 1.0, 'size': 1.0, 'random': False}   # Eduka-Settings → Effects (strong computers only)
 
 
 class EffectsOverlay(QWidget):
@@ -110,15 +110,16 @@ class EffectsOverlay(QWidget):
 
     def play(self, kind, center, pixmap, accent, done):
         self.kind=kind; self.center=QPointF(center); self.pix=pixmap; self.accent=QColor(*accent); self.done=done
-        self.start=time.monotonic(); rng=_RNG
-        self.parts=[(rng.uniform(0, 2*math.pi), rng.uniform(60, 190), rng.uniform(5, 15), rng.uniform(0, 0.25), rng.choice(PALETTE['colors']))
+        self.start=time.monotonic(); rng=_RNG; k=FX.get('size', 1.0)
+        self.duration=self.DURATION/max(0.3, FX.get('speed', 1.0))
+        self.parts=[(rng.uniform(0, 2*math.pi), rng.uniform(60, 190)*k, rng.uniform(5, 15)*(0.5+k/2), rng.uniform(0, 0.25), rng.choice(PALETTE['colors']))
                     for _ in range(18 if kind in ('bubble', 'confetti') else 0)]
         self.setGeometry(self.parent().rect()); self.raise_(); self.show(); self.timer.start(16)
 
     def paintEvent(self, e):
         if self.kind is None:
             return
-        t=(time.monotonic()-self.start)/self.DURATION
+        t=(time.monotonic()-self.start)/self.duration
         if t >= 1.0:
             self.timer.stop(); self.hide(); kind=self.kind; self.kind=None
             if self.done: self.done()
@@ -143,16 +144,29 @@ class EffectsOverlay(QWidget):
         elif self.kind == 'ripple':
             for i in range(3):
                 k=max(0.0, min(1.0, ease*1.2-i*0.18))
-                r=24+k*150; a=int(220*(1-k))
+                r=24+k*150*FX.get('size', 1.0); a=int(220*(1-k))
                 p.setPen(QPen(QColor(self.accent.red(), self.accent.green(), self.accent.blue(), a), 3-i*0.6)); p.setBrush(Qt.NoBrush); p.drawEllipse(c, r, r)
         if self.kind in ('zoom-in', 'zoom-out', 'bounce', 'ripple', 'bubble') and self.pix is not None and not self.pix.isNull():
-            if self.kind == 'zoom-in': scale=1+2.2*ease; a=1-t
+            sz=FX.get('size', 1.0)
+            if self.kind == 'zoom-in': scale=1+2.2*sz*ease; a=1-t
             elif self.kind == 'zoom-out': scale=max(0.05, 1-ease); a=1-t*0.6
-            elif self.kind == 'bounce': scale=1+0.35*abs(math.sin(t*math.pi*2.5))*(1-t); a=1.0
+            elif self.kind == 'bounce': scale=1+0.35*sz*abs(math.sin(t*math.pi*2.5))*(1-t); a=1.0
             else: scale=1+0.25*math.sin(t*math.pi); a=1-t
             w=self.pix.width()*scale/self.pix.devicePixelRatio(); h=self.pix.height()*scale/self.pix.devicePixelRatio()
             p.setOpacity(max(0.0, min(1.0, a))); p.drawPixmap(QRectF(c.x()-w/2, c.y()-h/2, w, h), self.pix, QRectF(self.pix.rect()))
 
+
+HOVER_KINDS=('wave', 'glow', 'slide', 'pop', 'bounce')
+LAUNCH_KINDS=('bubble', 'zoom-in', 'zoom-out', 'ripple', 'bounce', 'confetti')
+
+def hover_kind():
+    """The hover effect for this time (a random one with "Random effects")."""
+    if FX['hover'] == 'none': return 'none'
+    return _RNG.choice(HOVER_KINDS) if FX.get('random') else FX['hover']
+
+def launch_kind():
+    if FX['launch'] == 'none': return 'none'
+    return _RNG.choice(LAUNCH_KINDS) if FX.get('random') else FX['launch']
 
 def random_accent(exclude=None):
     """A new random palette color, never the one a tile shows right now."""
@@ -167,7 +181,7 @@ class CategoryDelegate(QStyledItemDelegate):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.row_colors={}; self.phase={}; self.row_h=46
+        self.row_colors={}; self.phase={}; self.kind={}; self.row_h=46
 
     def color_for(self, row):
         return self.row_colors.get(row) or category_color(row)
@@ -180,6 +194,8 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.save()
         rect = option.rect.adjusted(4, 3, -4, -3)
         wave=math.sin(math.pi*self.phase.get(index.row(), 0.0))   # 0..1..0 while a hover effect runs
+        kind=self.kind.get(index.row(), FX['hover']); size=FX.get('size', 1.0)
+        if kind == 'bounce': wave=abs(math.sin(math.pi*2.5*self.phase.get(index.row(), 0.0)))*(1-self.phase.get(index.row(), 0.0))
         accent = QColor(*self.color_for(index.row()))
         dark = UI['dark']
         selected = bool(option.state & QStyle.State_Selected)
@@ -234,16 +250,18 @@ class CategoryDelegate(QStyledItemDelegate):
                 text_color = QColor(20, 38, 34)
 
         painter.setRenderHint(QPainter.Antialiasing, True)
-        if wave and FX['hover'] == 'glow':
+        if wave and kind == 'glow':
             glow=QColor(accent); glow.setAlpha(int(110*wave)); painter.setPen(QPen(glow, 5)); painter.setBrush(Qt.NoBrush)
             painter.drawRoundedRect(QRectF(rect).adjusted(-1.5, -1.5, 1.5, 1.5), 13, 13)
         painter.setBrush(QBrush(bg))
         painter.setPen(QPen(border, 1))
         painter.drawRoundedRect(rect, 6 if UI['low'] else 12, 6 if UI['low'] else 12)
-        lift=int(round(-4*wave)) if FX['hover'] == 'wave' else 0
-        shift=int(round(10*wave)) if FX['hover'] == 'slide' else (int(round(3*wave)) if FX['hover'] == 'wave' else 0)
+        lift=int(round(-4*size*wave)) if kind in ('wave', 'bounce') else 0
+        shift=int(round(10*size*wave)) if kind == 'slide' else (int(round(3*size*wave)) if kind == 'wave' else 0)
 
         icon_rect = QRect(rect.left() + 12 + shift//2, rect.top() + (rect.height() - 24) // 2 + lift, 24, 24)
+        if kind == 'pop' and wave:
+            g=int(round(4*size*wave)); icon_rect=icon_rect.adjusted(-g, -g, g, g)
         if not selected and not high_contrast and not UI['low']:
             # Colored badge behind each category icon: the whole list shows
             # the session palette, not only the selected row.
@@ -291,6 +309,7 @@ class AppButton(QToolButton):
         self.setMaximumHeight(118)
         self.clicked.connect(self.launch)
         self.customContextMenuRequested.connect(self.ctx)
+        self._wave=0.0; self._kind='none'; self._anim=None
         self._apply_style()
 
     def set_accent(self, accent):
@@ -340,10 +359,47 @@ class AppButton(QToolButton):
         self._orca_enabled=bool(orca_enabled)
         self._apply_style()
 
+    def start_hover_effect(self):
+        """The same pointer effect as the categories (Eduka-Settings → Effects)."""
+        kind=hover_kind()
+        if kind == 'none' or self._high_contrast: return
+        self._kind=kind
+        if self._anim is not None: self._anim.stop()
+        anim=QVariantAnimation(self); anim.setDuration(int(460/FX.get('speed', 1.0))); anim.setStartValue(0.0); anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic if kind != 'bounce' else QEasingCurve.Linear)
+        def step(v):
+            t=float(v)
+            self._wave=abs(math.sin(math.pi*2.5*t))*(1-t) if self._kind == 'bounce' else math.sin(math.pi*t)
+            self.update()
+        anim.valueChanged.connect(step); anim.finished.connect(lambda: (setattr(self, '_wave', 0.0), self.update()))
+        self._anim=anim; anim.start()
+
+    def paintEvent(self, event):
+        w=self._wave
+        if not w or self._kind == 'none':
+            return super().paintEvent(event)
+        size=FX.get('size', 1.0)
+        p=QStylePainter(self); opt=QStyleOptionToolButton(); self.initStyleOption(opt)
+        # Tile background first, then the icon and name moved by the effect.
+        label=QStyleOptionToolButton(opt)
+        self.style().drawPrimitive(QStyle.PE_PanelButtonTool, opt, p, self)
+        if self._kind in ('wave', 'bounce'):
+            label.rect=opt.rect.translated(0, -int(round(7*size*w)))
+        elif self._kind == 'slide':
+            label.rect=opt.rect.translated(int(round(10*size*w)), 0)
+        elif self._kind == 'pop':
+            g=int(round(14*size*w)); label.iconSize=QSize(opt.iconSize.width()+g, opt.iconSize.height()+g)
+        p.drawControl(QStyle.CE_ToolButtonLabel, label)
+        if self._kind == 'glow':
+            r,g_,b=self._accent; c=QColor(r, g_, b, int(150*w))
+            p.setRenderHint(QPainter.Antialiasing); p.setPen(QPen(c, 2+3*size*w)); p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 15, 15)
+
     def enterEvent(self, event):
         # Every time the pointer comes back the tile shows a new color.
         if not self._high_contrast:
             self.set_accent(random_accent(self._accent))
+        self.start_hover_effect()
         # A short dwell prevents fast pointer movement from queueing a rush of
         # Orca announcements while preserving normal pointer response.
         if self._orca_enabled:
@@ -529,6 +585,7 @@ class EdukaMenu(QWidget):
         self._built = True
         if daemon:
             MENU_DAEMON_PID.write_text(str(os.getpid()))
+            self._beat=0.0; self.beat()
             registry_update('menu', {'daemon_pid': os.getpid(), 'resident': True, 'apps_in_ram': len(self.apps), 'version': VERSION})
             self.cmd_timer = QTimer(self); self.cmd_timer.timeout.connect(self.check_command); self.cmd_timer.start(35)
             self._compositor_watch = watch_compositor(self, initial=self._composited)
@@ -602,7 +659,7 @@ class EdukaMenu(QWidget):
         self.cats.currentItemChanged.connect(self.change_category); self.cats.itemEntered.connect(self.category_hovered); body.addWidget(self.cats)
         center=QFrame(); center.setObjectName('contentCard'); center.setContextMenuPolicy(Qt.CustomContextMenu); center.customContextMenuRequested.connect(self.desktop_context); center_lay=QVBoxLayout(center); center_lay.setContentsMargins(14,12,14,12); center_lay.setSpacing(10)
         self.category_title=QLabel('Applications'); self.category_title.setObjectName('sectionTitle'); center_lay.addWidget(self.category_title)
-        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setAutoFillBackground(False); self.scroll.viewport().setAutoFillBackground(False); self.scroll.viewport().setAttribute(Qt.WA_TranslucentBackground); self.scroll.setContextMenuPolicy(Qt.CustomContextMenu); self.scroll.customContextMenuRequested.connect(self.desktop_context)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setAutoFillBackground(False); self.scroll.viewport().setAutoFillBackground(False); self.scroll.viewport().setAttribute(Qt.WA_TranslucentBackground); self.scroll.setContextMenuPolicy(Qt.CustomContextMenu); self.scroll.customContextMenuRequested.connect(self.desktop_context)
         self.content=QWidget(); self.content.setAutoFillBackground(False); self.content.setAttribute(Qt.WA_TranslucentBackground); self.content.setStyleSheet('background:transparent;'); self.content.setContextMenuPolicy(Qt.CustomContextMenu); self.content.customContextMenuRequested.connect(self.desktop_context); self.stack_layout=QVBoxLayout(self.content); self.stack_layout.setAlignment(Qt.AlignTop); self.stack_layout.setContentsMargins(0,0,0,0); self.stack_layout.setSpacing(10)
         self.scroll.setWidget(self.content); center_lay.addWidget(self.scroll,1); body.addWidget(center,1)
         self.side=QFrame(); self.side.setObjectName('sideCard'); self.side.setFixedWidth(230)
@@ -665,7 +722,7 @@ class EdukaMenu(QWidget):
         low=theme == THEME_LOW and not accessibility
         trans=theme == THEME_TRANSPARENT and composited and not accessibility
         UI['dark']=dark; UI['low']=low; UI['trans']=trans; UI['multi']=multicolor_on(dcfg) and not low
-        fx=effects_settings(); FX['hover']=fx['hover']; FX['launch']=fx['launch']
+        fx=effects_settings(); FX.update(hover=fx['hover'], launch=fx['launch'], speed=fx['speed'], size=fx['size'], random=fx['random'], tile=fx['tile'])
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
         if accessibility or not composited or low:
@@ -783,12 +840,12 @@ class EdukaMenu(QWidget):
         def start():
             launch_app(app.get('exec',''), app.get('name','')); self._launching=False
             registry_update('desktop', {'launching': False})
-        kind=FX['launch']
+        kind=launch_kind()
         if kind == 'none' or not self.isVisible():
             self.hide_menu(force=True); QTimer.singleShot(35, start); return
         QTimer.singleShot(35, start)
         if kind == 'fade':
-            anim=QPropertyAnimation(self, b'windowOpacity', self); anim.setDuration(260); anim.setStartValue(1.0); anim.setEndValue(0.0)
+            anim=QPropertyAnimation(self, b'windowOpacity', self); anim.setDuration(int(260/FX.get('speed', 1.0))); anim.setStartValue(1.0); anim.setEndValue(0.0)
             anim.finished.connect(lambda: (self.hide_menu(force=True), self.setWindowOpacity(1.0))); anim.start(); self._fade_anim=anim
             return
         center=widget.mapTo(self, widget.rect().center())
@@ -797,10 +854,11 @@ class EdukaMenu(QWidget):
         self.fx.play(kind, center, pix, accent, lambda: self.hide_menu(force=True))
 
     def start_hover_effect(self, row):
-        if FX['hover'] == 'none':
+        kind=hover_kind()
+        if kind == 'none':
             return
-        delegate=self.cats.itemDelegate()
-        anim=QVariantAnimation(self); anim.setDuration(420); anim.setStartValue(0.0); anim.setEndValue(1.0); anim.setEasingCurve(QEasingCurve.OutCubic)
+        delegate=self.cats.itemDelegate(); delegate.kind[row]=kind
+        anim=QVariantAnimation(self); anim.setDuration(int(420/FX.get('speed', 1.0))); anim.setStartValue(0.0); anim.setEndValue(1.0); anim.setEasingCurve(QEasingCurve.OutCubic)
         def step(v, r=row):
             delegate.phase[r]=float(v); self.cats.viewport().update()
         anim.valueChanged.connect(step); anim.finished.connect(lambda r=row: (delegate.phase.pop(r, None), self.cats.viewport().update()))
@@ -1034,27 +1092,22 @@ class EdukaMenu(QWidget):
             self.stack_layout.addWidget(empty); self.refresh_side(); return
         if self.layout_mode=='Grid':
             grid=QGridLayout(); grid.setContentsMargins(0,0,0,0); self.stack_layout.addLayout(grid)
-            width=max(420, self.scroll.viewport().width() or self.scroll.width() or 700)
-            large_grid = width >= 1180
-            if large_grid:
-                # Large monitors gain extra columns and evenly use the available
-                # width. Normal laptop/small-screen spacing remains unchanged.
-                cell_w=142
-                cols=max(1, min(16, max(7, width//145), len(apps)))
-                grid.setHorizontalSpacing(10); grid.setVerticalSpacing(12); grid.setAlignment(Qt.AlignTop)
-                for column in range(cols):
-                    grid.setColumnMinimumWidth(column, cell_w)
-                    grid.setColumnStretch(column, 1)
-            else:
-                cell_w=136 if width < 950 else 148
-                cols=max(3, min(7, width//cell_w))
-                grid.setSpacing(12); grid.setAlignment(Qt.AlignTop|Qt.AlignLeft)
+            # Tiles keep one size and one gap and start in the top-left corner;
+            # as many columns as fit, so a few apps stay close together and a
+            # long list never needs a sideways scroll bar.
+            sb=self.scroll.verticalScrollBar().sizeHint().width()
+            width=max(300, (self.scroll.viewport().width() or self.scroll.width() or 700)-sb-4)
+            gap=10 if width >= 950 else 12
+            cell_w=FX['tile']+gap
+            cols=max(1, (width+gap)//cell_w)
+            grid.setHorizontalSpacing(gap); grid.setVerticalSpacing(gap); grid.setAlignment(Qt.AlignTop|Qt.AlignLeft)
+            grid.setColumnStretch(cols, 1)
             for i,app in enumerate(apps):
                 pos=(i % cols) + (i // cols) * 3
                 accent=app_highlight_color(app, category, pos)
-                b=AppButton(app, accent); b._color_pos=pos; b.setIconSize(QSize(48,48)); b.setFixedSize(cell_w-10,112)
+                b=AppButton(app, accent); b._color_pos=pos; b.setIconSize(QSize(48,48)); b.setFixedSize(FX['tile'],112)
                 b.set_accessibility_mode(high_contrast, orca_enabled)
-                grid.addWidget(b,i//cols,i%cols, Qt.AlignTop|Qt.AlignHCenter if large_grid else Qt.AlignTop|Qt.AlignLeft)
+                grid.addWidget(b,i//cols,i%cols, Qt.AlignTop|Qt.AlignLeft)
         else:
             for i,app in enumerate(apps):
                 accent=app_highlight_color(app, category, i)
@@ -1128,9 +1181,20 @@ class EdukaMenu(QWidget):
         if self.isVisible(): self.hide_menu(force=True)
         else: self.show_menu()
 
+    def beat(self):
+        """Heartbeat for Eduka-Panel: a daemon that stops answering is replaced."""
+        now=time.monotonic()
+        if now-self._beat < 2.0: return
+        self._beat=now
+        try:
+            MENU_DAEMON_BEAT.touch()
+        except Exception:
+            pass
+
     def check_command(self):
         # Polled every 35 ms: compare the file stamp first and only parse JSON
         # when the panel actually wrote a new command.
+        self.beat()
         try:
             st=MENU_COMMAND_PATH.stat(); stamp=(st.st_mtime_ns, st.st_size)
         except OSError:
@@ -1238,6 +1302,7 @@ def start_daemon(start_visible=False):
 if __name__ == '__main__':
     ensure_dirs()
     if '--daemon' in sys.argv:
+        install_crash_log('eduka-menu')
         exit_now(start_daemon(start_visible='--show' in sys.argv))
     action = 'show' if '--show' in sys.argv else ('hide' if '--hide' in sys.argv else 'toggle')
     if not menu_daemon_alive():

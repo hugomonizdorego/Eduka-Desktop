@@ -587,7 +587,10 @@ class Settings(QDialog):
         self.language=QComboBox()
         for code, label in LANGUAGES: self.language.addItem(label, code)
         f.addRow('Language:', self.language)
-        f.addRow('', hint_label('Edukasaun OS follows the language chosen when the computer starts. Tetun has no system language pack yet, so Eduka carries its own Tetun translation.'))
+        if tetun_pack_installed():
+            f.addRow('', hint_label('The Tetun language pack is installed: choosing Tetun changes Eduka at once and every other program with a Tetun translation after you log out and in (others use Portuguese, then English).'))
+        else:
+            f.addRow('', hint_label('Edukasaun OS follows the language chosen when the computer starts. Eduka carries its own Tetun translation; install eduka-language-pack-tet to have Tetun in the other programs too.'))
         self.default_section=QComboBox()
         for x in CATEGORY_ORDER:
             if x[0] != 'Favorites': self.default_section.addItem(x[0], x[0])
@@ -1285,12 +1288,26 @@ class Settings(QDialog):
         self.effect_hover=QComboBox()
         for key, label in EFFECT_HOVER: self.effect_hover.addItem(label, key)
         f.addRow('Category pointer:', self.effect_hover)
-        f.addRow('', hint_label('Wave lifts the category icon, Glow pulses a colored ring, Slide moves the name aside.'))
+        f.addRow('', hint_label('Used for the categories and the application tiles. Wave lifts the icon, Glow pulses a colored ring, Slide moves the name aside, Pop makes the icon grow, Bounce makes it jump.'))
         self.effect_launch=QComboBox()
         for key, label in EFFECT_LAUNCH: self.effect_launch.addItem(label, key)
         f.addRow('Opening an application:', self.effect_launch)
         f.addRow('', hint_label('Bubbles rise from the tile, Zoom in grows the icon, Zoom out shrinks it, Ripple spreads rings, Bounce jumps the icon, Confetti scatters colors, Fade dissolves Eduka-Desktop.'))
+        self.effect_speed=QComboBox()
+        for value, label in EFFECT_SPEEDS: self.effect_speed.addItem(label, value)
+        f.addRow('Speed:', self.effect_speed)
+        self.effect_size=QComboBox()
+        for value, label in EFFECT_SIZES: self.effect_size.addItem(label, value)
+        f.addRow('Size:', self.effect_size)
+        self.effect_random=QCheckBox('Random effects (a different effect each time)'); f.addRow('', self.effect_random)
         p.v.addLayout(f)
+        tiles=p.new_card('Application tiles')
+        ft=form()
+        self.tile_size=QComboBox()
+        for value, label in TILE_SIZES: self.tile_size.addItem(label, value)
+        ft.addRow('Tile size:', self.tile_size)
+        ft.addRow('', hint_label('Tiles start in the top-left corner and fill the width; there is never a sideways scroll bar.'))
+        tiles.addLayout(ft)
         self.effects_note=hint_label('Eduka-Low-Theme is chosen: effects stay off with this theme.'); p.v.addWidget(self.effects_note)
         self.effects_on.setEnabled(ok); self.effects_on.toggled.connect(lambda *_: self.update_effects_state())
         self._effects_capable=ok
@@ -1301,7 +1318,7 @@ class Settings(QDialog):
         self.effects_note.setVisible(self.theme.currentText() == THEME_LOW)
         self.effects_on.setEnabled(allowed)
         if not allowed: self.effects_on.setChecked(False)
-        for w in (self.effect_hover, self.effect_launch): w.setEnabled(allowed and self.effects_on.isChecked())
+        for w in (self.effect_hover, self.effect_launch, self.effect_speed, self.effect_size, self.effect_random): w.setEnabled(allowed and self.effects_on.isChecked())
 
     def card_title(self, text):
         t=QLabel(text); t.setObjectName('cardTitle')
@@ -1741,6 +1758,12 @@ class Settings(QDialog):
         self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
         self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
         self.effect_launch.setCurrentIndex(max(0, self.effect_launch.findData(desktop.get('effect_launch','bubble'))))
+        pick=lambda combo, value: combo.setCurrentIndex(min(range(combo.count()), key=lambda i: abs(float(combo.itemData(i))-float(value))))
+        try:
+            pick(self.effect_speed, desktop.get('effect_speed', 1.0)); pick(self.effect_size, desktop.get('effect_size', 1.0)); pick(self.tile_size, desktop.get('tile_size', 132))
+        except Exception:
+            pass
+        self.effect_random.setChecked(bool(desktop.get('effect_random', False)))
         self.update_effects_state(); self.update_clock_preview()
         self.notify_seconds.setValue(int(panel.get('notify_seconds', 7)))
         self.notify_history.setChecked(bool(panel.get('notify_history', True)))
@@ -1779,7 +1802,7 @@ class Settings(QDialog):
     # ------------------------------------------------------------------ save / apply
     def collect(self):
         panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 
@@ -1788,6 +1811,12 @@ class Settings(QDialog):
         save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
         self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
         set_menu_daemon_autostart(self.start_login.isChecked())
+        try:
+            lang_change=sync_session_language(menu.get('language', 'system'))
+        except Exception:
+            lang_change=''
+        if lang_change:
+            QTimer.singleShot(300, lambda c=lang_change: self.show_status(_('Tetun is used in all programs after you log out and in.') if c == 'set' else _('The system language is used in all programs after you log out and in.')))
         # Theme for the whole desktop: GTK, Qt palette and window borders.
         if desktop['theme_style'] != self._initial_theme or desktop['theme_style'] in SYSTEM_THEMES:
             apply_desktop_theme(desktop['theme_style'])
@@ -1808,6 +1837,8 @@ class Settings(QDialog):
                 state['dnd']=self.dnd.isChecked(); write_json(state_path, state)
         except Exception:
             pass
+        try: repair_qt_palette()
+        except Exception: pass
         # Compositor mode follows the theme (picom with blur for Liquid Glass).
         ensure_compositor()
         QTimer.singleShot(700, self.update_compositor_status)
@@ -1908,4 +1939,5 @@ def run_single_instance():
     return result
 
 if __name__ == '__main__':
+    install_crash_log('eduka-settings')
     exit_now(run_single_instance())

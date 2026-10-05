@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.22_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.23_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.22_all.deb
+   rm ./edukasaun-desktop-menu_0.9.23_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -166,6 +166,22 @@ and other greeters.
   virtual machine, OpenGL renderer, picom version and its last warnings).
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
+
+## Stability, palette and language (0.9.23)
+
+- `install_crash_log(name)` in `eduka_common.py`: Python errors in Qt slots
+  are logged to `~/.cache/eduka-desktop/<name>-errors.log` instead of
+  aborting the program; `faulthandler` writes crash traces there too.
+- The menu daemon touches `$XDG_RUNTIME_DIR/eduka-desktop/menu-daemon.beat`
+  every 2 s; `menu_daemon_alive()` stops a daemon without heartbeat for
+  20 s so the panel starts a fresh one.
+- `repair_qt_palette()` checks the contrast of lxqt.conf `[Palette]` (and the
+  system defaults) and writes a readable palette for the current theme.
+- `sync_session_language()` writes `LANGUAGE=tet:pt:en` to
+  `~/.config/lxqt/session.conf [Environment]` when Tetun is chosen and
+  eduka-language-pack-tet is installed.
+- Effects: `effect_speed`, `effect_size`, `effect_random`, `tile_size` in the
+  desktop settings.
 
 ## Drives, touchpad, wallpaper and input devices (0.9.22)
 

@@ -21,7 +21,7 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.9.22"
+VERSION = "0.9.23"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -764,7 +764,60 @@ MULTI_PALETTE = {
     'window_text_color': '#212121', 'text_color': '#212121', 'highlighted_text_color': '#ffffff',
     'link_color': '#1e88e5', 'link_visited_color': '#8e24aa',
 }
+LIGHT_PALETTE = {
+    # Readable light colors for Qt programs (pcmanfm-qt desktop menu, LXQt
+    # dialogs) with the light Eduka themes.
+    'window_color': '#eff1f1', 'base_color': '#ffffff', 'highlight_color': '#00a879',
+    'window_text_color': '#1f2d2a', 'text_color': '#1f2d2a', 'highlighted_text_color': '#ffffff',
+    'link_color': '#00785a', 'link_visited_color': '#5b6e69',
+}
 THEME_BACKUP = BASE_CONFIG/'desktop-theme-backup.json'
+
+def _contrast(a, b):
+    """WCAG contrast ratio of two colors (1 = same, 21 = black on white)."""
+    from PyQt5.QtGui import QColor
+    def lum(c):
+        c=QColor(c)
+        if not c.isValid(): return None
+        ch=[]
+        for v in (c.redF(), c.greenF(), c.blueF()):
+            ch.append(v/12.92 if v <= 0.03928 else ((v+0.055)/1.055)**2.4)
+        return 0.2126*ch[0]+0.7152*ch[1]+0.0722*ch[2]
+    la, lb=lum(a), lum(b)
+    if la is None or lb is None: return 21.0
+    hi, lo=max(la, lb), min(la, lb)
+    return (hi+0.05)/(lo+0.05)
+
+def repair_qt_palette():
+    """Qt programs read their colors from lxqt.conf [Palette]. If text and
+    background ended up (almost) the same color — for example white text on a
+    white menu after a theme was changed — write a complete, readable palette
+    for the current theme. Returns True when something was repaired."""
+    lxqt=_home('.config','lxqt','lxqt.conf')
+    def get(key):
+        for path in (lxqt, Path('/etc/xdg/lxqt/lxqt.conf'), Path('/usr/share/lxqt/lxqt.conf')):
+            v=_get_ini_value(path, 'Palette', key)
+            if v: return v.strip('"')
+        return None
+    pairs=[('window_color', 'window_text_color'), ('base_color', 'text_color'), ('highlight_color', 'highlighted_text_color')]
+    bad=False; known=False
+    for bg, fg in pairs:
+        b, f=get(bg), get(fg)
+        if b or f: known=True
+        if b and f and _contrast(b, f) < 3.0: bad=True
+    # Only one of a pair set: Qt mixes it with its default, which can be unreadable.
+    if not bad and known:
+        for bg, fg in pairs[:2]:
+            b, f=get(bg), get(fg)
+            if bool(b) != bool(f):
+                bad=True
+    if not bad:
+        return False
+    theme=current_theme()
+    palette=SYSTEM_THEMES[theme][2] if theme in SYSTEM_THEMES else LIGHT_PALETTE
+    for key, value in palette.items():
+        _set_ini_value(lxqt, 'Palette', key, value)
+    return True
 DESKTOP_DARK_THEME = 'Edukasaun-Dark'
 # Eduka theme -> (GTK theme, prefer dark, Qt palette, window border theme)
 SYSTEM_THEMES = {
@@ -897,6 +950,8 @@ def apply_desktop_theme(theme=None):
     if backup.get('xfwm4_compositing'): _xfwm4_set('/general/use_compositing', 'bool', backup['xfwm4_compositing'])
     try: THEME_BACKUP.unlink()
     except Exception: pass
+    try: repair_qt_palette()
+    except Exception: pass
     return True
 
 # ---------------------------------------------------------------------------
@@ -923,10 +978,50 @@ def system_language():
         value=os.environ.get(var, '')
         for part in value.split(':'):
             first=part.split('.')[0].split('@')[0]
-            # 'tet' in LANGUAGE comes from the Tetun choice itself, not the system.
+            # 'tet' in LANGUAGE comes from the Tetun choice itself, or from
+            # the Tetun language pack chosen for the whole system.
+            if first == 'tet' and tetun_pack_installed():
+                return 'tet'
             if first and first not in ('C', 'POSIX', 'tet'):
                 return first
     return 'en'
+
+TETUN_PACK = 'eduka-language-pack-tet'
+
+def tetun_pack_installed():
+    """The Tetun language pack (eduka-language-pack-tet) gives other
+    programs Tetun texts too (gettext and Qt translations under
+    /usr/share/locale/tet)."""
+    try:
+        status=Path('/var/lib/dpkg/status').read_text(encoding='utf-8', errors='ignore')
+        m=re.search(r'^Package: '+re.escape(TETUN_PACK)+r'\n(?:[^\n]+\n)*?Status: ([^\n]+)', status, re.M)
+        if m and 'installed' in m.group(1) and 'not-installed' not in m.group(1):
+            return True
+    except Exception:
+        pass
+    d=Path('/usr/share/locale/tet/LC_MESSAGES')
+    try:
+        return d.is_dir() and any(d.iterdir())
+    except Exception:
+        return False
+
+SESSION_LANGUAGE_KEYS = ('LANGUAGE',)
+
+def sync_session_language(choice):
+    """Tetun for the whole desktop: with the language pack installed, the
+    LXQt session gets LANGUAGE=tet:pt:en, so every program that has a Tetun
+    translation uses it after the next login (others fall back to
+    Portuguese, then English). 'system' removes it again.
+    Returns 'set', 'removed' or ''."""
+    conf=_home('.config', 'lxqt', 'session.conf')
+    current=_get_ini_value(conf, 'Environment', 'LANGUAGE')
+    if choice == 'tet' and tetun_pack_installed():
+        if current != 'tet:pt:en':
+            _set_ini_value(conf, 'Environment', 'LANGUAGE', 'tet:pt:en'); return 'set'
+        return ''
+    if current and current.startswith('tet'):
+        _remove_ini_value(conf, 'Environment', 'LANGUAGE'); return 'removed'
+    return ''
 
 _LANG_CACHE={'stamp': None, 'lang': 'en'}
 
@@ -1137,7 +1232,11 @@ def format_clock(qtime, fmt=None, seconds=False, colon=':'):
     return text.replace(':', colon) if colon != ':' else text
 
 # ---------------------------------------------------------------- effects
-EFFECT_HOVER = [('none', 'None'), ('wave', 'Wave (icon lifts)'), ('glow', 'Glow pulse'), ('slide', 'Slide in')]
+EFFECT_HOVER = [('none', 'None'), ('wave', 'Wave (icon lifts)'), ('glow', 'Glow pulse'), ('slide', 'Slide in'),
+                ('pop', 'Pop (icon grows)'), ('bounce', 'Bounce')]
+EFFECT_SPEEDS = [(0.6, 'Slow'), (1.0, 'Normal'), (1.6, 'Fast')]
+EFFECT_SIZES = [(0.6, 'Small'), (1.0, 'Normal'), (1.5, 'Big')]
+TILE_SIZES = [(118, 'Small'), (132, 'Normal'), (150, 'Large')]
 EFFECT_LAUNCH = [('none', 'None'), ('bubble', 'Bubbles'), ('zoom-in', 'Zoom in'), ('zoom-out', 'Zoom out'),
                  ('ripple', 'Ripple'), ('bounce', 'Bounce'), ('confetti', 'Confetti'), ('fade', 'Fade')]
 
@@ -1163,7 +1262,12 @@ def effects_settings():
     on=bool(cfg.get('effects_enabled', False)) and effects_capability()[2] and current_theme() != THEME_LOW \
         and not cfg.get('visual_accessibility', False)
     hover=cfg.get('effect_hover', 'wave'); launch=cfg.get('effect_launch', 'bubble')
-    return {'enabled': on, 'hover': hover if on else 'none', 'launch': launch if on else 'none'}
+    def num(key, default, lo, hi):
+        try: return max(lo, min(hi, float(cfg.get(key, default))))
+        except Exception: return default
+    return {'enabled': on, 'hover': hover if on else 'none', 'launch': launch if on else 'none',
+            'speed': num('effect_speed', 1.0, 0.4, 2.0), 'size': num('effect_size', 1.0, 0.4, 2.0),
+            'random': bool(cfg.get('effect_random', False)) and on, 'tile': int(num('tile_size', 132, 110, 170))}
 
 # ---------------------------------------------------------------- panel position
 PANEL_POSITIONS = ('Bottom', 'Top', 'Left', 'Right')
@@ -1553,7 +1657,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "accent_color": "", "compositor": "auto", "multicolor": False}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "effect_speed": 1.0, "effect_size": 1.0, "effect_random": False, "tile_size": 132, "accent_color": "", "compositor": "auto", "multicolor": False}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),
@@ -1931,10 +2035,65 @@ def _pid_alive(pid):
     except Exception:
         return False
 
+MENU_DAEMON_BEAT = RUNTIME_DIR/'menu-daemon.beat'
+
+def _is_eduka_menu(pid):
+    try:
+        cmd=Path(f'/proc/{int(pid)}/cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'ignore')
+        state=Path(f'/proc/{int(pid)}/stat').read_text().split(')')[-1].split()[0]
+        return 'eduka-menu' in cmd and state != 'Z'
+    except Exception:
+        return False
+
 def menu_daemon_alive():
+    """True when the resident Eduka-Desktop answers. A daemon that hangs (no
+    heartbeat for 20 s) is stopped, so the next click starts a fresh one
+    instead of sending commands nobody reads until the next login."""
     ensure_dirs()
-    try: return _pid_alive(MENU_DAEMON_PID.read_text().strip())
-    except Exception: return False
+    try:
+        pid=int(MENU_DAEMON_PID.read_text().strip())
+    except Exception:
+        return False
+    if not _pid_alive(pid) or not _is_eduka_menu(pid):
+        return False
+    try:
+        beat_age=time.time()-MENU_DAEMON_BEAT.stat().st_mtime
+        started_age=time.time()-MENU_DAEMON_PID.stat().st_mtime
+    except Exception:
+        return True          # an older daemon without heartbeat
+    if beat_age > 20 and started_age > 30:
+        try: os.kill(pid, 9)
+        except Exception: pass
+        for f in (MENU_DAEMON_PID, MENU_DAEMON_BEAT):
+            try: f.unlink()
+            except Exception: pass
+        return False
+    return True
+
+def install_crash_log(name):
+    """Errors no longer close an Eduka program: a Python error in a button or
+    timer is written to ~/.cache/eduka-desktop/<name>-errors.log and the
+    program keeps running (PyQt5 would otherwise abort). A real crash writes
+    its traceback to the same file (faulthandler), so it can be reported."""
+    import faulthandler, traceback
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path=CACHE_DIR/f'{name}-errors.log'
+        if path.exists() and path.stat().st_size > 512*1024:
+            path.write_text('')
+        log=open(path, 'a', buffering=1, encoding='utf-8')
+        faulthandler.enable(file=log, all_threads=True)
+    except Exception:
+        log=None
+    def hook(etype, value, tb):
+        text=''.join(traceback.format_exception(etype, value, tb))
+        try:
+            if log: log.write(time.strftime('%Y-%m-%d %H:%M:%S')+f' {name} {VERSION}\n'+text+'\n')
+        except Exception:
+            pass
+        try: sys.__stderr__.write(text)
+        except Exception: pass
+    sys.excepthook=hook
 
 def ensure_menu_daemon(show=False):
     ensure_dirs()

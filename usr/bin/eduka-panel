@@ -2837,6 +2837,7 @@ class ClockButton(QPushButton):
         self.lines=['', '']; self.old=''; self.slide=1.0; self.fade=1.0; self.alarm=False; self.ac_open=False; self._hot=False
         self.opts=clock_options(); self.vertical=False
         self.anim=QTimer(self); self.anim.setInterval(16); self.anim.timeout.connect(self.step); self._clock=QElapsedTimer()
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding); self.setMinimumHeight(24)
 
     def set_ac_open(self, on):
         """While the Action Center is open it shows the time and date itself:
@@ -2872,8 +2873,23 @@ class ClockButton(QPushButton):
         self.update()
 
     def fonts(self):
-        big=QFont(self.font()); big.setBold(True); big.setPixelSize(13 if self.height() >= 40 else 12)
-        small=QFont(self.font()); small.setBold(False); small.setPixelSize(10 if self.height() >= 40 else 9)
+        """Time and date always fit inside the box: the font sizes follow the
+        real height of the button and the metrics of the system font (fonts
+        with tall ascent/descent were cut at the top and bottom)."""
+        h=self.height() if self.height() > 10 else 34
+        key=(h, self.font().family(), self.font().pointSizeF(), len(self.lines))
+        if getattr(self, '_font_key', None) == key:
+            return self._fonts
+        room=h-4                       # inside the frame
+        bs=max(9, min(16, int(h*0.40))); ss=max(8, min(13, int(h*0.29)))
+        while True:
+            big=QFont(self.font()); big.setBold(True); big.setPixelSize(bs)
+            small=QFont(self.font()); small.setBold(False); small.setPixelSize(ss)
+            need=QFontMetrics(big).height()+QFontMetrics(small).height()*max(1, len(self.lines)-1)
+            if need <= room or (bs <= 9 and ss <= 7): break
+            if bs-ss > 2 or ss <= 7: bs-=1
+            else: ss-=1
+        self._font_key=key; self._fonts=(big, small)
         return big, small
 
     def led_width(self, h):
@@ -2900,7 +2916,7 @@ class ClockButton(QPushButton):
         super().paintEvent(e)
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.TextAntialiasing)
         # A framed box shows that the clock is a button (opens the Action Center).
-        box=QRectF(self.rect()).adjusted(1.5, 2.5, -1.5, -2.5); ink=self.palette().color(QPalette.ButtonText); acc=QColor(theme_accent())
+        box=QRectF(self.rect()).adjusted(1.5, 1.0, -1.5, -1.0); ink=self.palette().color(QPalette.ButtonText); acc=QColor(theme_accent())
         frame=QColor(acc if (self._hot or self.ac_open) else ink); frame.setAlpha(200 if (self._hot or self.ac_open) else 70)
         fill=QColor(acc); fill.setAlpha(46 if self.ac_open else (26 if self._hot else 10))
         p.setPen(QPen(frame, 1.2)); p.setBrush(fill); p.drawRoundedRect(box, 11, 11)
@@ -2920,6 +2936,9 @@ class ClockButton(QPushButton):
             self.paint_text(p, QRectF(42, 0, self.width()-48, self.height()), Qt.AlignLeft | Qt.AlignVCenter)
         else:
             self.paint_led(p)
+
+    def resizeEvent(self, e):
+        self._font_key=None; super().resizeEvent(e)
 
     def paint_text(self, p, rect, align):
         big, small=self.fonts(); ink=self.ink()
@@ -3013,6 +3032,8 @@ class EdukaPanel(QWidget):
         self.touchpad_devices=[]; self._input_sig=None; self._input_workers=[]; self._tp_proc=None; self._tp_id=None; self._tp_state={}
         self.input_timer=QTimer(self); self.input_timer.timeout.connect(self.check_input_devices); self.input_timer.start(5000)
         QTimer.singleShot(1200, lambda: self.check_input_devices(first=True))
+        # White text on a white menu in Qt programs (pcmanfm-qt desktop menu)?
+        QTimer.singleShot(900, lambda: repair_qt_palette())
         # Wallpaper slideshow (Eduka-Settings → Wallpaper).
         self._slide_last=''; self._wall_fade=None
         self.slide_timer=QTimer(self); self.slide_timer.timeout.connect(self.next_wallpaper)
@@ -3038,7 +3059,7 @@ class EdukaPanel(QWidget):
         outer=QVBoxLayout(self); outer.setContentsMargins(0,0,0,0); self.bg=QFrame(); self.bg.setObjectName('panelBg'); outer.addWidget(self.bg)
         # Panel shadow is optional. Default OFF for 512MB/old CPU target.
         self.bg.setGraphicsEffect(None)
-        self.layout=QBoxLayout(QBoxLayout.LeftToRight, self.bg); self.layout.setContentsMargins(10,4,10,4); self.layout.setSpacing(7)
+        self.layout=QBoxLayout(QBoxLayout.LeftToRight, self.bg); self.layout.setContentsMargins(10,3,10,3); self.layout.setSpacing(7)
         self.bg.setContextMenuPolicy(Qt.CustomContextMenu); self.bg.customContextMenuRequested.connect(self.panel_context)
         self.start=QPushButton(); self.start.setObjectName('startButton'); self.start.setAccessibleName('Edukasaun application menu'); self.start.clicked.connect(self.toggle_menu); self.start.setContextMenuPolicy(Qt.CustomContextMenu); self.start.customContextMenuRequested.connect(self.start_context); self.layout.addWidget(self.start)
         for kind, name, icon, cmd in [('files','File Manager','system-file-manager','pcmanfm-qt'),('terminal','Terminal','utilities-terminal','qterminal')]:
@@ -3266,7 +3287,7 @@ class EdukaPanel(QWidget):
             self.tray_layout.setContentsMargins(0,6,0,6); self.tray_layout.setAlignment(Qt.AlignHCenter)
             self.desktop_button.setMinimumWidth(0); self.desktop_button.setMaximumWidth(QWIDGETSIZE_MAX); self.desktop_button.setFixedHeight(10)
         else:
-            self.layout.setContentsMargins(10,4,10,4)
+            self.layout.setContentsMargins(10,3,10,3)
             self.task_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); self.task_area.setMinimumHeight(0); self.task_area.setMinimumWidth(80)
             self.task_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.tray_layout.setContentsMargins(6,0,4,0); self.tray_layout.setAlignment(Qt.Alignment())
@@ -4482,6 +4503,7 @@ if __name__ == '__main__':
     panel_lock=acquire_panel_lock()
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
+    install_crash_log('eduka-panel')
     if in_eduka_session(): wait_for_compositor()
     app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
     if not panel._fullscreen_hidden: panel.show()
