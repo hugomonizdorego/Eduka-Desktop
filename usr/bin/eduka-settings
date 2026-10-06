@@ -1222,6 +1222,19 @@ class Settings(QDialog):
             pgroup.addButton(card); prow.addWidget(card); self.pos_cards[edge]=card
         where.addLayout(prow)
         where.addWidget(hint_label('Left and right show a vertical panel with icons only. Right-click Eduka-Panel → Panel Position changes it too.'))
+        shape=p.new_card('Panel style')
+        srow=QHBoxLayout(); srow.setSpacing(10); self.shape_cards={}; sgroup=QButtonGroup(self)
+        for key, label in PANEL_STYLES:
+            card=QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(label)
+            card.setIcon(QIcon(panel_style_preview(key))); card.setIconSize(QSize(96, 60)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            sgroup.addButton(card); srow.addWidget(card); self.shape_cards[key]=card
+        shape.addLayout(srow)
+        shape.addWidget(hint_label('Long covers the whole screen edge, Floating is a rounded bar with a little space around it, Short is a smaller centered bar, Dock grows and shrinks with its icons. Right-click Eduka-Panel → Panel Style changes it too.'))
+        fs=form()
+        self.panel_clock_seconds=QCheckBox('Show seconds on the panel clock'); fs.addRow('', self.panel_clock_seconds)
+        self.panel_clock_blink=QCheckBox('Blinking colon on the panel clock'); fs.addRow('', self.panel_clock_blink)
+        shape.addLayout(fs)
         panel=p.new_card('Panel and taskbar')
         fp=form()
         self.panel_height=QSpinBox(); self.panel_height.setRange(34,58); self.panel_height.setSuffix(' px'); fp.addRow('Panel height:', self.panel_height)
@@ -1755,6 +1768,8 @@ class Settings(QDialog):
         self.clock_seconds.setChecked(bool(panel.get('clock_seconds', False))); self.clock_blink.setChecked(bool(panel.get('clock_blink', False)))
         (self.led_swatches.get(str(panel.get('clock_color','') or '').lower()) or self.led_swatches['']).setChecked(True)
         self.pos_cards[panel_position(panel)].setChecked(True)
+        self.shape_cards[panel_style(panel)].setChecked(True)
+        self.panel_clock_seconds.setChecked(bool(panel.get('panel_clock_seconds', False))); self.panel_clock_blink.setChecked(bool(panel.get('panel_clock_blink', False)))
         self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
         self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
         self.effect_launch.setCurrentIndex(max(0, self.effect_launch.findData(desktop.get('effect_launch','bubble'))))
@@ -1801,7 +1816,7 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
         desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu

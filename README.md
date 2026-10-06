@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.23_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.24_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.23_all.deb
+   rm ./edukasaun-desktop-menu_0.9.24_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -166,6 +166,18 @@ and other greeters.
   virtual machine, OpenGL renderer, picom version and its last warnings).
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
+
+## Panel styles and panel popups (0.9.24)
+
+- `panel_style` in the panel settings: `full` (whole edge, no gap, square),
+  `floating`, `short` (64 % centered) or `dock` (fits its buttons; task
+  buttons icon-only, refit after every taskbar change).
+- `panel_clock_seconds`, `panel_clock_blink` for the clock on Eduka-Panel.
+- Popups of the panel icons: `NetworkPopup` (nmcli: wired devices, radio,
+  inline password with show/hide), `SoundPopup` (installed players from the
+  app registry, volume, output device), `BatteryPopup` (sysfs battery,
+  brightness, `powerprofilesctl`), `BluetoothPopup` (bluetoothctl: power,
+  devices, pair/trust/connect, scan). The Action Center is unchanged.
 
 ## Stability, palette and language (0.9.23)
 

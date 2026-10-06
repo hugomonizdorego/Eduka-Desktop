@@ -21,7 +21,7 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.9.23"
+VERSION = "0.9.24"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -1271,6 +1271,34 @@ def effects_settings():
 
 # ---------------------------------------------------------------- panel position
 PANEL_POSITIONS = ('Bottom', 'Top', 'Left', 'Right')
+# Shape of Eduka-Panel (Eduka-Settings → Eduka-Panel, or right-click the panel).
+PANEL_STYLES = [('full', 'Long (whole edge)'), ('floating', 'Floating bar'), ('short', 'Short (centered)'), ('dock', 'Dock (fits its icons)')]
+
+def panel_style_preview(style, w=96, h=60, accent='#00a879', dark=False):
+    """Small picture of a screen with the panel in that shape."""
+    from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen
+    from PyQt5.QtCore import Qt, QRectF
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor('#7a8f89'), 1.5)); p.setBrush(QColor('#2f3b38' if dark else '#e9f2ee')); p.drawRoundedRect(QRectF(2, 2, w-4, h-4), 6, 6)
+    bar=QColor('#ffffff' if not dark else '#505a57'); bar.setAlpha(235)
+    if style == 'full': r=QRectF(3, h-13, w-6, 10); rad=0
+    elif style == 'short': r=QRectF(w*0.2, h-15, w*0.6, 9); rad=4.5
+    elif style == 'dock': r=QRectF(w*0.32, h-17, w*0.36, 11); rad=5
+    else: r=QRectF(8, h-15, w-16, 9); rad=4.5
+    p.setPen(QPen(QColor(0, 0, 0, 50), 1)); p.setBrush(bar); p.drawRoundedRect(r, rad, rad)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent))
+    if style == 'dock':
+        for i in range(4): p.drawRoundedRect(QRectF(r.x()+4+i*(r.width()-8)/4, r.y()+2.5, (r.width()-8)/4-2, r.height()-5), 1.5, 1.5)
+    else:
+        p.drawRoundedRect(QRectF(r.x()+3, r.y()+2, 12, r.height()-4), 2, 2)
+        p.setBrush(QColor('#7a8f89')); p.drawRoundedRect(QRectF(r.right()-14, r.y()+2, 11, r.height()-4), 2, 2)
+    p.end()
+    return pix
+
+def panel_style(cfg=None):
+    value=str((cfg or read_panel_config()).get('panel_style', 'floating'))
+    return value if value in dict(PANEL_STYLES) else 'floating'
 
 def panel_position(cfg=None):
     value=str((cfg or read_panel_config()).get('position', 'Bottom')).capitalize()

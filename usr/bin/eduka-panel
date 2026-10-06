@@ -117,6 +117,16 @@ def popup_qss():
             f'QLabel#popHint{{font-size:11px;color:{u["sub"]};}}'
             f'QPushButton{{border:1px solid {u["btn_border"]};border-radius:11px;padding:7px 10px;background:{u["btn_bg"]};color:{u["text"]};font-weight:700;}}'
             f'QPushButton:hover{{background:{u["btn_hover"]};border:1px solid {u["accent"]};}}'
+            f'QPushButton#menuLink{{background:transparent;border:0;border-radius:9px;padding:7px 8px;text-align:left;font-weight:600;color:{u["text"]};}}'
+            f'QPushButton#menuLink:hover{{background:{u["row_hover"]};border:0;}}'
+            f'QPushButton#menuLink:disabled{{color:{u["sub"]};}}'
+            f'QFrame#popLine{{background:{u["btn_border"]};border:0;}}'
+            'QFrame#switchRow{background:transparent;border:0;}'
+            f'QLineEdit{{background:{u["field"]};border:1px solid {u["btn_border"]};border-radius:10px;padding:6px 8px;color:{u["text"]};}}'
+            f'QLineEdit:focus{{border:1px solid {u["accent"]};}}'
+            f'QPushButton#primaryButton{{background:{u["accent"]};color:#ffffff;border:1px solid {u["accent_border"]};}}'
+            f'QPushButton#primaryButton:hover{{background:{u["accent_hover"]};}}'
+            f'QPushButton#primaryButton:disabled{{background:{u["switch_off"]};color:{u["sub"]};border:1px solid {u["btn_border"]};}}'
             f'QPushButton#switch{{min-width:52px;padding:5px 8px;border-radius:13px;background:{u["switch_off"]};color:{u["switch_off_text"]};}}'
             f'QPushButton#switch:checked{{background:{u["accent"]};color:#ffffff;border:1px solid {u["accent_border"]};}}'
             'QPushButton#netRow{text-align:left;padding:8px 10px;border-radius:12px;background:transparent;border:1px solid transparent;}'
@@ -169,6 +179,15 @@ class PopupFrame(QFrame):
         # Popup shadows disabled in low resource mode to avoid sluggish LXQt/QEMU sessions.
         if read_panel_config().get('enable_shadows', False) and not read_panel_config().get('low_resource_mode', True):
             sh=QGraphicsDropShadowEffect(); sh.setBlurRadius(18); sh.setOffset(0,6); sh.setColor(QColor(0,0,0,45)); self.box.setGraphicsEffect(sh)
+
+    def refit(self):
+        """Grow or shrink with new content and stay beside the panel (a
+        popup that grew downwards covered Eduka-Panel)."""
+        anchor=getattr(self, '_anchor', None)
+        self.adjustSize()
+        if anchor:
+            panel, g=anchor
+            QTimer.singleShot(0, lambda: self.move(panel.popup_position(self.width(), self.height(), g)) if self.isVisible() else None)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1847,7 +1866,7 @@ class ActionCenter(PopupFrame):
         self.bv.addWidget(self.media_card)
         MEDIA_WANTED['on']=True
 
-        grid=QGridLayout(); grid.setSpacing(8); self.tiles={}
+        grid=QGridLayout(); grid.setSpacing(8); self.tiles={}; self.tile_grid=grid
         for i,(key,label,icon) in enumerate(self.TILES):
             t=QToolButton(); t.setObjectName('acTile'); t.setText(tr('dnd') if key == 'dnd' else label)
             t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system-notifications' if key == 'dnd' else 'preferences-system'))
@@ -2193,6 +2212,13 @@ class ActionCenter(PopupFrame):
         wifi_on=st.get('wifi_on')
         bt_on=st.get('bt_on')
         self.set_tile('bluetooth', bool(bt_on), bool(st.get('bt_hw')) and bt_on is not None, 'Bluetooth — right-click for devices' if st.get('bt_hw') else 'No Bluetooth adapter found')
+        # No Bluetooth adapter: no Bluetooth tile (the others close the gap).
+        want=bool(st.get('bt_hw'))
+        if self.tiles['bluetooth'].isVisibleTo(self) != want or not hasattr(self, '_tiles_laid'):
+            self._tiles_laid=True; self.tiles['bluetooth'].setVisible(want)
+            shown=[t for k, t in self.tiles.items() if k != 'bluetooth' or want]
+            for t in self.tiles.values(): self.tile_grid.removeWidget(t)
+            for i, t in enumerate(shown): self.tile_grid.addWidget(t, i//3, i%3)
         self.set_tile('airplane', bool(st.get('airplane')), wifi_on is not None, 'Turn all wireless radios off')
         self.set_tile('display', False, True, 'Monitor and resolution settings')
         self.set_tile('dnd', dnd_enabled(), True, tr('dnd', self.lang)+': only urgent notifications pop up')
@@ -2342,140 +2368,6 @@ def _nm_split(line):
     """Split an `nmcli -t` line; SSIDs may contain escaped colons."""
     fields=re.split(r'(?<!\\):', line)
     return [f.replace('\\:', ':').replace('\\\\', '\\') for f in fields]
-
-
-class WifiScanWorker(QThread):
-    ready=pyqtSignal(object)
-    def run(self):
-        result={'nm': shutil.which('nmcli') is not None, 'networks': [], 'known': set()}
-        if result['nm']:
-            out=_run_text(['nmcli','-t','-f','IN-USE,SSID,SIGNAL,SECURITY','device','wifi','list','--rescan','auto'], timeout=12)
-            seen={}
-            for line in (out or '').splitlines():
-                f=_nm_split(line)
-                if len(f) < 4 or not f[1]: continue
-                ssid=f[1]; active=f[0].strip() == '*'
-                try: signal=int(f[2] or 0)
-                except ValueError: signal=0
-                secure=bool(f[3].strip() and f[3].strip() != '--')
-                old=seen.get(ssid)
-                if old is None or active or signal > old['signal']:
-                    seen[ssid]={'ssid':ssid,'active':active or (old or {}).get('active',False),'signal':signal,'secure':secure}
-            result['networks']=sorted(seen.values(), key=lambda n: (not n['active'], -n['signal'], n['ssid'].casefold()))
-            known=_run_text(['nmcli','-t','-f','NAME,TYPE','connection','show'])
-            result['known']={_nm_split(l)[0] for l in (known or '').splitlines() if 'wireless' in l}
-        self.ready.emit(result)
-
-
-def _signal_icon(signal):
-    if signal >= 75: return 'network-wireless-signal-excellent'
-    if signal >= 50: return 'network-wireless-signal-good'
-    if signal >= 25: return 'network-wireless-signal-ok'
-    return 'network-wireless-signal-weak'
-
-
-class NetworkPopup(PopupFrame):
-    """Wi-Fi list with signal, lock and connected state; Wi-Fi switch."""
-    def __init__(self, panel):
-        super().__init__(panel); self.panel=panel
-        self.box.setFixedWidth(340); self.setAccessibleName('Network')
-        st=panel.last_status or {}
-        head, self.head_icon, self.subtitle = popup_header('network-wireless','Network', self.status_text(st))
-        self.switch=QPushButton('On'); self.switch.setObjectName('switch'); self.switch.setCheckable(True); self.switch.setAccessibleName('Wi-Fi')
-        self.switch.setChecked(bool(st.get('wifi_on'))); self.switch.setText('On' if self.switch.isChecked() else 'Off')
-        self.switch.setEnabled(st.get('wifi_on') is not None); self.switch.toggled.connect(self.toggle_wifi)
-        head.addWidget(self.switch); self.v.addLayout(head)
-        self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,0,0); self.list_layout.setSpacing(3)
-        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setWidget(self.list_widget); scroll.setFixedHeight(250); self.v.addWidget(scroll)
-        self.message=QLabel(''); self.message.setObjectName('popHint'); self.message.setWordWrap(True); self.v.addWidget(self.message)
-        foot=QHBoxLayout()
-        refresh=QPushButton(get_icon('view-refresh'),' Refresh'); refresh.clicked.connect(self.scan); foot.addWidget(refresh)
-        settings=QPushButton(get_icon('preferences-system-network','preferences-system'),' Network Settings'); settings.clicked.connect(lambda: (self.close(), launch_app('nm-connection-editor'))); foot.addWidget(settings)
-        self.v.addLayout(foot)
-        self.worker=None; self.scan()
-
-    @staticmethod
-    def status_text(st):
-        if st.get('net') == 'wifi': return f"Connected to {st.get('connection') or 'Wi-Fi'}"
-        if st.get('net') == 'ethernet': return 'Ethernet connected'
-        return 'Not connected'
-
-    def show_message(self, text):
-        self.clear_list(); lab=QLabel(text); lab.setObjectName('popSub'); lab.setAlignment(Qt.AlignCenter); lab.setWordWrap(True)
-        self.list_layout.addWidget(lab); self.list_layout.addStretch()
-
-    def clear_list(self):
-        while self.list_layout.count():
-            item=self.list_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-
-    def scan(self):
-        if self.worker is not None: return
-        if self.panel.last_status.get('wifi_on') is False:
-            self.show_message('Wi-Fi is off.'); return
-        self.show_message('Searching for Wi-Fi networks…')
-        # Parented to the panel: the popup may close while nmcli still scans.
-        worker=WifiScanWorker(self.panel); self.worker=worker
-        worker.ready.connect(self.fill); worker.finished.connect(self._scan_done); worker.finished.connect(worker.deleteLater); worker.start()
-
-    def _scan_done(self):
-        self.worker=None
-
-    def closeEvent(self, e):
-        if self.worker is not None:
-            try:
-                self.worker.ready.disconnect(self.fill); self.worker.finished.disconnect(self._scan_done)
-            except (TypeError, RuntimeError):
-                pass
-            self.worker=None
-        super().closeEvent(e)
-
-    def fill(self, result):
-        if not result.get('nm'):
-            self.show_message('NetworkManager is not available.'); return
-        nets=result.get('networks') or []
-        if not nets:
-            self.show_message('No Wi-Fi networks found.'); return
-        self.clear_list(); known=result.get('known') or set()
-        for n in nets[:20]:
-            row=QPushButton(); row.setObjectName('netRow'); row.setProperty('active', n['active']); row.setCursor(Qt.PointingHandCursor)
-            row.setAccessibleName(f"{n['ssid']}, signal {n['signal']} percent" + (', secured' if n['secure'] else '') + (', connected' if n['active'] else ''))
-            lay=QHBoxLayout(row); lay.setContentsMargins(8,4,8,4); lay.setSpacing(8)
-            ic=QLabel(); ic.setPixmap(get_icon(_signal_icon(n['signal']),'network-wireless').pixmap(20,20)); lay.addWidget(ic)
-            name=QLabel(n['ssid']); name.setStyleSheet('font-weight:%s;' % ('800' if n['active'] else '600')); lay.addWidget(name,1)
-            if n['active']:
-                tag=QLabel('Connected'); tag.setStyleSheet('color:#00875f;font-weight:700;font-size:11px;'); lay.addWidget(tag)
-            if n['secure']:
-                lock=QLabel(); lock.setPixmap(get_icon('network-wireless-encrypted','changes-prevent').pixmap(14,14)); lay.addWidget(lock)
-            for w in row.findChildren(QLabel): w.setAttribute(Qt.WA_TransparentForMouseEvents)
-            row.setMinimumHeight(38)
-            row.clicked.connect(lambda _=False, net=n, k=(n['ssid'] in known): self.choose(net, k))
-            self.list_layout.addWidget(row)
-        self.list_layout.addStretch()
-
-    def toggle_wifi(self, on):
-        self.switch.setText('On' if on else 'Off')
-        safe_popen(['nmcli','radio','wifi','on' if on else 'off'])
-        self.panel.last_status['wifi_on']=on
-        if on: QTimer.singleShot(2500, self.scan)
-        else: self.show_message('Wi-Fi is off.')
-        QTimer.singleShot(800, self.panel.update_status_icons)
-
-    def choose(self, net, known):
-        ssid=net['ssid']
-        if net['active']:
-            m=RoundedMenu(self); m.addAction(get_icon('network-disconnect','process-stop'),'Disconnect', lambda: self.panel.run_network(['nmcli','connection','down','id',ssid], f'Disconnected from {ssid}.'))
-            m.exec_(QCursor.pos()); return
-        if known:
-            self.close(); self.panel.run_network(['nmcli','connection','up','id',ssid], f'Connected to {ssid}.'); return
-        if net['secure']:
-            self.close()
-            password, ok = QInputDialog.getText(None, 'Connect to Wi-Fi', f'Password for “{ssid}”:', QLineEdit.Password)
-            if not ok or not password: return
-            self.panel.run_network(['nmcli','device','wifi','connect',ssid,'password',password], f'Connected to {ssid}.')
-            return
-        self.close(); self.panel.run_network(['nmcli','device','wifi','connect',ssid], f'Connected to {ssid}.')
 
 
 class SinkWorker(QThread):
@@ -2708,25 +2600,338 @@ class TouchpadPopup(PopupFrame):
         w.finished.connect(lambda w=w: self.panel._input_workers.remove(w) if w in self.panel._input_workers else None); w.start()
 
 
+class ToggleSwitch(QAbstractButton):
+    """A small on/off switch (track and round knob) in the accent color."""
+    def __init__(self, parent=None):
+        super().__init__(parent); self.setCheckable(True); self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(46, 24); self._pos=0.0
+        self._anim=QVariantAnimation(self); self._anim.setDuration(140); self._anim.valueChanged.connect(self._moved)
+        self.toggled.connect(self._animate)
+    def _moved(self, v): self._pos=float(v); self.update()
+    def _animate(self, on):
+        self._anim.stop(); self._anim.setStartValue(self._pos); self._anim.setEndValue(1.0 if on else 0.0); self._anim.start()
+    def setChecked(self, on):
+        super().setChecked(on); self._anim.stop(); self._pos=1.0 if on else 0.0; self.update()
+    def sizeHint(self): return QSize(46, 24)
+    def paintEvent(self, e):
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        u=ui_colors(); acc=qcolor(u['accent']); off=qcolor(u['switch_off'])
+        if not self.isEnabled(): acc.setAlpha(90); off.setAlpha(90)
+        track=QColor(int(off.red()+(acc.red()-off.red())*self._pos), int(off.green()+(acc.green()-off.green())*self._pos), int(off.blue()+(acc.blue()-off.blue())*self._pos), max(off.alpha(), acc.alpha()) if self.isEnabled() else 90)
+        r=QRectF(1, 2, self.width()-2, self.height()-4); p.setPen(Qt.NoPen); p.setBrush(track); p.drawRoundedRect(r, r.height()/2, r.height()/2)
+        d=r.height()-4; x=r.x()+2+(r.width()-d-4)*self._pos
+        p.setBrush(QColor('#ffffff')); p.drawEllipse(QRectF(x, r.y()+2, d, d))
+        if self._pos > 0.5:
+            p.setPen(QPen(QColor('#ffffff'), 1.8, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(r.x()+8, r.center().y()), QPointF(r.x()+11, r.center().y()+3)); p.drawLine(QPointF(r.x()+11, r.center().y()+3), QPointF(r.x()+16, r.center().y()-3))
+
+
+def switch_row(title, subtitle=''):
+    """A row with a bold title (and grey subtitle) on the left and a switch."""
+    row=QFrame(); row.setObjectName('switchRow'); lay=QHBoxLayout(row); lay.setContentsMargins(6,4,4,4); lay.setSpacing(8)
+    text=QVBoxLayout(); text.setSpacing(0)
+    t=QLabel(title); t.setObjectName('popTitle'); t.setStyleSheet('font-size:13px;'); text.addWidget(t)
+    sub=QLabel(subtitle); sub.setObjectName('popSub'); sub.setVisible(bool(subtitle)); text.addWidget(sub)
+    lay.addLayout(text, 1); sw=ToggleSwitch(); lay.addWidget(sw)
+    return row, sw, sub
+
+
+def eye_icon(opened, color, size=18):
+    """Eye (show password) or crossed eye (hide), drawn so it is never missing."""
+    pix=QPixmap(size*2, size*2); pix.setDevicePixelRatio(2.0); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing); c=QColor(color)
+    p.setPen(QPen(c, 1.6)); p.setBrush(Qt.NoBrush)
+    path=QPainterPath(); path.moveTo(size*0.08, size*0.5); path.quadTo(size*0.5, size*0.08, size*0.92, size*0.5); path.quadTo(size*0.5, size*0.92, size*0.08, size*0.5)
+    p.drawPath(path); p.setBrush(c); p.drawEllipse(QPointF(size*0.5, size*0.5), size*0.14, size*0.14)
+    if not opened:
+        p.setPen(QPen(c, 1.8, Qt.SolidLine, Qt.RoundCap)); p.drawLine(QPointF(size*0.15, size*0.85), QPointF(size*0.85, size*0.15))
+    p.end()
+    return QIcon(pix)
+
+
+def link_row(text, icon=None):
+    b=QPushButton((' ' if icon else '')+text); b.setObjectName('menuLink'); b.setCursor(Qt.PointingHandCursor)
+    if icon: b.setIcon(get_icon(icon, 'preferences-system'))
+    return b
+
+
+def signal_pixmap(signal, secure, color, size=20):
+    """Wi-Fi fan with 1-4 lit arcs and a small lock for secured networks."""
+    pix=QPixmap(size*2, size*2); pix.setDevicePixelRatio(2.0); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    lit=1 if signal < 25 else 2 if signal < 50 else 3 if signal < 75 else 4
+    c=QPointF(size*0.5, size*0.86)
+    for i in range(4):
+        col=QColor(color); col.setAlpha(255 if i < lit else 70)
+        r=size*(0.12+0.2*i)
+        if i == 0:
+            p.setPen(Qt.NoPen); p.setBrush(col); p.drawEllipse(c, size*0.08, size*0.08); continue
+        p.setPen(QPen(col, size*0.1, Qt.SolidLine, Qt.RoundCap)); p.setBrush(Qt.NoBrush)
+        p.drawArc(QRectF(c.x()-r, c.y()-r, 2*r, 2*r), 45*16, 90*16)
+    if secure:
+        lc=QColor(color); w=size*0.34; x=size*0.64; y=size*0.58
+        p.setPen(QPen(lc, size*0.07)); p.setBrush(Qt.NoBrush); p.drawArc(QRectF(x+w*0.18, y-w*0.45, w*0.64, w*0.8), 0, 180*16)
+        p.setPen(Qt.NoPen); p.setBrush(lc); p.drawRoundedRect(QRectF(x, y, w, w*0.72), 1.5, 1.5)
+    p.end()
+    return pix
+
+
+class WifiScanWorker(QThread):
+    ready=pyqtSignal(object)
+    def run(self):
+        result={'nm': shutil.which('nmcli') is not None, 'networks': [], 'known': set(), 'wired': []}
+        if result['nm']:
+            for line in (_run_text(['nmcli','-t','-f','DEVICE,TYPE,STATE','device'], timeout=4) or '').splitlines():
+                f=_nm_split(line)
+                if len(f) >= 3 and f[1] == 'ethernet':
+                    result['wired'].append({'device': f[0], 'connected': f[2].startswith('connected'), 'state': f[2]})
+            out=_run_text(['nmcli','-t','-f','IN-USE,SSID,SIGNAL,SECURITY','device','wifi','list','--rescan','auto'], timeout=12)
+            seen={}
+            for line in (out or '').splitlines():
+                f=_nm_split(line)
+                if len(f) < 4 or not f[1]: continue
+                ssid=f[1]; active=f[0].strip() == '*'
+                try: signal=int(f[2] or 0)
+                except ValueError: signal=0
+                secure=bool(f[3].strip() and f[3].strip() != '--')
+                old=seen.get(ssid)
+                if old is None or active or signal > old['signal']:
+                    seen[ssid]={'ssid':ssid,'active':active or (old or {}).get('active',False),'signal':signal,'secure':secure}
+            result['networks']=sorted(seen.values(), key=lambda n: (not n['active'], -n['signal'], n['ssid'].casefold()))
+            known=_run_text(['nmcli','-t','-f','NAME,TYPE','connection','show'])
+            result['known']={_nm_split(l)[0] for l in (known or '').splitlines() if 'wireless' in l}
+        self.ready.emit(result)
+
+
+def _signal_icon(signal):
+    if signal >= 75: return 'network-wireless-signal-excellent'
+    if signal >= 50: return 'network-wireless-signal-good'
+    if signal >= 25: return 'network-wireless-signal-ok'
+    return 'network-wireless-signal-weak'
+
+
+class NetworkPopup(PopupFrame):
+    """Wired and Wireless switches, the Wi-Fi list with signal and lock, and
+    connecting right here: click a network, type the password (show/hide)
+    and press Connect — no extra window."""
+    def __init__(self, panel):
+        super().__init__(panel); self.panel=panel; self.proc=None; self.editor=None
+        self.box.setFixedWidth(360); self.setAccessibleName('Network')
+        st=panel.last_status or {}
+        self.wired_row, self.wired_switch, self.wired_sub=switch_row('Wired')
+        self.wired_row.setVisible(False); self.wired_switch.clicked.connect(self.toggle_wired); self.v.addWidget(self.wired_row)
+        self.wifi_row, self.switch, self.wifi_sub=switch_row('Wireless', self.status_text(st))
+        self.switch.setChecked(bool(st.get('wifi_on'))); self.switch.setEnabled(st.get('wifi_on') is not None); self.switch.setAccessibleName('Wi-Fi')
+        self.switch.clicked.connect(self.toggle_wifi); self.v.addWidget(self.wifi_row)
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,0,0); self.list_layout.setSpacing(2)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setWidget(self.list_widget); self.scroll.setFixedHeight(min(300, max(200, panel.popup_room()-200))); self.v.addWidget(self.scroll)
+        self.message=QLabel(''); self.message.setObjectName('popHint'); self.message.setWordWrap(True); self.message.hide(); self.v.addWidget(self.message)
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        refresh=link_row('Refresh', 'view-refresh'); refresh.clicked.connect(self.scan); self.v.addWidget(refresh)
+        conns=link_row('Network Connections', 'preferences-system-network'); conns.clicked.connect(lambda: (self.close(), launch_app('nm-connection-editor'))); self.v.addWidget(conns)
+        self.worker=None; self.scan()
+
+    @staticmethod
+    def status_text(st):
+        if st.get('net') == 'wifi': return _('Connected to {n}').replace('{n}', st.get('connection') or 'Wi-Fi')
+        if st.get('net') == 'ethernet': return _('Ethernet connected')
+        return _('Not connected')
+
+    def note(self, text, error=False):
+        self.message.setVisible(bool(text)); self.message.setText(text)
+        self.message.setStyleSheet('color:#d93f3f;' if error else '')
+        QTimer.singleShot(0, self.refit)
+
+    def show_message(self, text):
+        self.clear_list(); lab=QLabel(text); lab.setObjectName('popSub'); lab.setAlignment(Qt.AlignCenter); lab.setWordWrap(True)
+        self.list_layout.addWidget(lab); self.list_layout.addStretch()
+
+    def clear_list(self):
+        self.editor=None
+        while self.list_layout.count():
+            item=self.list_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+
+    def scan(self):
+        if self.worker is not None: return
+        if self.panel.last_status.get('wifi_on') is False:
+            self.show_message(_('Wi-Fi is off.'))
+        else:
+            self.show_message(_('Searching for Wi-Fi networks…'))
+        # Parented to the panel: the popup may close while nmcli still scans.
+        worker=WifiScanWorker(self.panel); self.worker=worker
+        worker.ready.connect(self.fill); worker.finished.connect(self._scan_done); worker.finished.connect(worker.deleteLater); worker.start()
+
+    def _scan_done(self):
+        self.worker=None
+
+    def closeEvent(self, e):
+        if self.worker is not None:
+            try:
+                self.worker.ready.disconnect(self.fill); self.worker.finished.disconnect(self._scan_done)
+            except (TypeError, RuntimeError):
+                pass
+            self.worker=None
+        super().closeEvent(e)
+
+    def fill(self, result):
+        wired=result.get('wired') or []
+        self.wired=wired
+        self.wired_row.setVisible(bool(wired))
+        if wired:
+            on=any(w['connected'] for w in wired); self.wired_switch.setChecked(on)
+            self.wired_sub.setVisible(True); self.wired_sub.setText(_('Connected') if on else _('Cable not connected') if all('unavailable' in w['state'] for w in wired) else _('Off'))
+        QTimer.singleShot(0, self.refit)
+        if not result.get('nm'):
+            self.show_message(_('NetworkManager is not available.')); return
+        if self.panel.last_status.get('wifi_on') is False:
+            self.show_message(_('Wi-Fi is off.')); return
+        nets=result.get('networks') or []
+        if not nets:
+            self.show_message(_('No Wi-Fi networks found.')); return
+        self.clear_list(); self.known=result.get('known') or set()
+        ink=qcolor(ui_colors()['text'])
+        for n in nets[:24]:
+            row=QPushButton(); row.setObjectName('netRow'); row.setProperty('active', n['active']); row.setCursor(Qt.PointingHandCursor)
+            row.setAccessibleName(f"{n['ssid']}, signal {n['signal']} percent" + (', secured' if n['secure'] else '') + (', connected' if n['active'] else ''))
+            lay=QHBoxLayout(row); lay.setContentsMargins(8,3,8,3); lay.setSpacing(8)
+            name=QLabel(n['ssid']); name.setTextFormat(Qt.PlainText); name.setStyleSheet('font-weight:%s;' % ('800' if n['active'] else '600')); lay.addWidget(name,1)
+            if n['active']:
+                tag=QLabel(_('Connected')); tag.setStyleSheet(f"color:{ui_colors()['accent']};font-weight:700;font-size:11px;"); lay.addWidget(tag)
+            pct=QLabel(f"{n['signal']}%"); pct.setObjectName('popSub'); pct.setFixedWidth(38); pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter); lay.addWidget(pct)
+            ic=QLabel(); ic.setPixmap(signal_pixmap(n['signal'], n['secure'], ink)); lay.addWidget(ic)
+            for w in row.findChildren(QLabel): w.setAttribute(Qt.WA_TransparentForMouseEvents)
+            row.setMinimumHeight(34)
+            row.clicked.connect(lambda _=False, net=n, r=row: self.choose(net, r))
+            self.list_layout.addWidget(row)
+        self.list_layout.addStretch()
+
+    def toggle_wifi(self, on):
+        safe_popen(['nmcli','radio','wifi','on' if on else 'off'])
+        self.panel.last_status['wifi_on']=on
+        if on: QTimer.singleShot(2500, self.scan)
+        else: self.show_message(_('Wi-Fi is off.'))
+        QTimer.singleShot(800, self.panel.update_status_icons)
+
+    def toggle_wired(self, on):
+        for w in getattr(self, 'wired', []):
+            self.run(['nmcli','device','connect' if on else 'disconnect', w['device']], _('Wired network on.') if on else _('Wired network off.'))
+
+    def run(self, cmd, success, after=None):
+        """nmcli without blocking; the result is written in the popup."""
+        if self.proc is not None: return
+        self.note(_('Connecting…') if 'connect' in cmd or 'up' in cmd else _('Working…'))
+        proc=QProcess(self); proc.setProcessChannelMode(QProcess.MergedChannels); self.proc=proc
+        def done(code, _status, p=proc):
+            out=bytes(p.readAll()).decode('utf-8','replace').strip(); self.proc=None
+            if code == 0:
+                self.note('✓ '+success); QTimer.singleShot(600, self.scan)
+            else:
+                last=out.splitlines()[-1] if out else _('unknown error')
+                if 'Secrets were required' in out or 'password' in out.lower():
+                    last=_('Wrong password, try again.')
+                self.note(_('Could not connect: {e}').replace('{e}', last), error=True)
+            if after: after(code == 0)
+            QTimer.singleShot(300, self.panel.update_status_icons)
+            p.deleteLater()
+        proc.finished.connect(done); proc.start(cmd[0], cmd[1:])
+
+    def choose(self, net, row):
+        ssid=net['ssid']
+        if self.editor is not None:
+            self.editor.deleteLater(); self.editor=None
+        if net['active']:
+            self.inline(row, ssid, disconnect=True); return
+        if ssid in getattr(self, 'known', set()):
+            self.run(['nmcli','connection','up','id',ssid], _('Connected to {n}').replace('{n}', ssid)); return
+        if net['secure']:
+            self.inline(row, ssid); return
+        self.run(['nmcli','device','wifi','connect',ssid], _('Connected to {n}').replace('{n}', ssid))
+
+    def inline(self, row, ssid, disconnect=False):
+        """Password field (or Disconnect) right under the network."""
+        box=QFrame(); box.setObjectName('acCard'); lay=QVBoxLayout(box); lay.setContentsMargins(10,8,10,8); lay.setSpacing(6)
+        btns=QHBoxLayout(); btns.setSpacing(6)
+        if disconnect:
+            lab=QLabel(_('Connected to {n}').replace('{n}', ssid)); lab.setObjectName('popSub'); lay.addWidget(lab)
+            b=QPushButton(get_icon('network-disconnect','process-stop'), ' '+_('Disconnect')); b.clicked.connect(lambda: self.run(['nmcli','connection','down','id',ssid], _('Disconnected from {n}.').replace('{n}', ssid)))
+            btns.addStretch(1); btns.addWidget(b)
+        else:
+            field=QHBoxLayout(); field.setSpacing(4)
+            pw=QLineEdit(); pw.setEchoMode(QLineEdit.Password); pw.setPlaceholderText(_('Password')); pw.setAccessibleName(_('Password for {n}').replace('{n}', ssid)); field.addWidget(pw, 1)
+            ink=ui_colors()['text']
+            eye=QToolButton(); eye.setObjectName('roundIcon'); eye.setCheckable(True); eye.setIcon(eye_icon(True, qcolor(ink))); eye.setToolTip(_('Show password')); eye.setAccessibleName(_('Show password'))
+            def show(on):
+                pw.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password)
+                eye.setIcon(eye_icon(not on, '#ffffff' if on else qcolor(ink))); eye.setToolTip(_('Hide password') if on else _('Show password'))
+            eye.toggled.connect(show); field.addWidget(eye); lay.addLayout(field)
+            ok=QPushButton(_('Connect')); ok.setObjectName('primaryButton'); ok.setEnabled(False)
+            pw.textChanged.connect(lambda t: ok.setEnabled(len(t) >= 8 or (0 < len(t) and len(t) in (5, 13))))
+            def go():
+                if not ok.isEnabled(): return
+                self.run(['nmcli','device','wifi','connect',ssid,'password',pw.text()], _('Connected to {n}').replace('{n}', ssid),
+                         after=lambda success: (pw.clear(), pw.setFocus()) if not success else None)
+            ok.clicked.connect(go); pw.returnPressed.connect(go)
+            cancel=QPushButton(_('Cancel')); cancel.clicked.connect(lambda: (box.deleteLater(), setattr(self, 'editor', None), self.note('')))
+            btns.addStretch(1); btns.addWidget(cancel); btns.addWidget(ok)
+            QTimer.singleShot(0, pw.setFocus)
+        lay.addLayout(btns)
+        idx=self.list_layout.indexOf(row); self.list_layout.insertWidget(idx+1, box); self.editor=box
+        translate_tree(box)
+        QTimer.singleShot(50, lambda: self.scroll.ensureWidgetVisible(box))
+
+
+def media_player_apps():
+    """Installed music and video players for "Launch player"."""
+    wanted=re.compile(r'(^|;)(AudioVideo|Audio|Video|Player|Music)(;|$)')
+    skip=re.compile(r'settings|mixer|pavucontrol|volume|recorder|editor|audacity|kdenlive|openshot|shotcut|obs|cheese|webcam|sound-?converter|equalizer|easyeffects', re.I)
+    seen=set(); out=[]
+    for app in read_app_registry_fast() or load_apps(force=False):
+        cats=app.get('categories','')
+        if not wanted.search(cats) or skip.search(app.get('name','')+' '+app.get('exec','')): continue
+        key=app.get('name','').casefold()
+        if key in seen: continue
+        seen.add(key); out.append(app)
+    order=['vlc','celluloid','rhythmbox','audacious','clementine','strawberry','lollypop','elisa','mpv','totem','spotify']
+    out.sort(key=lambda a: next((i for i, k in enumerate(order) if k in (a.get('exec','')+a.get('name','')).casefold()), 50))
+    return out[:6]
+
+
 class SoundPopup(PopupFrame):
-    """Volume, mute and output device."""
+    """Launch player, volume with mute, output device and sound settings."""
     def __init__(self, panel):
         super().__init__(panel); self.panel=panel
-        self.box.setFixedWidth(330); self.setAccessibleName('Sound')
+        self.box.setFixedWidth(340); self.setAccessibleName('Sound')
         st=panel.last_status or {}
-        head, self.head_icon, self.subtitle = popup_header('audio-volume-high','Sound','Output device')
-        self.v.addLayout(head)
-        card=QFrame(); card.setObjectName('acCard'); row=QHBoxLayout(card); row.setContentsMargins(10,8,12,8); row.setSpacing(10)
+        players=media_player_apps()
+        if players:
+            head=QPushButton(_('Launch player')); head.setObjectName('menuLink'); head.setCheckable(True); head.setChecked(True)
+            head.setStyleSheet('font-weight:800;')
+            self.v.addWidget(head)
+            self.player_box=QWidget(); pl=QVBoxLayout(self.player_box); pl.setContentsMargins(0,0,0,0); pl.setSpacing(2)
+            for app in players:
+                b=QPushButton(); b.setObjectName('netRow'); b.setCursor(Qt.PointingHandCursor); b.setAccessibleName(app.get('name',''))
+                lay=QHBoxLayout(b); lay.setContentsMargins(10,3,8,3)
+                name=QLabel(app.get('name','')); name.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(name, 1)
+                ic=QLabel(); ic.setPixmap(get_icon(app.get('icon'), 'multimedia-player').pixmap(26,26)); ic.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(ic)
+                b.setMinimumHeight(36); b.clicked.connect(lambda _=False, a=app: (self.close(), launch_app(a.get('exec',''), a.get('name',''))))
+                pl.addWidget(b)
+            self.v.addWidget(self.player_box)
+            head.toggled.connect(lambda on: (self.player_box.setVisible(on), self.refit()))
+            line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        row=QHBoxLayout(); row.setSpacing(10)
         self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(20,20)); self.mute.setAccessibleName('Mute')
         self.mute.setChecked(bool(st.get('muted'))); self.mute.toggled.connect(self.toggle_mute); row.addWidget(self.mute)
         self.slider=QSlider(Qt.Horizontal); self.slider.setRange(0,100); self.slider.setAccessibleName('Volume'); row.addWidget(self.slider,1)
         self.value=QLabel(''); self.value.setFixedWidth(42); self.value.setAlignment(Qt.AlignRight|Qt.AlignVCenter); row.addWidget(self.value)
         vol=st.get('volume'); self.slider.setEnabled(vol is not None); self.slider.setValue(50 if vol is None else int(vol)); self.value.setText(f'{self.slider.value()}%' if vol is not None else '—')
-        self.v.addWidget(card)
+        self.v.addLayout(row)
+        self.subtitle=QLabel(''); self.subtitle.setObjectName('popSub'); self.v.addWidget(self.subtitle)
         self.devices=QComboBox(); self.devices.setAccessibleName('Output device'); self.devices.setVisible(False); self.devices.activated.connect(self.choose_device); self.v.addWidget(self.devices)
-        foot=QHBoxLayout()
-        settings=QPushButton(get_icon('preferences-desktop-sound','audio-volume-high'),' Sound Settings'); settings.clicked.connect(lambda: (self.close(), launch_app('pavucontrol-qt'))); foot.addWidget(settings)
-        self.v.addLayout(foot)
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        settings=link_row('Sound Settings', 'preferences-desktop-sound'); settings.clicked.connect(lambda: (self.close(), launch_app('pavucontrol-qt' if shutil.which('pavucontrol-qt') else 'pavucontrol'))); self.v.addWidget(settings)
         self._timer=QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self.apply_volume)
         self.slider.valueChanged.connect(lambda v: (self.value.setText(f'{v}%'), self.update_icons(), self._timer.start(60)))
         self.update_icons()
@@ -2736,22 +2941,23 @@ class SoundPopup(PopupFrame):
     def update_icons(self):
         muted=self.mute.isChecked(); v=self.slider.value()
         name='audio-volume-muted' if muted or v == 0 else ('audio-volume-low' if v < 34 else 'audio-volume-medium' if v < 67 else 'audio-volume-high')
-        self.mute.setIcon(get_icon(name,'audio-volume-high')); self.head_icon.setPixmap(get_icon(name,'audio-volume-high').pixmap(30,30))
+        self.mute.setIcon(get_icon(name,'audio-volume-high'))
 
     def fill_devices(self, data):
         sinks=data.get('sinks') or []
         current=next((s for s in sinks if s.get('name') == data.get('default')), sinks[0] if sinks else None)
-        self.subtitle.setText((current or {}).get('description') or ('No output device' if not sinks else 'Output device'))
+        self.subtitle.setText((current or {}).get('description') or (_('No output device') if not sinks else ''))
         if len(sinks) > 1:
+            self.subtitle.hide()
             for sink in sinks:
                 self.devices.addItem(get_icon('audio-card','audio-speakers'), sink.get('description') or sink['name'], sink['name'])
             self.devices.setCurrentIndex(max(0, self.devices.findData(data.get('default'))))
-            self.devices.setVisible(True); self.adjustSize()
+            self.devices.setVisible(True); self.refit()
 
     def choose_device(self, index):
         name=self.devices.itemData(index)
         if name:
-            safe_popen(['pactl','set-default-sink',name]); self.subtitle.setText(self.devices.itemText(index))
+            safe_popen(['pactl','set-default-sink',name])
             QTimer.singleShot(400, self.panel.update_status_icons)
 
     def toggle_mute(self, on):
@@ -2767,6 +2973,233 @@ class SoundPopup(PopupFrame):
         try: self.worker.ready.disconnect(self.fill_devices)
         except (TypeError, RuntimeError): pass
         super().closeEvent(e)
+
+
+def battery_model():
+    for b in sorted(Path('/sys/class/power_supply').glob('BAT*')):
+        parts=[]
+        for f in ('manufacturer', 'model_name'):
+            try:
+                v=(b/f).read_text().strip()
+                if v and v not in parts: parts.append(v)
+            except Exception:
+                pass
+        return ' '.join(parts)
+    return ''
+
+
+def duration_words(minutes):
+    h, m=divmod(int(minutes), 60)
+    if h and m: return _('{h} hours {m} minutes').replace('{h}', str(h)).replace('{m}', str(m)) if h > 1 else _('1 hour {m} minutes').replace('{m}', str(m))
+    if h: return _('{h} hours').replace('{h}', str(h)) if h > 1 else _('1 hour')
+    return _('{m} minutes').replace('{m}', str(m))
+
+
+def power_profiles():
+    """(['power-saver', 'balanced', 'performance'], 'balanced') or ([], '')."""
+    if not shutil.which('powerprofilesctl'): return [], ''
+    out=_run_text(['powerprofilesctl', 'list'], timeout=2) or ''
+    names=[]; current=''
+    for line in out.splitlines():
+        m=re.match(r'^(\*?)\s*([a-z-]+):\s*$', line.strip())
+        if m:
+            names.append(m.group(2))
+            if m.group(1): current=m.group(2)
+    return names, current
+
+
+class BatteryPopup(PopupFrame):
+    """Battery level, model and time left, screen brightness and the power
+    profile (power-profiles-daemon), like the power menu of other desktops."""
+    PROFILE_LABELS={'power-saver': 'Power Saver', 'balanced': 'Balanced', 'performance': 'Performance'}
+    def __init__(self, panel):
+        super().__init__(panel); self.panel=panel
+        self.box.setFixedWidth(360); self.setAccessibleName('Battery')
+        info=battery_info()
+        head=QHBoxLayout(); head.setSpacing(10)
+        ic=QLabel(); ic.setPixmap(get_icon('battery-good-charging' if info and 'charg' in info['status'].lower() and 'dis' not in info['status'].lower() else 'battery-good', 'battery').pixmap(28,28)); head.addWidget(ic)
+        title=QLabel((f"{info['capacity']}%  " if info else '')+(battery_model() or _('Battery'))); title.setObjectName('popTitle'); head.addWidget(title, 1)
+        self.v.addLayout(head)
+        sub=QLabel(self.status_text(info)); sub.setObjectName('popSub'); sub.setWordWrap(True); self.v.addWidget(sub)
+        level, method=read_brightness()
+        if method:
+            row=QHBoxLayout(); row.setSpacing(10)
+            sun=QLabel(); sun.setPixmap(get_icon('display-brightness-symbolic','video-display').pixmap(20,20)); row.addWidget(sun)
+            self.bright=QSlider(Qt.Horizontal); self.bright.setRange(SOFTWARE_BRIGHTNESS_MIN if method == 'xrandr' else 5, 100); self.bright.setValue(int(level or 100)); self.bright.setAccessibleName(_('Brightness'))
+            row.addWidget(self.bright, 1); self.v.addLayout(row)
+            self._bt=QTimer(self); self._bt.setSingleShot(True); self._bt.timeout.connect(lambda m=method: set_brightness(self.bright.value(), m))
+            self.bright.valueChanged.connect(lambda *_: self._bt.start(60))
+        names, current=power_profiles()
+        if names:
+            line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+            self.profile_buttons={}
+            for name in names:
+                b=QPushButton(('●  ' if name == current else '     ')+_(self.PROFILE_LABELS.get(name, name.title())))
+                b.setObjectName('menuLink'); b.setCursor(Qt.PointingHandCursor)
+                if name == current: b.setStyleSheet('font-weight:800;')
+                b.clicked.connect(lambda _=False, n=name: self.set_profile(n)); self.v.addWidget(b); self.profile_buttons[name]=b
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        settings=link_row('Power Settings', 'preferences-system-power-management')
+        settings.clicked.connect(lambda: (self.close(), launch_app('lxqt-config-powermanagement'))); self.v.addWidget(settings)
+
+    @staticmethod
+    def status_text(info):
+        if not info: return _('No battery detected')
+        st=info['status'].lower(); m=info.get('minutes')
+        if 'dis' in st:
+            return _('Using battery power')+(' – '+_('{t} remaining').replace('{t}', duration_words(m)) if m else '')
+        if 'charg' in st:
+            return _('Charging')+(' – '+_('{t} until full').replace('{t}', duration_words(m)) if m else '')
+        if 'full' in st: return _('Fully charged')
+        return _('Plugged in')
+
+    def set_profile(self, name):
+        safe_popen(['powerprofilesctl', 'set', name])
+        for n, b in self.profile_buttons.items():
+            b.setText(('●  ' if n == name else '     ')+_(self.PROFILE_LABELS.get(n, n.title()))); b.setStyleSheet('font-weight:800;' if n == name else '')
+
+
+class BluetoothWorker(QThread):
+    """Adapter state and the known / found devices (bluetoothctl)."""
+    ready=pyqtSignal(object)
+    def __init__(self, parent, scan=False):
+        super().__init__(parent); self.scan=scan
+    def run(self):
+        res={'tool': shutil.which('bluetoothctl') is not None, 'powered': False, 'devices': []}
+        if res['tool']:
+            if self.scan:
+                _run_text(['bluetoothctl', '--timeout', '8', 'scan', 'on'], timeout=12)
+            show=_run_text(['bluetoothctl', 'show'], timeout=3) or ''
+            res['powered']='Powered: yes' in show
+            devices={}
+            for line in (_run_text(['bluetoothctl', 'devices'], timeout=3) or '').splitlines():
+                m=re.match(r'Device ([0-9A-F:]{17}) (.*)', line.strip())
+                if m: devices[m.group(1)]={'mac': m.group(1), 'name': m.group(2), 'paired': False, 'connected': False, 'icon': 'bluetooth'}
+            for mac, d in list(devices.items())[:20]:
+                info=_run_text(['bluetoothctl', 'info', mac], timeout=3) or ''
+                d['paired']='Paired: yes' in info; d['connected']='Connected: yes' in info
+                m=re.search(r'Icon: (\S+)', info)
+                if m: d['icon']=m.group(1)
+                m=re.search(r'Alias: (.+)', info)
+                if m: d['name']=m.group(1).strip()
+            res['devices']=sorted(devices.values(), key=lambda d: (not d['connected'], not d['paired'], d['name'].casefold()))
+        self.ready.emit(res)
+
+
+class BluetoothPopup(PopupFrame):
+    """Bluetooth on/off, devices (connect, disconnect, pair) and searching,
+    all inside the popup. Blueman opens only for its own settings."""
+    def __init__(self, panel):
+        super().__init__(panel); self.panel=panel; self.proc=None; self.worker=None
+        self.box.setFixedWidth(360); self.setAccessibleName('Bluetooth')
+        st=panel.last_status or {}
+        row, self.switch, self.sub=switch_row('Bluetooth', '')
+        self.switch.setChecked(bool(st.get('bt_on'))); self.switch.clicked.connect(self.toggle_power); self.v.addWidget(row)
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        self.list_widget=QWidget(); self.list_layout=QVBoxLayout(self.list_widget); self.list_layout.setContentsMargins(0,0,0,0); self.list_layout.setSpacing(2)
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(self.list_widget); scroll.setFixedHeight(220); self.v.addWidget(scroll)
+        self.message=QLabel(''); self.message.setObjectName('popHint'); self.message.setWordWrap(True); self.message.hide(); self.v.addWidget(self.message)
+        line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
+        self.search=link_row('Search for devices', 'edit-find'); self.search.clicked.connect(lambda: self.refresh(scan=True)); self.v.addWidget(self.search)
+        if shutil.which('blueman-manager'):
+            more=link_row('Bluetooth Settings', 'preferences-system-bluetooth'); more.clicked.connect(lambda: (self.close(), launch_app('blueman-manager'))); self.v.addWidget(more)
+        self.refresh()
+
+    def note(self, text, error=False):
+        self.message.setVisible(bool(text)); self.message.setText(text); self.message.setStyleSheet('color:#d93f3f;' if error else '')
+        QTimer.singleShot(0, self.refit)
+
+    def clear(self):
+        while self.list_layout.count():
+            it=self.list_layout.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+
+    def placeholder(self, text):
+        self.clear(); lab=QLabel(text); lab.setObjectName('popSub'); lab.setAlignment(Qt.AlignCenter); lab.setWordWrap(True)
+        self.list_layout.addWidget(lab); self.list_layout.addStretch()
+
+    def refresh(self, scan=False):
+        if self.worker is not None: return
+        self.placeholder(_('Searching for devices…') if scan else _('Loading…'))
+        self.search.setEnabled(False)
+        w=BluetoothWorker(self.panel, scan); self.worker=w
+        w.ready.connect(self.fill); w.finished.connect(lambda: (setattr(self, 'worker', None), self.search.setEnabled(True) if not sip_deleted(self.search) else None)); w.finished.connect(w.deleteLater); w.start()
+
+    def closeEvent(self, e):
+        if self.worker is not None:
+            try: self.worker.ready.disconnect(self.fill)
+            except (TypeError, RuntimeError): pass
+        super().closeEvent(e)
+
+    def fill(self, res):
+        if not res.get('tool'):
+            self.placeholder(_('bluetoothctl is not installed.')); return
+        self.switch.setChecked(res['powered']); self.sub.setVisible(True)
+        if not res['powered']:
+            self.sub.setText(_('Off')); self.placeholder(_('Bluetooth is off.')); return
+        connected=[d['name'] for d in res['devices'] if d['connected']]
+        self.sub.setText(_('Connected to {n}').replace('{n}', ', '.join(connected)) if connected else _('On'))
+        if not res['devices']:
+            self.placeholder(_('No devices yet. Switch the device to pairing mode and press "Search for devices".')); return
+        self.clear()
+        for d in res['devices']:
+            b=QPushButton(); b.setObjectName('netRow'); b.setProperty('active', d['connected']); b.setCursor(Qt.PointingHandCursor)
+            lay=QHBoxLayout(b); lay.setContentsMargins(8,3,8,3); lay.setSpacing(8)
+            ic=QLabel(); ic.setPixmap(get_icon(d['icon'], 'bluetooth').pixmap(20,20)); lay.addWidget(ic)
+            name=QLabel(d['name']); name.setTextFormat(Qt.PlainText); name.setStyleSheet('font-weight:%s;' % ('800' if d['connected'] else '600')); lay.addWidget(name, 1)
+            state=QLabel(_('Connected') if d['connected'] else _('Paired') if d['paired'] else _('New')); state.setObjectName('popSub'); lay.addWidget(state)
+            for w in b.findChildren(QLabel): w.setAttribute(Qt.WA_TransparentForMouseEvents)
+            b.setMinimumHeight(34); b.setAccessibleName(d['name']+', '+state.text())
+            b.clicked.connect(lambda _=False, dev=d: self.choose(dev))
+            self.list_layout.addWidget(b)
+        self.list_layout.addStretch()
+
+    def choose(self, d):
+        mac=d['mac']; name=d['name']
+        if d['connected']:
+            self.run([['disconnect', mac]], _('{n} disconnected.').replace('{n}', name))
+        elif d['paired']:
+            self.run([['connect', mac]], _('Connected to {n}').replace('{n}', name))
+        else:
+            # Pair, trust (reconnects by itself next time) and connect.
+            self.run([['pair', mac], ['trust', mac], ['connect', mac]], _('Connected to {n}').replace('{n}', name))
+
+    def run(self, steps, success):
+        if self.proc is not None: return
+        self.note(_('Working…'))
+        steps=list(steps)
+        def next_step():
+            if not steps:
+                self.note('✓ '+success); QTimer.singleShot(500, self.refresh); QTimer.singleShot(800, self.panel.update_status_icons); return
+            args=steps.pop(0)
+            proc=QProcess(self); proc.setProcessChannelMode(QProcess.MergedChannels); self.proc=proc
+            def done(code, _st, p=proc, a=args):
+                out=bytes(p.readAll()).decode('utf-8', 'replace'); self.proc=None; p.deleteLater()
+                bad=code != 0 or re.search(r'Failed|not available|Error', out)
+                if bad and a[0] != 'trust':
+                    last=[l for l in out.splitlines() if l.strip()][-1:] or [_('unknown error')]
+                    self.note(_('Could not do this: {m}').replace('{m}', last[0].strip())+('\n'+_('Devices that show a code need Bluetooth Settings.') if a[0] == 'pair' else ''), error=True)
+                    return
+                next_step()
+            proc.finished.connect(done)
+            proc.start('bluetoothctl', ['--agent', 'NoInputNoOutput', '--timeout', '20']+args if args[0] == 'pair' else args)
+        next_step()
+
+    def toggle_power(self, on):
+        if on and shutil.which('rfkill'):
+            safe_popen(['rfkill', 'unblock', 'bluetooth'])
+        QTimer.singleShot(300 if on else 0, lambda: safe_popen(['bluetoothctl', 'power', 'on' if on else 'off']))
+        self.panel.last_status['bt_on']=on
+        QTimer.singleShot(1500, self.refresh); QTimer.singleShot(1200, self.panel.update_status_icons)
+
+
+def sip_deleted(obj):
+    try:
+        from PyQt5 import sip
+        return sip.isdeleted(obj)
+    except Exception:
+        return False
 
 
 class HoverCard(QFrame):
@@ -2834,6 +3267,7 @@ class ClockButton(QPushButton):
     blink in the accent color."""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.colon_on=True
         self.lines=['', '']; self.old=''; self.slide=1.0; self.fade=1.0; self.alarm=False; self.ac_open=False; self._hot=False
         self.opts=clock_options(); self.vertical=False
         self.anim=QTimer(self); self.anim.setInterval(16); self.anim.timeout.connect(self.step); self._clock=QElapsedTimer()
@@ -2858,7 +3292,9 @@ class ClockButton(QPushButton):
     def set_lines(self, lines):
         lines=list(lines)
         if lines != self.lines:
-            if self.lines[0] and lines[0] != self.lines[0] and not self.vertical:
+            minute=lambda t: re.sub(r'\D', '', t)[:4]
+            # Only a new minute slides in (not every second).
+            if self.lines[0] and minute(lines[0]) != minute(self.lines[0]) and not self.vertical:
                 self.old=self.lines[0]; self.slide=0.0; self.start()
             self.lines=lines; self.updateGeometry(); self.update()
 
@@ -2951,10 +3387,22 @@ class ClockButton(QPushButton):
         if self.slide < 1.0 and self.old:
             c=QColor(ink); c.setAlphaF(1.0-self.slide); p.setPen(c)
             p.drawText(QRectF(rect.x(), y+off-h, rect.width(), h), align, self.old)
-        p.setPen(ink); p.drawText(QRectF(rect.x(), y+off, rect.width(), h), align, self.lines[0]); p.restore()
+        self.draw_time(p, QRectF(rect.x(), y+off, rect.width(), h), align, self.lines[0], ink, fm_b); p.restore()
         y+=h; soft=QColor(ink); soft.setAlpha(170); p.setFont(small); p.setPen(soft)
         for t in self.lines[1:]:
             p.drawText(QRectF(rect.x(), y, rect.width(), fm_s.height()), align, t); y+=fm_s.height()
+
+    def draw_time(self, p, r, align, text, ink, fm):
+        """The time; with the blinking option the colons fade out and in
+        without moving the digits."""
+        if self.colon_on or ':' not in text:
+            p.setPen(ink); p.drawText(r, align, text); return
+        w=fm.horizontalAdvance(text)
+        x=r.x() if align & Qt.AlignLeft else (r.right()-w if align & Qt.AlignRight else r.x()+(r.width()-w)/2)
+        faint=QColor(ink); faint.setAlpha(40)
+        for ch in text:
+            p.setPen(faint if ch == ':' else ink)
+            cw=fm.horizontalAdvance(ch); p.drawText(QRectF(x, r.y(), cw+2, r.height()), Qt.AlignLeft | Qt.AlignVCenter, ch); x+=cw
 
     def paint_dial(self, p, r):
         now=QTime.currentTime(); ink=self.ink(); acc=QColor(self.opts.get('color') or theme_accent()) if not self.alarm else QColor('#ffffff')
@@ -3167,17 +3615,27 @@ class EdukaPanel(QWidget):
         if high_contrast or not self._composited or alpha_override: alpha=1.0
         self.apply_orientation(cfg, h)
         screen=QApplication.primaryScreen().geometry(); edge=self.edge
+        shape=panel_style(cfg); self.shape=shape
+        gap=0 if shape == 'full' else 5
         if self.vertical:
-            th=max(48, h); length=int(screen.height()*width/100)
-            w, hh = th, min(length, screen.height()-10)
-            x=screen.x()+5 if edge == 'Left' else screen.x()+screen.width()-th-5
+            th=max(48, h)
+            if shape == 'full': length=screen.height()
+            elif shape == 'short': length=int(screen.height()*min(width, 64)/100)
+            elif shape == 'dock': length=self.dock_length(screen.height())
+            else: length=int(screen.height()*width/100)
+            w, hh = th, min(length, screen.height()-(0 if shape == 'full' else 10))
+            x=screen.x()+gap if edge == 'Left' else screen.x()+screen.width()-th-gap
             y=screen.y()+int((screen.height()-hh)/2)
             self.setGeometry(x,y,w,hh); self.setFixedSize(w,hh); self.thickness=th
         else:
-            w=int(screen.width()*width/100); x=screen.x()+int((screen.width()-w)/2)
-            y=screen.y()+5 if edge == 'Top' else screen.y()+screen.height()-h-5
+            if shape == 'full': w=screen.width()
+            elif shape == 'short': w=int(screen.width()*min(width, 64)/100)
+            elif shape == 'dock': w=self.dock_length(screen.width())
+            else: w=int(screen.width()*width/100)
+            x=screen.x()+int((screen.width()-w)/2)
+            y=screen.y()+gap if edge == 'Top' else screen.y()+screen.height()-h-gap
             self.setGeometry(x,y,w,h); self.setFixedSize(w,h); self.thickness=h
-        radius=int(min(self.width(), self.height())/2.3); bg_alpha=int(alpha*255)
+        radius=0 if shape == 'full' else int(min(self.width(), self.height())/2.3); bg_alpha=int(alpha*255)
         if self._composited:
             self.clearMask()
         else:
@@ -3246,6 +3704,12 @@ class EdukaPanel(QWidget):
             self.bg.setStyleSheet(self.bg.styleSheet()+self.multicolor_qss(theme, dark or trans, radius, bg_alpha))
             for i, w in enumerate([self.start, *self.quick_launchers.values(), self.drives_button, self.touchpad_button, self.net, self.bt, self.printer, self.battery, self.vol, self.eus, self.notif]):
                 w.setProperty('mc', str(i % len(MULTI_COLORS)))
+        if not high_contrast:
+            # Clean tray (0.9.24): the icons sit straight on the panel, without
+            # the white box behind them; only the clock keeps its frame (it
+            # opens the Action Center).
+            self.bg.setStyleSheet(self.bg.styleSheet()+'QFrame#trayGroup{background:transparent;border:0;} QPushButton#batteryButton{background:transparent;}'
+                                  +('QFrame#panelBg{border-left:0;border-right:0;'+('border-top:0;' if self.edge == 'Top' else 'border-bottom:0;')+'}' if shape == 'full' else ''))
         if self.edge != 'Bottom':
             # The accent line of the active task faces away from the screen edge.
             line={'Top':'border-top:3px','Left':'border-left:3px','Right':'border-right:3px'}[self.edge]
@@ -3257,9 +3721,11 @@ class EdukaPanel(QWidget):
         menu_icon=cfg.get('menu_icon',START_ICON)
         icon_h=max(16, min(int(cfg.get('menu_icon_size',26)), h-8))
         self.start.setIcon(get_icon(menu_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
-        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) and not self.vertical else '')
+        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) and not self.vertical and getattr(self, 'shape', '') != 'dock' else '')
         if self.vertical:
             self.start.setFixedSize(self.thickness-10, self.thickness-10)
+        elif getattr(self, 'shape', '') == 'dock':
+            self.start.setFixedSize(self.thickness-6, self.thickness-8)
         else:
             self.start.setMinimumSize(0, 0); self.start.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
         for b in [self.net,self.bt,self.printer,self.battery,self.vol,self.eus,self.notif]: b.setIconSize(QSize(icon_size,icon_size))
@@ -3273,6 +3739,23 @@ class EdukaPanel(QWidget):
             self.show(); self.raise_(); QTimer.singleShot(80, lambda hh=h: self.reserve_screen_space(hh))
         self.update_clock(); QTimer.singleShot(0, self.update_tasks)
         QTimer.singleShot(220, self.enforce_window_space)
+
+    def dock_length(self, limit):
+        """Dock: as long as its buttons need (centered), at least 360 px."""
+        hint=self.layout.sizeHint()
+        want=(hint.height() if self.vertical else hint.width())+24
+        return int(max(360, min(want, limit*0.96)))
+
+    def refit_dock(self):
+        if getattr(self, 'shape', '') != 'dock' or self._fullscreen_hidden: return
+        screen=QApplication.primaryScreen().geometry()
+        length=self.dock_length(screen.height() if self.vertical else screen.width())
+        if abs(length-(self.height() if self.vertical else self.width())) < 6: return
+        if self.vertical:
+            y=screen.y()+int((screen.height()-length)/2); self.setFixedSize(self.width(), length); self.move(self.x(), y)
+        else:
+            x=screen.x()+int((screen.width()-length)/2); self.setFixedSize(length, self.height()); self.move(x, self.y())
+        QTimer.singleShot(60, lambda: self.reserve_screen_space(self.thickness))
 
     def apply_orientation(self, cfg, h):
         """Lay the panel out along the chosen screen edge."""
@@ -3421,6 +3904,8 @@ class EdukaPanel(QWidget):
     def task_button_metrics(self, count):
         if self.vertical:
             return self.thickness-10, True
+        if getattr(self, 'shape', '') == 'dock':
+            return self.thickness-6, True          # dock: icons only
         available=max(120, self.width() - 420)
         count=max(1, int(count or 1))
         min_w=int(self.current_cfg.get('taskbar_min_button_width',46))
@@ -3604,6 +4089,11 @@ class EdukaPanel(QWidget):
         for edge, label, icon in (('Bottom','Bottom','go-down'),('Top','Top','go-up'),('Left','Left','go-previous'),('Right','Right','go-next')):
             act=where.addAction(get_icon(icon), label); act.setCheckable(True); act.setChecked(self.edge == edge); group.addAction(act)
             act.triggered.connect(lambda _=False, e=edge: self.set_position(e))
+        shape_menu=m.addMenu(get_icon('view-split-left-right', 'transform-scale'), 'Panel Style')
+        group3=QActionGroup(shape_menu); current_shape=panel_style(self.current_cfg)
+        for key, label in PANEL_STYLES:
+            act=shape_menu.addAction(QIcon(panel_style_preview(key, 48, 30, theme_accent(), is_dark_theme())), label); act.setCheckable(True); act.setChecked(key == current_shape); group3.addAction(act)
+            act.triggered.connect(lambda _=False, k=key: (save_panel_config({'panel_style': k}), self.load_config(), self.update_tasks()))
         style_menu=m.addMenu(get_icon('view-list-icons'), 'Taskbar Buttons')
         group2=QActionGroup(style_menu)
         for label in ['Icon and Text', 'Icon only', 'Text only']:
@@ -3843,7 +4333,11 @@ class EdukaPanel(QWidget):
         if getattr(self, 'vertical', False):
             text=now.toString('HH\nmm') if clock_settings()[1] == '24h' else now.toString('h:mm\nAP')
         else:
-            text=format_clock(now.time(), clock_settings()[1])+'\n'+QLocale().toString(now.date(), 'ddd d MMM')
+            pcfg=self.current_cfg if getattr(self, 'current_cfg', None) else read_panel_config()
+            secs=bool(pcfg.get('panel_clock_seconds', False))
+            text=format_clock(now.time(), clock_settings()[1], secs)+'\n'+QLocale().toString(now.date(), 'ddd d MMM')
+            # Blinking colon: the colon fades every other second (same width).
+            self.clock.colon_on=not (bool(pcfg.get('panel_clock_blink', False)) and now.time().second() % 2)
         self.clock.vertical=getattr(self, 'vertical', False)
         self.clock.set_options(clock_options())
         self.clock.set_lines(text.split('\n'))
@@ -4102,6 +4596,8 @@ class EdukaPanel(QWidget):
         for wid, button in self.buttons.items():
             if wid in current:
                 self.set_window_icon_geometry(wid, button)
+        if getattr(self, 'shape', '') == 'dock':
+            QTimer.singleShot(0, self.refit_dock)
         registry_update('panel', {'task_count': len(current), 'tasks': current, 'pinned_count': len(pinned_keys), 'visible_pinned_count': len(visible_pins), 'icon_theme': QIcon.themeName(), 'panel_locked_width': self.width(), 'version': VERSION})
         # The workarea timer already repairs stacking regularly; only react
         # immediately when focus moved to another window.
@@ -4234,10 +4730,22 @@ class EdukaPanel(QWidget):
         self._show_context(m, self.net, pos)
 
     def bluetooth_context(self, pos):
+        """The usual Bluetooth commands (Blueman when it is installed)."""
         m=RoundedMenu(self)
+        on=bool((self.last_status or {}).get('bt_on'))
         m.addAction(get_icon('bluetooth'), 'Bluetooth Devices', self.bluetooth_popup)
-        m.addAction(get_icon('preferences-system-bluetooth'), 'Open Bluetooth Manager', lambda: launch_app('blueman-manager'))
+        m.addAction(get_icon('system-shutdown' if on else 'bluetooth'), 'Turn Bluetooth Off' if on else 'Turn Bluetooth On', lambda: self.set_bluetooth(not on))
+        m.addSeparator()
+        for cmd, icon, label in (('blueman-manager', 'preferences-system-bluetooth', 'Bluetooth Manager'), ('blueman-sendto', 'document-send', 'Send Files to Device…'),
+                                 ('blueman-adapters', 'preferences-system', 'Adapter Settings'), ('blueman-services', 'preferences-system-network', 'Local Services')):
+            if shutil.which(cmd):
+                m.addAction(get_icon(icon, 'bluetooth'), label, lambda c=cmd: launch_app(c))
         self._show_context(m, self.bt, pos)
+
+    def set_bluetooth(self, on):
+        if on and shutil.which('rfkill'): safe_popen(['rfkill', 'unblock', 'bluetooth'])
+        QTimer.singleShot(300 if on else 0, lambda: safe_popen(['bluetoothctl', 'power', 'on' if on else 'off']))
+        QTimer.singleShot(1200, self.update_status_icons)
 
     def printer_context(self, pos):
         m=RoundedMenu(self)
@@ -4316,6 +4824,12 @@ class EdukaPanel(QWidget):
     def clock_context(self, pos):
         m=RoundedMenu(self)
         m.addAction(get_icon('office-calendar'), 'Action Center', self.toggle_action_center)
+        m.addSeparator()
+        cfg=read_panel_config()
+        for key, label in (('panel_clock_seconds', 'Show seconds'), ('panel_clock_blink', 'Blinking colon')):
+            act=m.addAction(label); act.setCheckable(True); act.setChecked(bool(cfg.get(key, False)))
+            act.toggled.connect(lambda on, k=key: (save_panel_config({k: bool(on)}), self.current_cfg.update({k: bool(on)}), self.update_clock()))
+        m.addSeparator()
         m.addAction(get_icon('preferences-system-time'), 'Date and Time Settings', lambda: launch_app('lxqt-admin-time'))
         self._show_context(m, self.clock, pos)
 
@@ -4414,6 +4928,7 @@ class EdukaPanel(QWidget):
         safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(250, self.update_status_icons)
     def show_popup_above(self,popup,anchor):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2, anchor.height()//2))
+        popup._anchor=(self, g)
         popup.move(self.popup_position(popup.width(), popup.height(), g)); popup.show()
     def volume_popup(self):
         self.show_popup_above(SoundPopup(self), self.vol)
@@ -4452,15 +4967,9 @@ class EdukaPanel(QWidget):
     def battery_info(self):
         return battery_info()
     def battery_popup(self):
-        info=self.battery_info(); p=PopupFrame(self); p.v.addWidget(QLabel('<b>Battery</b>'))
-        if info:
-            left=battery_time_text(info)
-            p.v.addWidget(QLabel(f"{info['capacity']}% • {_(info['status'])}"))
-            if left: p.v.addWidget(QLabel((_('{t} until full') if info['status'].lower() == 'charging' else _('{t} left')).replace('{t}', left)))
-        else:
-            p.v.addWidget(QLabel('No battery detected'))
-        self.show_popup_above(p,self.battery)
-    def bluetooth_popup(self): p=PopupFrame(self); p.v.addWidget(QLabel('<b>Bluetooth</b>')); p.v.addWidget(QLabel('Use Bluetooth manager to pair devices.')); b=QPushButton('Open Bluetooth'); b.clicked.connect(lambda: launch_app('blueman-manager')); p.v.addWidget(b); self.show_popup_above(p,self.bt)
+        self.show_popup_above(BatteryPopup(self), self.battery)
+    def bluetooth_popup(self):
+        self.show_popup_above(BluetoothPopup(self), self.bt)
     def network_popup(self):
         self.show_popup_above(NetworkPopup(self), self.net)
 
