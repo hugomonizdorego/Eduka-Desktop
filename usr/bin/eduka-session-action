@@ -1,5 +1,159 @@
 #!/usr/bin/env python3
-import sys
-sys.path.insert(0,'/usr/lib/edukasaun-desktop')
-from eduka_common import session_action
-session_action(sys.argv[1] if len(sys.argv)>1 else 'logout')
+"""Eduka leave screen: Lock, Log Out, Restart and Shut Down.
+
+eduka-session-action shutdown   show the leave screen with Shut Down chosen
+eduka-session-action --now X    run X at once (lock, logout, restart, shutdown)
+
+The screen dims the desktop, shows the four actions as large round buttons
+and runs the chosen one after a short countdown, so one misclick in a
+classroom never powers a computer off. Escape or a click on the dim area
+cancels.
+"""
+import sys, os
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import *
+from eduka_common import _
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+
+ACTIONS = ['lock', 'logout', 'restart', 'shutdown']
+ICONS = {'lock': 'system-lock-screen', 'logout': 'system-log-out', 'restart': 'system-reboot', 'shutdown': 'system-shutdown'}
+COUNTDOWN = 30
+QUESTION = {'logout': 'Log out of Eduka-Desktop?', 'restart': 'Restart this computer?', 'shutdown': 'Shut down this computer?'}
+
+
+class ActionButton(QToolButton):
+    def __init__(self, action, accent, parent=None):
+        super().__init__(parent)
+        self.action=action
+        self.setObjectName('leaveButton'); self.setCheckable(True); self.setCursor(Qt.PointingHandCursor)
+        self.setIcon(get_icon(ICONS[action], 'system-shutdown')); self.setIconSize(QSize(40, 40))
+        self.setText(tr(action)); self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.setFixedSize(116, 118); self.setAccessibleName(tr(action))
+
+
+class LeaveScreen(QWidget):
+    def __init__(self, action):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.lang=ui_language(); self.composited=compositor_running(force=True)
+        if self.composited:
+            self.setAttribute(Qt.WA_TranslucentBackground)
+        dark=is_dark_theme()
+        accent=theme_accent()
+        card_bg='rgba(38,38,38,245)' if dark else 'rgba(255,255,255,248)'
+        text='#ffffff' if dark else '#10231e'; sub='rgba(255,255,255,160)' if dark else '#5b6e69'
+        tile='rgba(255,255,255,16)' if dark else '#f1f6f4'
+        border='rgba(255,255,255,30)' if dark else 'rgba(0,120,90,30)'
+        self.setStyleSheet(f"""
+            QFrame#card{{background:{card_bg};border:1px solid {border};border-radius:28px;}}
+            QLabel{{color:{text};background:transparent;}}
+            QLabel#title{{font-size:22px;font-weight:800;}}
+            QLabel#sub{{color:{sub};font-size:13px;}}
+            QLabel#count{{color:{accent};font-size:13px;font-weight:700;}}
+            QToolButton#leaveButton{{background:{tile};border:1px solid {border};border-radius:24px;color:{text};font-size:13px;font-weight:700;padding:10px 4px 8px 4px;}}
+            QToolButton#leaveButton:hover{{border:1px solid {accent};}}
+            QToolButton#leaveButton:checked{{background:{accent};border:1px solid {accent};color:#ffffff;}}
+            QToolButton#leaveButton[danger="true"]:checked{{background:#e5484d;border:1px solid #e5484d;}}
+            QPushButton{{border-radius:16px;padding:9px 22px;font-size:13px;font-weight:800;}}
+            QPushButton#cancel{{background:{tile};color:{text};border:1px solid {border};}}
+            QPushButton#cancel:hover{{border:1px solid {accent};}}
+            QPushButton#go{{background:{accent};color:#ffffff;border:1px solid {accent};}}
+            QPushButton#go[danger="true"]{{background:#e5484d;border:1px solid #e5484d;}}
+        """)
+        outer=QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
+        outer.addStretch(1)
+        row=QHBoxLayout(); row.addStretch(1)
+        self.card=QFrame(); self.card.setObjectName('card')
+        v=QVBoxLayout(self.card); v.setContentsMargins(32, 26, 32, 24); v.setSpacing(14)
+        head=QHBoxLayout(); head.setSpacing(14)
+        avatar=QLabel(); avatar.setPixmap(get_icon('/usr/share/Edukasaun/Logo/Edukasaun Logo.png', START_ICON).pixmap(48, 48)); head.addWidget(avatar)
+        names=QVBoxLayout(); names.setSpacing(2)
+        self.title=QLabel(''); self.title.setObjectName('title'); names.addWidget(self.title)
+        hello=QLabel(f'{greeting_text(lang=self.lang)}, {user_display_name()}'.rstrip(', ')); hello.setObjectName('sub'); names.addWidget(hello)
+        head.addLayout(names, 1); v.addLayout(head)
+        buttons=QHBoxLayout(); buttons.setSpacing(12); self.buttons={}
+        for name in ACTIONS:
+            b=ActionButton(name, accent); b.setProperty('danger', name == 'shutdown')
+            b.clicked.connect(lambda _=False, n=name: self.choose(n, restart_timer=True))
+            buttons.addWidget(b); self.buttons[name]=b
+        v.addLayout(buttons)
+        self.sub=QLabel(_('Save your work first. Press Esc to cancel.')); self.sub.setObjectName('sub'); v.addWidget(self.sub)
+        foot=QHBoxLayout()
+        self.count=QLabel(''); self.count.setObjectName('count'); foot.addWidget(self.count, 1)
+        cancel=QPushButton(_('Cancel')); cancel.setObjectName('cancel'); cancel.clicked.connect(self.close); foot.addWidget(cancel)
+        self.go=QPushButton(''); self.go.setObjectName('go'); self.go.setDefault(True); self.go.clicked.connect(self.run); foot.addWidget(self.go)
+        v.addLayout(foot)
+        row.addWidget(self.card); row.addStretch(1); outer.addLayout(row); outer.addStretch(1)
+        self.remaining=COUNTDOWN
+        self.timer=QTimer(self); self.timer.timeout.connect(self.tick)
+        self.choose(action if action in ACTIONS else 'shutdown', restart_timer=True)
+        self.setGeometry(QApplication.primaryScreen().geometry())
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.close)
+        for i, name in enumerate(ACTIONS, 1):
+            QShortcut(QKeySequence(str(i)), self, activated=lambda n=name: self.choose(n, restart_timer=True))
+
+    def choose(self, action, restart_timer=False):
+        self.action=action
+        for name, b in self.buttons.items():
+            b.setChecked(name == action)
+        if action == 'lock':
+            self.run(); return
+        self.title.setText(_(QUESTION[action]))
+        self.go.setText(tr(action, self.lang)); self.go.setProperty('danger', action == 'shutdown')
+        self.go.style().unpolish(self.go); self.go.style().polish(self.go)
+        if restart_timer:
+            self.remaining=COUNTDOWN; self.timer.start(1000)
+        self.update_count(); self.go.setFocus()
+
+    def update_count(self):
+        self.count.setText(_('Automatically in {n} s').replace('{n}', str(self.remaining)))
+
+    def tick(self):
+        self.remaining-=1
+        if self.remaining <= 0:
+            self.run(); return
+        self.update_count()
+
+    def run(self):
+        self.timer.stop(); self.releaseKeyboard(); self.hide()
+        QApplication.processEvents()
+        session_action(self.action)
+        QTimer.singleShot(300, QApplication.instance().quit)
+
+    def paintEvent(self, e):
+        p=QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 150) if self.composited else QColor('#1e2a27'))
+
+    def mousePressEvent(self, e):
+        if not self.card.geometry().contains(e.pos()):
+            self.close()
+
+    def closeEvent(self, e):
+        self.releaseKeyboard(); self.timer.stop()
+        super().closeEvent(e)
+        QTimer.singleShot(0, QApplication.instance().quit)   # a Qt.Tool window does not end the app
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.activateWindow(); self.raise_()
+        # Keys (Esc, 1-4, Enter) work even before the window manager focuses us.
+        QTimer.singleShot(50, self.grabKeyboard)
+        if self.composited:
+            self._fade=fade_in(self, 160)
+
+
+def main():
+    args=sys.argv[1:]
+    if args[:1] == ['--now']:
+        return 0 if session_action(args[1] if len(args) > 1 else 'logout') else 1
+    action=args[0] if args else 'shutdown'
+    if action == 'lock' or not os.environ.get('DISPLAY'):
+        return 0 if session_action(action) else 1
+    app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-session-action'); icon_theme_setup()
+    w=LeaveScreen(action); w.show()
+    return app.exec_()
+
+
+if __name__ == '__main__':
+    exit_now(main())

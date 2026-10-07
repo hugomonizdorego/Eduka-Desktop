@@ -1,0 +1,67 @@
+#!/bin/sh
+# Start an Eduka-Desktop login session on top of LXQt.
+#   eduka-desktop-session            -> X11 (startlxqt)
+#   eduka-desktop-session --wayland  -> Wayland (startlxqtwayland), not listed
+#                                        on the login screen; for testing only
+# Used by /usr/share/xsessions/edukasaun-desktop.desktop.
+#
+# IMPORTANT: do not export XDG_CONFIG_DIRS here. startlxqt only adds the
+# LXQt default configuration directory (/usr/share/lxqt: window manager,
+# theme, icons) when XDG_CONFIG_DIRS is unset.
+
+mode=x11
+[ "${1:-}" = "--wayland" ] && mode=wayland
+
+# Eduka-Panel reads this to know it runs inside an Eduka-Desktop session
+# (startlxqt resets XDG_CURRENT_DESKTOP to "LXQt").
+export EDUKA_DESKTOP_SESSION="$mode"
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+
+if [ "$mode" = wayland ]; then
+    export XDG_SESSION_TYPE=wayland
+    if command -v startlxqtwayland >/dev/null 2>&1; then
+        exec startlxqtwayland
+    fi
+    echo "eduka-desktop-session: startlxqtwayland not found; install lxqt-wayland-session" >&2
+    exit 1
+fi
+
+# Language picked on the login screen. The greeter (user sddm) writes
+#   user=<name>  lang=<code>
+# to this file; only a known language for this very user is used.
+login_lang=""
+login_file=/var/lib/edukasaun-desktop/login/language
+if [ -r "$login_file" ] && [ "$(sed -n 's/^user=//p' "$login_file" | head -n1)" = "$(id -un)" ]; then
+    login_lang=$(sed -n 's/^lang=//p' "$login_file" | head -n1)
+fi
+case "$login_lang" in
+    en_US|pt_PT|pt_BR|id_ID|ms_MY|tl_PH|th_TH|vi_VN|zh_CN|zh_TW)
+        # Use the full locale when it is generated, else only the messages.
+        loc=$(locale -a 2>/dev/null | grep -i -m1 -x "${login_lang}\.utf-\?8")
+        if [ -n "$loc" ]; then
+            export LANG="$loc"
+            unset LC_MESSAGES
+        fi
+        export LANGUAGE="${login_lang}:${login_lang%%_*}"
+        ;;
+    tet)
+        export LANGUAGE="tet:pt:${LANG%%.*}" EDUKA_LOGIN_LANGUAGE=tet
+        ;;
+    *)
+        login_lang=""
+        ;;
+esac
+
+# Tetun (chosen in Eduka-Settings) has no system language pack: Eduka uses
+# its own Tetun translation, other programs fall back to Portuguese.
+eduka_menu_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/eduka-desktop/menu/settings.json"
+if [ -z "$login_lang" ] && grep -qs '"language": *"tet"' "$eduka_menu_cfg"; then
+    export LANGUAGE="tet:pt:${LANG%%.*}"
+fi
+
+if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+    . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+    eduka_ensure_window_manager "${XDG_CONFIG_HOME:-$HOME/.config}" || :
+fi
+
+exec startlxqt

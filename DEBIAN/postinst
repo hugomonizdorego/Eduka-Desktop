@@ -11,6 +11,180 @@ done
 for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do
     [ -e "$d" ] && rm -rf "$d" || true
 done
+# --- Login screen: only Eduka-Desktop -----------------------------------
+# Hide the other session entries (LXQt, Openbox, labwc, ...) from SDDM,
+# LightDM and other greeters with dpkg-divert: the files are moved, not
+# deleted, the programs stay installed (openbox/xfwm4 still run as the window
+# manager inside Eduka-Desktop), and removing this package restores them.
+hidden_dir=/usr/share/edukasaun-desktop/hidden-sessions
+for entry in \
+    /usr/share/xsessions/lxqt.desktop \
+    /usr/share/xsessions/openbox.desktop \
+    /usr/share/xsessions/openbox-kde.desktop \
+    /usr/share/wayland-sessions/labwc.desktop \
+    /usr/share/wayland-sessions/lxqt-wayland.desktop; do
+    kind=$(basename "$(dirname "$entry")")
+    target="$hidden_dir/$kind/$(basename "$entry")"
+    owner=$(dpkg-divert --listpackage "$entry" 2>/dev/null || true)
+    if [ "$owner" = "edukasaun-desktop-menu" ]; then
+        continue
+    fi
+    if [ -z "$owner" ]; then
+        mkdir -p "$hidden_dir/$kind"
+        dpkg-divert --package edukasaun-desktop-menu --add --rename --divert "$target" "$entry" >/dev/null 2>&1 || true
+    fi
+done
+# The Eduka-Desktop Wayland preview entry of 0.9.12/0.9.13 is no longer shipped.
+rm -f /usr/share/wayland-sessions/edukasaun-desktop-wayland.desktop 2>/dev/null || true
+
+# SDDM autologin pointing to a now hidden session would fail: use Eduka-Desktop.
+for conf in /etc/sddm.conf /etc/sddm.conf.d/*.conf; do
+    [ -f "$conf" ] || continue
+    if grep -Eq '^[[:space:]]*Session=(lxqt|openbox|openbox-kde|labwc|lxqt-wayland)(\.desktop)?[[:space:]]*$' "$conf"; then
+        sed -i -E 's/^[[:space:]]*Session=(lxqt|openbox|openbox-kde|labwc|lxqt-wayland)(\.desktop)?[[:space:]]*$/Session=edukasaun-desktop.desktop/' "$conf"
+    fi
+done
+
+# --- LXQt: never ask for a window manager ---------------------------------
+# Fill a missing window_manager in /etc/skel (new and live users) and in
+# existing accounts. A window manager someone already chose is kept.
+if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+    . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+    eduka_ensure_window_manager /etc/skel/.config || true
+    for home in /home/*; do
+        [ -d "$home" ] || continue
+        user=$(stat -c %U "$home" 2>/dev/null || echo "")
+        [ -n "$user" ] && [ "$user" != "UNKNOWN" ] && [ "$user" != "root" ] || continue
+        had_dir=no; [ -d "$home/.config/lxqt" ] && had_dir=yes
+        eduka_ensure_window_manager "$home/.config" || true
+        if [ -f "$home/.config/lxqt/session.conf" ]; then
+            chown "$user": "$home/.config/lxqt/session.conf" 2>/dev/null || true
+            [ "$had_dir" = yes ] || chown "$user": "$home/.config" "$home/.config/lxqt" 2>/dev/null || true
+        fi
+    done
+fi
+
+# --- Login screen theme -------------------------------------------------
+# /etc/sddm.conf is read after /etc/sddm.conf.d; point a theme set there to
+# the Edukasaun theme as well.
+if [ -f /etc/sddm.conf ] && grep -q '^[[:space:]]*Current=' /etc/sddm.conf; then
+    sed -i 's/^[[:space:]]*Current=.*/Current=edukasaun/' /etc/sddm.conf
+fi
+mkdir -p /usr/share/Edukasaun/SDDM
+if [ -d /etc/sddm.conf.d ] || command -v sddm >/dev/null 2>&1; then
+    mkdir -p /etc/sddm.conf.d
+    printf '# Edukasaun OS: use the Edukasaun login screen (read last).\n[Theme]\nCurrent=edukasaun\n' > /etc/sddm.conf.d/zz-edukasaun-theme.conf
+    # The login screen stores the language picked there for the session
+    # (eduka-desktop-session checks the user name and the language).
+    if getent passwd sddm >/dev/null 2>&1; then
+        mkdir -p /var/lib/edukasaun-desktop/login
+        chown sddm: /var/lib/edukasaun-desktop/login 2>/dev/null || true
+        chmod 0755 /var/lib/edukasaun-desktop/login
+    fi
+fi
+# SDDM 0.21 with only the Qt 6 greeter loads a theme only with QtVersion=6;
+# the Edukasaun theme runs on both greeters.
+meta=/usr/share/sddm/themes/edukasaun/metadata.desktop
+if [ -f "$meta" ]; then
+    sed -i '/^QtVersion=/d' "$meta"
+    if command -v sddm-greeter-qt6 >/dev/null 2>&1 && ! command -v sddm-greeter >/dev/null 2>&1; then
+        echo 'QtVersion=6' >> "$meta"
+    fi
+fi
+
+# --- Notifications -------------------------------------------------------
+# Eduka-Panel shows every notification in Eduka-Desktop sessions; keep
+# LXQt's notification daemon from starting for new and existing accounts.
+override='[Desktop Entry]
+Type=Application
+Name=LXQt Notification Daemon
+Exec=lxqt-notificationd
+Hidden=true
+Comment=Disabled by Edukasaun Desktop: Eduka-Panel shows notifications.'
+for dir in /etc/skel/.config/autostart $(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $6 ~ /^\/home\// {print $6"/.config/autostart"}'); do
+    home=${dir%/.config/autostart}
+    [ "$dir" = /etc/skel/.config/autostart ] || [ -d "$home" ] || continue
+    if [ ! -e "$dir/lxqt-notifications.desktop" ]; then
+        mkdir -p "$dir" && printf '%s\n' "$override" > "$dir/lxqt-notifications.desktop"
+        if [ "$dir" != /etc/skel/.config/autostart ]; then
+            owner=$(stat -c %U "$home" 2>/dev/null || true)
+            [ -n "$owner" ] && chown -R "$owner": "$home/.config/autostart" 2>/dev/null || true
+        fi
+    fi
+done
+
+# --- Live session autologin ---------------------------------------------
+# The service only acts when booted with boot=live; on installed systems it
+# removes any live autologin file so the login screen asks for a password.
+if command -v deb-systemd-helper >/dev/null 2>&1; then
+    deb-systemd-helper enable eduka-live-autologin.service >/dev/null 2>&1 || true
+elif command -v systemctl >/dev/null 2>&1; then
+    systemctl enable eduka-live-autologin.service >/dev/null 2>&1 || true
+fi
+
+# --- Parental Control -----------------------------------------------------
+# The time limit is counted by a root service, so closing Eduka-Panel does
+# not stop it. Off until a parent switches it on in Eduka-Settings.
+mkdir -p /etc/edukasaun-desktop /var/lib/edukasaun-desktop
+if command -v deb-systemd-helper >/dev/null 2>&1; then
+    deb-systemd-helper enable eduka-parental.service >/dev/null 2>&1 || true
+elif command -v systemctl >/dev/null 2>&1; then
+    systemctl enable eduka-parental.service >/dev/null 2>&1 || true
+fi
+# Restart it on upgrades when systemd runs (not inside the Cubic chroot).
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart eduka-parental.service >/dev/null 2>&1 || true
+fi
+
+# --- Standard account edukasaun / edukasaun --------------------------------
+# Only while the ISO is built: no personal account exists yet (the Cubic
+# chroot). An installed computer with its own users is never changed; there
+# 'sudo eduka-default-user' adds the account on request.
+# The live system uses this account too (live-config would otherwise add
+# a second user "user"), and it is an administrator so the polkit password
+# prompt asks for "edukasaun" instead of root.
+human=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" && $1 != "edukasaun" {print $1; exit}')
+if [ -z "$human" ]; then
+    eduka-default-user >/dev/null 2>&1 || true
+    # Accounts made by 0.9.15/0.9.16 have no marker yet.
+    getent passwd edukasaun >/dev/null 2>&1 && { mkdir -p /var/lib/edukasaun-desktop; echo edukasaun > /var/lib/edukasaun-desktop/default-user; }
+    mkdir -p /etc/live/config.conf.d
+    cat > /etc/live/config.conf.d/90-edukasaun.conf <<'CONF'
+# Edukasaun OS: the live session uses the standard account edukasaun.
+LIVE_USERNAME="edukasaun"
+LIVE_USER_FULLNAME="Edukasaun"
+CONF
+elif getent passwd edukasaun >/dev/null 2>&1 && [ -f /var/lib/edukasaun-desktop/default-user ]; then
+    eduka-default-user >/dev/null 2>&1 || true
+fi
+
+# SDDM has no "default session" option; it preselects the session stored in
+# its state file. Preselect Eduka-Desktop (X11) when nothing is stored, when
+# the stored session was removed, or when it is the plain LXQt session.
+eduka_session=/usr/share/xsessions/edukasaun-desktop.desktop
+if [ -d /var/lib/sddm ]; then
+    state=/var/lib/sddm/state.conf
+    current=$(sed -n 's/^[[:space:]]*Session=//p' "$state" 2>/dev/null | head -n1)
+    update=no
+    case "$current" in
+        "") update=yes ;;
+        *lxqt*.desktop) update=yes ;;
+        /*) [ -e "$current" ] || update=yes ;;
+        *) [ -e "/usr/share/xsessions/$current" ] || [ -e "/usr/share/wayland-sessions/$current" ] || update=yes ;;
+    esac
+    if [ "$update" = yes ]; then
+        if [ -f "$state" ] && grep -q '^[[:space:]]*Session=' "$state"; then
+            sed -i "s|^[[:space:]]*Session=.*|Session=$eduka_session|" "$state"
+        elif [ -f "$state" ] && grep -q '^\[Last\]' "$state"; then
+            sed -i "/^\[Last\]/a Session=$eduka_session" "$state"
+        else
+            printf '[Last]\nSession=%s\n' "$eduka_session" >> "$state"
+        fi
+        if id sddm >/dev/null 2>&1; then chown sddm:sddm "$state" 2>/dev/null || true; fi
+    fi
+fi
+
 pkill -f "eduka-menu --daemon" 2>/dev/null || true
 pkill -x eduka-panel 2>/dev/null || true
 # Do not force-start the GUI in an image-builder/chroot. It autostarts after desktop login.

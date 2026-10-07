@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Parental Control time limit (eduka-parental.service, runs as root).
+
+Counts the time a person is logged in (an active graphical session), either
+since the computer started ('boot') or in total for today ('daily'). Writes
+the state for Eduka-Panel to /run/edukasaun-parental/state.json:
+  phase  'off' | 'ok' | 'warn' | 'lock'
+When the time is up Eduka-Panel shows the parent's message over the whole
+screen with keyboard and mouse blocked, and this service shuts the computer
+down GRACE seconds later — also if the session or Eduka-Panel was closed.
+"""
+import json, os, subprocess, sys, tempfile, time
+
+CONF = '/etc/edukasaun-desktop/parental.json'
+USAGE = '/var/lib/edukasaun-desktop/parental-usage.json'
+STATE_DIR = '/run/edukasaun-parental'
+STATE = STATE_DIR + '/state.json'
+TICK = 10          # seconds between checks
+GRACE = 90         # seconds the message is shown before shutting down
+WARN = (10*60, 5*60, 60)
+
+
+def read_json(path, default):
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else default
+    except Exception:
+        return default
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.state-')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def boot_id():
+    try:
+        return open('/proc/sys/kernel/random/boot_id').read().strip()
+    except Exception:
+        return ''
+
+
+def someone_logged_in():
+    """True while a person uses the computer (an active, non-greeter session)."""
+    try:
+        out = subprocess.run(['loginctl', 'list-sessions', '--no-legend'], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return True
+    for line in out.splitlines():
+        sid = line.split()[0] if line.split() else ''
+        if not sid:
+            continue
+        try:
+            info = subprocess.run(['loginctl', 'show-session', sid, '-p', 'Active', '-p', 'Class', '-p', 'Type'],
+                                  capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            continue
+        props = dict(l.split('=', 1) for l in info.splitlines() if '=' in l)
+        if props.get('Active') == 'yes' and props.get('Class') == 'user' and props.get('Type') in ('x11', 'wayland', 'mir'):
+            return True
+    return False
+
+
+def main():
+    conf = read_json(CONF, {})
+    enabled = bool(conf.get('enabled'))
+    try:
+        limit = int(conf['seconds']) if conf.get('seconds') is not None else int(conf.get('minutes', 60) or 60) * 60
+    except Exception:
+        limit = 3600
+    limit = max(60, min(86400, limit))
+    mode = conf.get('mode') if conf.get('mode') in ('boot', 'daily') else 'boot'
+    usage = read_json(USAGE, {})
+    today = time.strftime('%Y-%m-%d'); bid = boot_id()
+    used = float(usage.get('seconds', 0) or 0)
+    if mode == 'daily' and usage.get('date') != today:
+        used = 0.0
+    if mode == 'boot' and usage.get('boot_id') != bid:
+        used = 0.0
+    lock_at = None; saved = time.monotonic(); last = time.monotonic()
+    while True:
+        now = time.monotonic(); dt = min(now - last, TICK * 3); last = now
+        if not enabled:
+            write_json(STATE, {'phase': 'off', 'enabled': False})
+            time.sleep(60); conf = read_json(CONF, {}); enabled = bool(conf.get('enabled'))
+            if enabled:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            continue
+        if time.strftime('%Y-%m-%d') != today:
+            today = time.strftime('%Y-%m-%d')
+            if mode == 'daily':
+                used = 0.0; lock_at = None
+        active = someone_logged_in()
+        if lock_at is None and active:
+            used += dt
+        remaining = max(0, int(limit - used))
+        phase = 'ok'
+        if remaining <= 0:
+            # The login screen stays usable (a parent can log in and add time
+            # with Ctrl+Alt+P); the countdown starts once someone is logged in.
+            if lock_at is None and active:
+                lock_at = time.time() + GRACE
+            phase = 'lock' if lock_at is not None else 'warn'
+        elif remaining <= WARN[0]:
+            phase = 'warn'
+        write_json(STATE, {'phase': phase, 'enabled': True, 'mode': mode, 'limit': limit, 'used': int(used),
+                           'remaining': remaining, 'message': conf.get('message', ''), 'emoji': conf.get('emoji', '😊'),
+                           'shutdown_at': lock_at, 'updated': time.time()})
+        if now - saved > 60 or phase == 'lock':
+            write_json(USAGE, {'date': today, 'seconds': int(used), 'boot_id': bid}); saved = now
+        if lock_at is not None and time.time() >= lock_at:
+            subprocess.run(['systemctl', 'poweroff'])
+            time.sleep(120)
+        # Short limits (a few minutes, set to the second) need a finer tick
+        # near the end.
+        time.sleep(2 if phase == 'lock' else max(1, min(TICK, remaining)))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

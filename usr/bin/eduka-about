@@ -9,17 +9,17 @@ from PyQt5.QtWidgets import (
 )
 
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
-from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup
+from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, theme_accent, _
 
 
 class AboutDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('About Edukasaun Desktop')
+        self.setWindowTitle(_('About Edukasaun Desktop'))
         self.setWindowIcon(get_icon(START_ICON, 'help-about'))
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setModal(True)
-        self.resize(610, 500)
+        self.resize(660, 560)
         self.setMinimumSize(560, 440)
 
         root = QVBoxLayout(self)
@@ -34,41 +34,58 @@ class AboutDialog(QDialog):
         header_layout.addWidget(logo)
         title = QLabel(
             f"<b style='font-size:22px'>Edukasaun Desktop</b><br>"
-            f"<span style='font-size:15px;color:#008b68'>Suite Version {VERSION}</span>"
+            f"<span style='font-size:15px;color:#008b68'>{_('Suite Version')} {VERSION}</span>"
         )
         header_layout.addWidget(title, 1)
         root.addWidget(header)
 
         details = QTextBrowser()
         details.setOpenExternalLinks(True)
-        details.setHtml(f"""
-        <h3>About Edukasaun Desktop Suite</h3>
-        <p><b>Visible system name:</b> Edukasaun Desktop<br>
-        <b>Internal launcher engine:</b> Eduka-Desktop<br>
-        <b>Release target:</b> Final Version 1.1 — November 2026</p>
-
-        <table cellspacing='4' cellpadding='5' width='100%'>
-          <tr><td><b>Eduka-Desktop</b></td><td>{VERSION}</td><td>Start menu and application launcher</td></tr>
-          <tr><td><b>Eduka-Panel</b></td><td>{VERSION}</td><td>Panel, taskbar and status controls</td></tr>
-          <tr><td><b>Eduka-Menu</b></td><td>{VERSION}</td><td>Launcher button and toggle bridge</td></tr>
-          <tr><td><b>Eduka-Menu-Settings</b></td><td>{VERSION}</td><td>Configuration center</td></tr>
-        </table>
-
-        <h3>Version {VERSION}</h3>
-        <ul>
-          <li>Grid/List applications and categories receive randomized soft-glow colors for each desktop session.</li>
-          <li>Opaque pastel hover rendering removes the black cursor-hover glitch.</li>
-          <li>Appearance offers Eduka-Default-Theme and an optional Liquid Glass theme for capable hardware.</li>
-          <li>Eduka-Menu Settings is a single, minimizable taskbar window instead of opening duplicate dialogs.</li>
-          <li>Eduka-Panel reads the Eduka Update System v1 status and shows its update-available icon.</li>
-          <li>Fullscreen and overlapping maximized applications on small screens take priority over Eduka-Panel.</li>
-          <li>Panel transparency remains 0.54 and desktop transparency remains 0.51.</li>
-          <li>The stable taskbar toggle and adaptive large-monitor Grid behavior are preserved.</li>
-        </ul>
-
-        <p><b>Developer:</b> Hugo Moniz do Rego<br>
-        <b>Organizations:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>
-        """)
+        details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
+        notes = [
+            _('Eduka-Panel shows USB sticks, memory cards and external disks with Open, Eject and Safely remove, and a live touchpad picture.'),
+            _('Eduka-Settings now sets the wallpaper (with slideshow), the desktop icons, keyboard, mouse and touchpad; changes work at once.'),
+            _('New theme Eduka-MultiColor: a different color for every menu category, Action Center tile and panel button.'),
+            _('Parental Control: times from 5 minutes, set to the hour, minute and second; emoji pictures that show on every computer.'),
+            _('Compositor check: which compositor runs, a choice in Eduka-Settings and safe picom settings for every picom version.'),
+            _('Accent color for the whole desktop (Eduka-Settings → Appearance).'),
+        ]
+        # Work of others that Edukasaun Desktop uses — thank you!
+        credits = [
+            ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark theme')),
+            ('Yaru-remix', 'Muqtxdir', 'https://github.com/Muqtxdir/yaru-remix', 'GPL-3.0, CC BY-SA 4.0', _('Eduka-Low-Theme')),
+            ('Graphite GTK theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Graphite-gtk-theme', 'GPL-3.0', _('Eduka-MultiColor theme')),
+            ('Liquid Glass', 'Ryosuke Watanabe (ryohsuke1231)', 'https://github.com/ryohsuke1231/liquid-glass', 'MIT', _('Look of the Liquid Glass theme')),
+            ('Noto Emoji', 'Google', 'https://github.com/googlefonts/noto-emoji', 'Apache-2.0', _('Emoji pictures of Parental Control')),
+            ('Transparent-Shell-Theme', 'mrbrownstone07', 'https://github.com/mrbrownstone07/Transparent-Shell-Theme', 'GPL-3.0', _('Eduka-Transparan theme')),
+            ('Papirus icon theme', 'Papirus Development Team', 'https://github.com/PapirusDevelopmentTeam/papirus-icon-theme', 'GPL-3.0', _('Icons')),
+            ('Natural Earth', 'naturalearthdata.com', 'https://www.naturalearthdata.com', _('Public domain'), _('World map of the globe')),
+            ('Open-Meteo', 'open-meteo.com', 'https://open-meteo.com', 'CC BY 4.0', _('Weather forecast')),
+            ('GeoJS', 'geojs.io', 'https://www.geojs.io', _('Free service'), _('Location for the weather')),
+            ('IANA Time Zone Database', 'IANA', 'https://www.iana.org/time-zones', _('Public domain'), _('Time zones and daylight saving time')),
+            ('picom', 'Yuxuan Shui (yshui) and contributors', 'https://github.com/yshui/picom', 'MPL-2.0, MIT', _('Compositor: transparency and rounded corners')),
+            ('LXQt', 'LXQt team', 'https://lxqt-project.org', 'LGPL-2.1+', _('Desktop session')),
+            ('Qt and PyQt5', 'The Qt Company, Riverbank Computing', 'https://www.riverbankcomputing.com/software/pyqt/', 'GPL-3.0', _('Toolkit')),
+            ('Debian', 'Debian Project', 'https://www.debian.org', _('Free software'), _('Base system')),
+        ]
+        rows = [('Eduka-Desktop', _('Start menu and application launcher')), ('Eduka-Panel', _('Panel, taskbar and status controls')),
+                ('Eduka-Menu', _('Launcher button and toggle bridge')), ('Eduka-Settings', _('Configuration center'))]
+        details.setHtml(
+            f"<h3>{_('About Edukasaun Desktop Suite')}</h3>"
+            f"<p><b>{_('Visible system name')}:</b> Edukasaun Desktop<br>"
+            f"<b>{_('Internal launcher engine')}:</b> Eduka-Desktop<br>"
+            f"<b>{_('Release target')}:</b> {_('Final Version')} 1.1.12 — {_('November 2026')}</p>"
+            "<table cellspacing='4' cellpadding='5' width='100%'>"
+            + ''.join(f"<tr><td><b>{n}</b></td><td>{VERSION}</td><td>{d}</td></tr>" for n, d in rows)
+            + f"</table><h3>{_('Version')} {VERSION}</h3><ul>"
+            + ''.join(f'<li>{x}</li>' for x in notes)
+            + f"</ul><p><b>{_('Developer')}:</b> Hugo Moniz do Rego<br>"
+            f"<b>{_('Organizations')}:</b> STI, Digitalização &amp; Mídia – MCAS and Grupo IDEA</p>"
+            + f"<h3>{_('Credits')}</h3><p>{_('Edukasaun Desktop is built on the work of these people and projects. Thank you!')}</p>"
+            "<table cellspacing='2' cellpadding='4' width='100%'>"
+            + ''.join(f"<tr><td><a href='{url}'><b>{name}</b></a><br><span style='color:#5b6e69'>{who}</span></td>"
+                      f"<td>{use}</td><td style='color:#5b6e69'>{lic}</td></tr>" for name, who, url, lic, use in credits)
+            + "</table>")
         root.addWidget(details, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -82,11 +99,13 @@ class AboutDialog(QDialog):
         QTextBrowser{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:14px;padding:12px;}
         QPushButton{background:#00a879;color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}
         QPushButton:hover{background:#008f68;}
+        a{color:#00785a;}
         """)
 
 
 def main():
     app = QApplication(sys.argv)
+    install_translations(app)
     app.setApplicationName('Eduka-About')
     icon_theme_setup(force=True)
     dialog = AboutDialog()
@@ -94,4 +113,5 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    from eduka_common import exit_now
+    exit_now(main())

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Edukasaun OS</vendor>
+  <vendor_url>https://github.com/hugomonizdorego/Eduka-Desktop</vendor_url>
+  <action id="org.edukasaun.desktop.sddm-config">
+    <description>Change the Edukasaun login screen</description>
+    <message>Authentication is required to change the login screen</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-sddm-apply</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.parental">
+    <description>Change Parental Control</description>
+    <message>An administrator password is required to change Parental Control</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-parental-apply</annotate>
+  </action>
+</policyconfig>

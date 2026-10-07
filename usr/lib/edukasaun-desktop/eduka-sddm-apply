@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Apply Edukasaun login screen (SDDM) settings. Runs as root via pkexec.
+
+Reads one JSON object from standard input (written by Eduka-Settings):
+  style          light | dark | glass
+  accent         #rrggbb
+  title          short text shown on the login card
+  default_user   user name pre-filled on the login screen ('' = none)
+  show_clock     true / false
+  background     image path to copy, '' = keep, 'reset' = use the built-in gradient
+  logo           image path to copy, '' = keep, 'reset' = Edukasaun logo
+  autologin_user '' = ask for the password, otherwise that user logs in automatically
+
+Every value is validated; images must be real PNG/JPEG/WebP/BMP files that the
+calling user may read, so this helper cannot be used to copy other files.
+"""
+import json, os, pwd, re, shutil, sys, tempfile
+
+THEME_DIR = '/usr/share/sddm/themes/edukasaun'
+USER_CONF = THEME_DIR + '/theme.conf.user'
+DATA_DIR = '/usr/share/Edukasaun/SDDM'
+BACKGROUND = DATA_DIR + '/Default.png'
+LOGO = DATA_DIR + '/Logo.png'
+DEFAULT_LOGO = '/usr/share/Edukasaun/Logo/Edukasaun Logo.png'
+AUTOLOGIN = '/etc/sddm.conf.d/20-eduka-autologin.conf'
+THEME_PIN = '/etc/sddm.conf.d/zz-edukasaun-theme.conf'
+METADATA = THEME_DIR + '/metadata.desktop'
+SESSION = 'edukasaun-desktop.desktop'
+STYLES = ('light', 'dark', 'glass')
+MAX_IMAGE = 25 * 1024 * 1024
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def caller_uid():
+    try:
+        return int(os.environ.get('PKEXEC_UID', os.getuid()))
+    except ValueError:
+        return os.getuid()
+
+
+def check_image(path, uid):
+    real = os.path.realpath(path)
+    try:
+        st = os.stat(real)
+    except OSError:
+        fail(f'Image not found: {path}')
+    if not os.path.isfile(real) or st.st_size <= 0 or st.st_size > MAX_IMAGE:
+        fail(f'Not a usable image file: {path}')
+    readable_by_caller = (st.st_mode & 0o004) or (st.st_uid == uid and st.st_mode & 0o400)
+    if not readable_by_caller:
+        fail(f'The image must be readable by your account: {path}')
+    with open(real, 'rb') as handle:
+        head = handle.read(16)
+    is_image = (head.startswith(b'\x89PNG\r\n\x1a\n') or head[:3] == b'\xff\xd8\xff'
+                or (head[:4] == b'RIFF' and head[8:12] == b'WEBP') or head[:2] == b'BM')
+    if not is_image:
+        fail(f'Only PNG, JPEG, WebP or BMP pictures can be used: {path}')
+    return real
+
+
+def install_image(source, target):
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target))
+    os.close(fd)
+    shutil.copyfile(source, tmp)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+
+
+def write_text(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def ensure_theme_active():
+    """SDDM reads /etc/sddm.conf.d in order and /etc/sddm.conf last: make
+    every place point to the Edukasaun theme."""
+    write_text(THEME_PIN, '# Written by Eduka-Settings: use the Edukasaun login screen.\n[Theme]\nCurrent=edukasaun\n')
+    main_conf='/etc/sddm.conf'
+    if os.path.exists(main_conf):
+        with open(main_conf, encoding='utf-8', errors='ignore') as handle:
+            text=handle.read()
+        new=re.sub(r'(?m)^(\s*Current\s*=).*$', r'\1edukasaun', text)
+        if new != text:
+            write_text(main_conf, new)
+
+
+def ensure_qt_version():
+    """SDDM 0.21 starts the Qt 6 greeter only for themes that say
+    QtVersion=6; the theme works with both greeters."""
+    if not os.path.exists(METADATA):
+        return
+    with open(METADATA, encoding='utf-8') as handle:
+        lines=[l for l in handle.read().splitlines() if not l.startswith('QtVersion=')]
+    qt6=shutil.which('sddm-greeter-qt6') is not None and shutil.which('sddm-greeter') is None
+    if qt6:
+        lines.append('QtVersion=6')
+    write_text(METADATA, '\n'.join(lines)+'\n')
+
+
+def main():
+    if os.geteuid() != 0:
+        fail('eduka-sddm-apply must run as root (use pkexec).')
+    try:
+        req = json.loads(sys.stdin.read(65536))
+    except Exception:
+        fail('Invalid request.')
+    if not isinstance(req, dict):
+        fail('Invalid request.')
+    uid = caller_uid()
+
+    style = str(req.get('style', 'light'))
+    if style not in STYLES:
+        fail('Unknown style.')
+    accent = str(req.get('accent', '#00a879'))
+    if not re.fullmatch(r'#[0-9a-fA-F]{6}', accent):
+        fail('Accent must look like #00a879.')
+    title = str(req.get('title', 'Edukasaun')).strip() or 'Edukasaun'
+    if len(title) > 40 or not re.fullmatch(r"[\w .'()&!?-]+", title):
+        fail('Title: up to 40 letters, digits, spaces and . \' ( ) & ! ? -')
+    user = str(req.get('default_user', '')).strip()
+    if user and not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):
+        fail('Invalid user name.')
+    show_clock = 'true' if req.get('show_clock', True) else 'false'
+    autologin = str(req.get('autologin_user', '')).strip()
+    if autologin:
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', autologin):
+            fail('Invalid automatic login user.')
+        try:
+            entry = pwd.getpwnam(autologin)
+        except KeyError:
+            fail(f'User {autologin} does not exist.')
+        if entry.pw_uid < 1000:
+            fail('Automatic login is only possible for normal user accounts.')
+
+    background = str(req.get('background', ''))
+    if background == 'reset':
+        if os.path.exists(BACKGROUND):
+            os.remove(BACKGROUND)
+    elif background:
+        install_image(check_image(background, uid), BACKGROUND)
+
+    logo = str(req.get('logo', ''))
+    logo_path = LOGO if os.path.exists(LOGO) else DEFAULT_LOGO
+    if logo == 'reset':
+        if os.path.exists(LOGO):
+            os.remove(LOGO)
+        logo_path = DEFAULT_LOGO
+    elif logo:
+        install_image(check_image(logo, uid), LOGO)
+        logo_path = LOGO
+
+    write_text(USER_CONF, (
+        '# Written by Eduka-Settings (Login Screen page).\n'
+        '[General]\n'
+        f'style={style}\n'
+        f'accent={accent}\n'
+        f'title={title}\n'
+        f'defaultUser={user}\n'
+        f'showClock={show_clock}\n'
+        f'background={BACKGROUND}\n'
+        f'logo={logo_path}\n'))
+
+    if autologin:
+        write_text(AUTOLOGIN, (
+            '# Written by Eduka-Settings: log in automatically.\n'
+            '[Autologin]\n'
+            f'User={autologin}\n'
+            f'Session={SESSION}\n'
+            'Relogin=false\n'))
+    elif os.path.exists(AUTOLOGIN):
+        os.remove(AUTOLOGIN)
+    ensure_theme_active()
+    ensure_qt_version()
+    print('Login screen updated.')
+
+
+if __name__ == '__main__':
+    main()

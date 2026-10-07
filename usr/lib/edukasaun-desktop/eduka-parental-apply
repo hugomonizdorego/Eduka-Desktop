@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Save the Parental Control settings. Runs as root via pkexec, so only
+someone who knows an administrator password can change or switch off the
+time limit (the polkit action always asks for it).
+
+Reads one JSON object from standard input (written by Eduka-Settings):
+  enabled   true / false
+  seconds   time allowed, 60 - 86400 (or the older 'minutes', 1 - 1440)
+  mode      'boot'  = every time the computer starts
+            'daily' = in total per day
+  message   text shown before the computer shuts down (max 300 characters)
+  emoji     one of EMOJIS
+  reset     true = start counting again from now (today's used time is cleared)
+
+Or, from the lock screen (Ctrl+Alt+P), one more period without changing
+the settings:
+  action    'extend'
+  minutes   extra time, 5 - 240
+"""
+import json, os, sys, tempfile, subprocess, time
+
+CONF = '/etc/edukasaun-desktop/parental.json'
+USAGE = '/var/lib/edukasaun-desktop/parental-usage.json'
+EMOJIS = ['😊', '😴', '📚', '⏰', '🌙', '👋', '❤️', '⭐', '🙏', '🏃', '🌈', '🧸', '🎒', '☀️', '🍎', '💤']
+MODES = ('boot', 'daily')
+
+
+def conf_seconds(conf):
+    """Time allowed in seconds (60 s - 24 h)."""
+    try:
+        if conf.get('seconds') is not None:
+            value = int(conf.get('seconds'))
+        else:
+            value = int(conf.get('minutes', 60) or 60) * 60
+    except Exception:
+        value = 3600
+    return max(60, min(86400, value))
+
+
+def clean_text(text, limit):
+    text = ''.join(ch for ch in str(text) if ch in '\n' or ch.isprintable())
+    return text.strip()[:limit]
+
+
+def write_atomic(path, data, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.parental-')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def main():
+    if os.geteuid() != 0:
+        print('eduka-parental-apply must run as root (pkexec).', file=sys.stderr)
+        return 2
+    try:
+        req = json.loads(sys.stdin.read(20000) or '{}')
+        if not isinstance(req, dict):
+            raise ValueError
+    except Exception:
+        print('Invalid request.', file=sys.stderr)
+        return 2
+    if req.get('action') == 'extend':
+        try:
+            extra = max(5, min(240, int(req.get('minutes', 30))))
+        except Exception:
+            extra = 30
+        conf = {}
+        try:
+            with open(CONF, encoding='utf-8') as f:
+                conf = json.load(f)
+        except Exception:
+            pass
+        limit = conf_seconds(conf)
+        boot = ''
+        try:
+            boot = open('/proc/sys/kernel/random/boot_id').read().strip()
+        except Exception:
+            pass
+        write_atomic(USAGE, {'date': time.strftime('%Y-%m-%d'), 'seconds': max(0, limit - extra*60), 'boot_id': boot})
+        subprocess.run(['systemctl', 'restart', 'eduka-parental.service'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print('ok')
+        return 0
+    seconds = conf_seconds(req)
+    mode = req.get('mode') if req.get('mode') in MODES else 'boot'
+    emoji = req.get('emoji') if req.get('emoji') in EMOJIS else EMOJIS[0]
+    conf = {'enabled': bool(req.get('enabled', False)), 'seconds': seconds, 'minutes': max(1, -(-seconds // 60)), 'mode': mode,
+            'message': clean_text(req.get('message', ''), 300), 'emoji': emoji, 'changed_at': int(time.time())}
+    write_atomic(CONF, conf)
+    if req.get('reset') or not conf['enabled']:
+        write_atomic(USAGE, {'date': time.strftime('%Y-%m-%d'), 'seconds': 0, 'boot_id': ''})
+    # The service reads the new settings at once.
+    subprocess.run(['systemctl', 'restart', 'eduka-parental.service'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print('ok')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

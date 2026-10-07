@@ -1,0 +1,9 @@
+// Edukasaun OS: administrators (group sudo) sitting at the computer can
+// change the login screen from Eduka-Settings without typing the password
+// for every change. The helper eduka-sddm-apply still checks every value.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.edukasaun.desktop.sddm-config" &&
+        subject.local && subject.active && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

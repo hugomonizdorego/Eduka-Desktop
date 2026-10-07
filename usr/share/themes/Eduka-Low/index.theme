@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Eduka-Low
+Comment=Edukasaun OS low resource theme, built from Yaru-remix by Muqtxdir (GTK: GPL-3.0, assets: CC BY-SA 4.0)
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Eduka-Low
+MetacityTheme=Eduka-Low
+ButtonLayout=:minimize,maximize,close

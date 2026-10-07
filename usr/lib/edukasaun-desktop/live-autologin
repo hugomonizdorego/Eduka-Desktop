@@ -1,0 +1,94 @@
+#!/bin/sh
+# Live session (kernel option boot=live): go straight into Eduka-Desktop
+# without asking for a user name or password. On an installed system any
+# leftover live autologin file is removed, so the login screen asks again.
+set -u
+CMDLINE="${EDUKA_CMDLINE_FILE:-/proc/cmdline}"  # override for tests
+SDDM_FILE=/etc/sddm.conf.d/zz-eduka-live-autologin.conf
+LIGHTDM_FILE=/etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf
+
+if ! grep -qw "boot=live" "$CMDLINE" 2>/dev/null; then
+    rm -f "$SDDM_FILE" "$LIGHTDM_FILE"
+    # Installed system: the installer created the owner's account. The
+    # standard live account edukasaun/edukasaun (copied from the live image)
+    # is locked and hidden from the login screen; its files are kept.
+    MARKER="${EDUKA_DEFAULT_MARKER:-/var/lib/edukasaun-desktop/default-user}"
+    HIDE=/etc/sddm.conf.d/30-eduka-hide-live-user.conf
+    if [ -f "$MARKER" ] && getent passwd edukasaun >/dev/null 2>&1; then
+        other=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $1 != "nobody" && $1 != "edukasaun" {print $1; exit}')
+        if [ -n "$other" ]; then
+            usermod -L -e 1 edukasaun 2>/dev/null || true
+            mkdir -p /etc/sddm.conf.d
+            printf '# edukasaun is the live account; %s owns this computer.\n[Users]\nHideUsers=edukasaun\n' "$other" > "$HIDE"
+            if grep -qs '^User=edukasaun$' /etc/sddm.conf.d/20-eduka-autologin.conf; then
+                rm -f /etc/sddm.conf.d/20-eduka-autologin.conf
+            fi
+        fi
+    fi
+    exit 0
+fi
+
+# The live user created by live-config: username= on the kernel command
+# line, LIVE_USERNAME in its configuration, otherwise "user".
+user=""
+for arg in $(cat "$CMDLINE"); do
+    case "$arg" in username=*) user="${arg#username=}" ;; esac
+done
+if [ -z "$user" ]; then
+    for conf in /etc/live/config.conf /etc/live/config.conf.d/*.conf; do
+        [ -r "$conf" ] || continue
+        value=$(sed -n 's/^[[:space:]]*LIVE_USERNAME=["'"'"']\{0,1\}\([^"'"'"']*\).*/\1/p' "$conf" | tail -n1)
+        [ -n "$value" ] && user="$value"
+    done
+fi
+# Edukasaun OS has one live account: edukasaun.
+if [ -z "$user" ] && getent passwd edukasaun >/dev/null 2>&1; then
+    user=edukasaun
+fi
+[ -n "$user" ] || user=user
+if ! getent passwd "$user" >/dev/null 2>&1; then
+    if getent passwd edukasaun >/dev/null 2>&1; then
+        user=edukasaun
+    else
+        user=$(getent passwd 1000 | cut -d: -f1)
+    fi
+fi
+[ -n "$user" ] || exit 0
+
+mkdir -p /etc/sddm.conf.d
+cat > "$SDDM_FILE" <<CONF
+# Written at boot by eduka-live-autologin.service (live session only).
+[Autologin]
+User=$user
+Session=edukasaun-desktop.desktop
+Relogin=false
+CONF
+
+# live-config (and some installers) write an [Autologin] section into
+# /etc/sddm.conf, which SDDM reads after sddm.conf.d: make that section log
+# in to Eduka-Desktop as the live user as well.
+MAIN_CONF="${EDUKA_SDDM_CONF:-/etc/sddm.conf}"  # override for tests
+if [ -f "$MAIN_CONF" ] && grep -q '^\[Autologin\]' "$MAIN_CONF"; then
+    tmp="$MAIN_CONF.eduka-tmp"
+    awk -v user="$user" '
+        function finish() { if (inauto) { if (!u) print "User=" user; if (!s) print "Session=edukasaun-desktop.desktop" } }
+        /^\[/ { finish(); inauto = ($0 == "[Autologin]"); u = 0; s = 0; print; next }
+        inauto && /^[[:space:]]*User[[:space:]]*=/ { print "User=" user; u = 1; next }
+        inauto && /^[[:space:]]*Session[[:space:]]*=/ { print "Session=edukasaun-desktop.desktop"; s = 1; next }
+        { print }
+        END { finish() }
+    ' "$MAIN_CONF" > "$tmp" && cat "$tmp" > "$MAIN_CONF"
+    rm -f "$tmp"
+fi
+
+if [ -d /etc/lightdm ]; then
+    mkdir -p /etc/lightdm/lightdm.conf.d
+    cat > "$LIGHTDM_FILE" <<CONF
+# Written at boot by eduka-live-autologin.service (live session only).
+[Seat:*]
+autologin-user=$user
+autologin-user-timeout=0
+autologin-session=edukasaun-desktop
+CONF
+fi
+exit 0

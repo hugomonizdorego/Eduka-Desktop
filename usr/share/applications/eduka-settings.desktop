@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Eduka-Settings
+GenericName=Edukasaun Desktop settings
+Comment=Theme, icons, cursor, Eduka-Desktop, Eduka-Panel, notifications and login screen
+Exec=env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-settings
+Icon=preferences-system
+Categories=Settings;DesktopSettings;LXQt;Qt;
+Keywords=Eduka;Edukasaun;panel;menu;taskbar;theme;cursor;login;sddm;notifications;
+StartupWMClass=eduka-settings
+X-GNOME-SingleWindow=true

@@ -1,0 +1,1958 @@
+#!/usr/bin/env python3
+import sys, os, subprocess, fcntl, json, configparser, pwd
+from pathlib import Path
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import *
+from eduka_common import _get_ini_value, _
+
+SDDM_THEME_DIR = Path('/usr/share/sddm/themes/edukasaun')
+SDDM_HELPER = '/usr/lib/edukasaun-desktop/eduka-sddm-apply'
+PARENTAL_HELPER = '/usr/lib/edukasaun-desktop/eduka-parental-apply'
+PARENTAL_CONF = '/etc/edukasaun-desktop/parental.json'
+SDDM_STYLES = [('follow', 'Follow Eduka-Desktop theme'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass')]
+SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
+
+# Colors of the Settings window for each Eduka theme. The window itself is
+# opaque (it is a normal application window); Liquid Glass uses a cool,
+# milky palette and Edukasaun-Dark the Orchis dark colors.
+SETTINGS_PALETTES = {
+    THEME_DEFAULT: {
+        'bg': '#eef3f1', 'sidebar': '#e4ece8', 'card': '#ffffff', 'border': '#dfe8e4',
+        'text': '#1f2d2a', 'title': '#10231e', 'sub': '#5b6e69', 'accent': '#00a879', 'accent_hover': '#00b683',
+        'field': '#ffffff', 'field_border': '#d3e0db', 'hover': 'rgba(0,168,121,28)', 'button': '#f2f6f4',
+        'chip': 'rgba(0,168,121,30)', 'chip_text': '#00785a', 'reset': '#fff7e5', 'reset_text': '#775000',
+        'groove': '#dfeee9', 'ok': '#188a48', 'error': '#b3261e',
+    },
+    THEME_LIQUID: {
+        'bg': 'qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #e8f3f8,stop:0.55 #f2f6fb,stop:1 #f1edf9)',
+        'sidebar': 'rgba(255,255,255,120)', 'card': 'rgba(255,255,255,205)', 'border': 'rgba(255,255,255,250)',
+        'text': '#1c2b33', 'title': '#0f2029', 'sub': '#5a6b75', 'accent': '#1e9bd7', 'accent_hover': '#35aee6',
+        'field': 'rgba(255,255,255,235)', 'field_border': '#d3e3ec', 'hover': 'rgba(30,155,215,28)', 'button': 'rgba(255,255,255,190)',
+        'chip': 'rgba(30,155,215,30)', 'chip_text': '#126f9c', 'reset': 'rgba(255,240,205,200)', 'reset_text': '#775000',
+        'groove': '#dbe9f1', 'ok': '#16804f', 'error': '#b3261e',
+    },
+    THEME_DARK: {
+        'bg': '#212121', 'sidebar': '#1b1b1b', 'card': '#2c2c2c', 'border': 'rgba(255,255,255,24)',
+        'text': 'rgba(255,255,255,222)', 'title': '#ffffff', 'sub': 'rgba(255,255,255,150)', 'accent': '#26a69a', 'accent_hover': '#4db6ac',
+        'field': '#383838', 'field_border': 'rgba(255,255,255,36)', 'hover': 'rgba(255,255,255,20)', 'button': 'rgba(255,255,255,16)',
+        'chip': 'rgba(77,182,172,40)', 'chip_text': '#80cbc4', 'reset': 'rgba(255,193,7,30)', 'reset_text': '#ffe082',
+        'groove': 'rgba(255,255,255,45)', 'ok': '#80cbc4', 'error': '#ef9a9a',
+    },
+    THEME_LOW: {
+        'bg': '#f7f7f7', 'sidebar': '#ececec', 'card': '#ffffff', 'border': '#dcdcdc',
+        'text': '#3d3d3d', 'title': '#181818', 'sub': '#666666', 'accent': '#315bef', 'accent_hover': '#4a6ff2',
+        'field': '#ffffff', 'field_border': '#cfcfcf', 'hover': '#e3e3e3', 'button': '#f2f2f2',
+        'chip': '#e3e9fd', 'chip_text': '#315bef', 'reset': '#fff4e5', 'reset_text': '#7a4b00',
+        'groove': '#dcdcdc', 'ok': '#0e8420', 'error': '#c7162b',
+    },
+    THEME_TRANSPARENT: {
+        'bg': '#1a1a1a', 'sidebar': '#141414', 'card': '#232323', 'border': 'rgba(255,255,255,18)',
+        'text': 'rgba(242,242,242,235)', 'title': '#f2f2f2', 'sub': 'rgba(242,242,242,150)', 'accent': '#5c5c5c', 'accent_hover': '#6c6c6c',
+        'field': '#2b2b2b', 'field_border': 'rgba(255,255,255,30)', 'hover': 'rgba(217,217,217,20)', 'button': 'rgba(217,217,217,20)',
+        'chip': 'rgba(217,217,217,30)', 'chip_text': '#f2f2f2', 'reset': 'rgba(255,193,7,26)', 'reset_text': '#ffe082',
+        'groove': 'rgba(255,255,255,40)', 'ok': '#9ad9a0', 'error': '#ef9a9a',
+    },
+    THEME_MULTI: {
+        'bg': '#f5f5f5', 'sidebar': '#ececec', 'card': '#ffffff', 'border': '#e0e0e0',
+        'text': '#212121', 'title': '#111111', 'sub': '#616161', 'accent': '#5b6ee1', 'accent_hover': '#7083ec',
+        'field': '#ffffff', 'field_border': '#d6d6d6', 'hover': 'rgba(91,110,225,24)', 'button': '#f2f2f2',
+        'chip': 'rgba(91,110,225,28)', 'chip_text': '#3949ab', 'reset': '#fff4e5', 'reset_text': '#7a4b00',
+        'groove': '#e6e6e6', 'ok': '#2e7d32', 'error': '#c62828',
+    },
+}
+# Small previews of the themes (surface, panel, accent, text) for the theme cards.
+THEME_SWATCHES = {
+    THEME_DEFAULT: ('#f4faf7', '#ffffff', '#00a879', '#1f2d2a'),
+    THEME_LOW: ('#f7f7f7', '#323030', '#315bef', '#3d3d3d'),
+    THEME_LIQUID: ('#dcecf6', '#ffffff', '#1e9bd7', '#1c2b33'),
+    THEME_DARK: ('#2c2c2c', '#212121', '#26a69a', '#ffffff'),
+    THEME_TRANSPARENT: ('#1a1a1a', '#262626', '#d9d9d9', '#f2f2f2'),
+    THEME_MULTI: ('#fafafa', '#ffffff', '#5b6ee1', '#212121'),
+}
+
+def check_icon_path():
+    """White tick for checked check boxes (cached SVG like the arrows)."""
+    path=CACHE_DIR/'ui'/'check-white.svg'
+    if not path.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
+                            '<path d="M3.5 8.5l3 3 6-7" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', encoding='utf-8')
+        except Exception:
+            pass
+    return str(path)
+
+def settings_qss(theme):
+    c=SETTINGS_PALETTES.get(theme, SETTINGS_PALETTES[THEME_DEFAULT])
+    tick=check_icon_path()
+    return f"""
+QDialog{{background:{c['bg']};}}
+QWidget{{color:{c['text']};font-size:12px;}}
+QFrame#sidebar{{background:{c['sidebar']};border:0;border-right:1px solid {c['border']};}}
+QLabel#appTitle{{font-size:16px;font-weight:800;color:{c['title']};}}
+QLabel#versionChip{{background:{c['chip']};color:{c['chip_text']};border-radius:9px;padding:2px 8px;font-size:11px;font-weight:700;}}
+QListWidget#navList{{background:transparent;border:0;outline:0;padding:0;}}
+QListWidget#navList::item{{padding:10px 10px;border-radius:12px;margin:2px 0;color:{c['text']};font-weight:600;}}
+QListWidget#navList::item:hover{{background:{c['hover']};}}
+QListWidget#navList::item:selected{{background:{c['accent']};color:#ffffff;}}
+QToolButton#navItem{{background:transparent;border:0;border-radius:11px;padding:6px 10px;text-align:left;color:{c['text']};font-weight:600;}}
+QToolButton#navItem:hover{{background:{c['hover']};}}
+QToolButton#navItem:checked{{background:{c['accent']};color:#ffffff;}}
+QLabel#navGroup{{color:{c['sub']};font-size:10px;font-weight:800;letter-spacing:1px;padding:4px 10px 2px 10px;}}
+QComboBox:disabled,QSpinBox:disabled,QDoubleSpinBox:disabled,QLineEdit:disabled{{color:{c['sub']};background:{c['button']};}}
+QFrame#navLine{{background:{c['border']};max-height:1px;min-height:1px;border:0;margin:6px 6px 0 6px;}}
+QFrame#settingRow{{background:transparent;border:0;}}
+QLabel#rowTitle{{font-weight:700;color:{c['title']};}}
+QFrame#rowLine{{background:{c['border']};max-height:1px;min-height:1px;border:0;}}
+QToolButton#themeCard,QToolButton#posCard{{background:{c['field']};border:2px solid {c['field_border']};border-radius:14px;padding:6px;color:{c['text']};font-weight:700;}}
+QToolButton#themeCard:hover,QToolButton#posCard:hover{{border:2px solid {c['accent_hover']};}}
+QToolButton#themeCard:checked,QToolButton#posCard:checked{{border:2px solid {c['accent']};background:{c['chip']};}}
+QToolButton#ledSwatch{{border-radius:13px;border:2px solid {c['field_border']};}}
+QToolButton#ledSwatch:checked{{border:3px solid {c['title']};}}
+QLabel#capability{{background:{c['chip']};color:{c['chip_text']};border-radius:10px;padding:8px 10px;font-weight:600;}}
+QScrollArea#pageScroll{{background:transparent;border:0;}}
+QScrollArea#pageScroll>QWidget>QWidget{{background:transparent;}}
+QLabel#pageTitle{{font-size:20px;font-weight:800;color:{c['title']};}}
+QLabel#pageHint,QLabel#fieldHint{{color:{c['sub']};}}
+QLabel#fieldHint{{font-size:11px;}}
+QLabel#cardTitle{{font-size:13px;font-weight:800;color:{c['title']};}}
+QFrame#card{{background:{c['card']};border:1px solid {c['border']};border-radius:16px;}}
+QFrame#card QLabel{{background:transparent;}}
+QFrame#thumb{{background:{c['field']};border:1px solid {c['field_border']};border-radius:10px;}}
+QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{{background:{c['field']};color:{c['text']};border:1px solid {c['field_border']};border-radius:10px;padding:7px 9px;min-height:20px;}}
+QLineEdit:focus,QComboBox:focus,QSpinBox:focus,QDoubleSpinBox:focus{{border:1px solid {c['accent']};}}
+QComboBox QAbstractItemView{{background:{c['field']};color:{c['text']};selection-background-color:{c['accent']};selection-color:#ffffff;border:1px solid {c['field_border']};outline:0;padding:4px;}}
+QCheckBox{{padding:4px 0;spacing:8px;}}
+QCheckBox::indicator{{width:18px;height:18px;border-radius:6px;border:1px solid {c['field_border']};background:{c['field']};}}
+QCheckBox::indicator:hover{{border:1px solid {c['accent']};}}
+QCheckBox::indicator:checked{{background:{c['accent']};border:1px solid {c['accent']};image:url("{tick}");}}
+QCheckBox::indicator:disabled{{background:{c['button']};border:1px solid {c['field_border']};}}
+QCheckBox:disabled{{color:{c['sub']};}}
+QPushButton:disabled{{color:{c['sub']};}}
+QPushButton{{background:{c['button']};color:{c['text']};border:1px solid {c['field_border']};border-radius:10px;padding:8px 14px;font-weight:700;}}
+QPushButton:hover{{border:1px solid {c['accent']};}}
+QPushButton:focus{{border:1px solid {c['accent']};}}
+QPushButton#primary{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
+QPushButton#chip{{border-radius:15px;padding:6px 16px;font-weight:700;}}
+QPushButton#chip:checked{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
+QToolButton#emojiChip{{font-size:18px;border-radius:17px;border:1px solid {c['field_border']};background:{c['field']};}}
+QToolButton#emojiChip:hover{{border:1px solid {c['accent']};}}
+QToolButton#emojiChip:checked{{border:2px solid {c['accent']};background:{c['hover']};}}
+QPushButton#primary:hover{{background:{c['accent_hover']};}}
+QPushButton#resetButton{{background:{c['reset']};color:{c['reset_text']};border:1px solid rgba(220,160,0,80);}}
+QPushButton#maintButton{{text-align:left;padding:10px 14px;}}
+QPushButton#swatch{{border-radius:10px;min-width:64px;}}
+QLabel#statusLabel{{color:{c['ok']};font-weight:700;}}
+QLabel#statusLabel[error="true"]{{color:{c['error']};}}
+QSlider::groove:horizontal{{height:6px;border-radius:3px;background:{c['groove']};}}
+QSlider::sub-page:horizontal{{background:{c['accent']};border-radius:3px;}}
+QSlider::handle:horizontal{{width:16px;height:16px;margin:-6px 0;border-radius:8px;background:#ffffff;border:2px solid {c['accent']};}}
+QToolTip{{background:{c['card']};color:{c['text']};border:1px solid {c['field_border']};padding:5px 8px;border-radius:8px;}}
+QScrollBar:vertical{{background:transparent;width:10px;margin:2px;}}
+QScrollBar::handle:vertical{{background:{c['field_border']};border-radius:4px;min-height:30px;}}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0px;}}
+QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{{background:transparent;}}
+"""
+
+
+class NavBar(QWidget):
+    """Sidebar navigation: group headings with a line between groups and
+    one button per page (rows are numbered in the order they are added)."""
+    currentRowChanged=pyqtSignal(int)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lay=QVBoxLayout(self); self.lay.setContentsMargins(0,0,0,0); self.lay.setSpacing(2)
+        self.buttons=[]; self.group=QButtonGroup(self); self.group.setExclusive(True)
+
+    def add_group(self, title, first=False):
+        if not first:
+            line=QFrame(); line.setObjectName('navLine'); self.lay.addSpacing(6); self.lay.addWidget(line)
+        lab=QLabel(title); lab.setObjectName('navGroup'); self.lay.addWidget(lab)
+
+    def add_item(self, icon, text):
+        b=QToolButton(); b.setObjectName('navItem'); b.setCheckable(True); b.setText('  '+text.replace('&', '&&')); b.setIcon(icon); b.setIconSize(QSize(20,20))
+        b.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); b.setFixedHeight(36)
+        b.setCursor(Qt.PointingHandCursor); b.setAccessibleName(text)
+        row=len(self.buttons); b.clicked.connect(lambda _=False, r=row: self.setCurrentRow(r))
+        self.group.addButton(b); self.buttons.append(b); self.lay.addWidget(b)
+        return row
+
+    def finish(self):
+        self.lay.addStretch(1)
+
+    def item(self, row):
+        return self.buttons[row]
+
+    def setCurrentRow(self, row):
+        if 0 <= row < len(self.buttons):
+            self.buttons[row].setChecked(True); self.currentRowChanged.emit(row)
+
+
+class RowForm(QVBoxLayout):
+    """Settings rows with a title on the left, the control on the right and a
+    thin line between rows (replaces QFormLayout: rows are clearly separated).
+    addRow('', hint) adds the hint under the previous row; addRow('', widget)
+    makes a full-width row."""
+    def __init__(self):
+        super().__init__(); self.setSpacing(0); self.setContentsMargins(0,0,0,0); self._last=None; self._count=0
+
+    def addRow(self, label, field):
+        if isinstance(field, QLabel) and not label and field.objectName() == 'fieldHint' and self._last is not None:
+            self._last.addWidget(field); return
+        if self._count:
+            line=QFrame(); line.setObjectName('rowLine'); self.addWidget(line)
+        row=QFrame(); row.setObjectName('settingRow')
+        h=QHBoxLayout(row); h.setContentsMargins(2,10,2,10); h.setSpacing(16)
+        right=QVBoxLayout(); right.setSpacing(4)
+        if label:
+            t=QLabel(label.rstrip(':')); t.setObjectName('rowTitle'); t.setFixedWidth(170); t.setWordWrap(True)
+            h.addWidget(t, 0, Qt.AlignTop if isinstance(field, QLayout) else Qt.AlignVCenter)
+        if isinstance(field, QLayout):
+            right.addLayout(field)
+        else:
+            right.addWidget(field)
+        h.addLayout(right, 1)
+        self.addWidget(row); self._last=right; self._count+=1
+
+
+class WallpaperGrid(QListWidget):
+    """Pictures as tiles; the tile under the pointer grows a little so the
+    picture can be seen before choosing it. Thumbnails load in the
+    background, a few at a time."""
+    hovered=pyqtSignal(str)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setViewMode(QListView.IconMode); self.setResizeMode(QListView.Adjust); self.setMovement(QListView.Static)
+        self.setIconSize(QSize(150, 94)); self.setGridSize(QSize(172, 126)); self.setSpacing(4); self.setWordWrap(True)
+        self.setMouseTracking(True); self.setUniformItemSizes(True); self.setObjectName('wallGrid')
+        # Keep the delegate alive as long as the view (PyQt would free it first
+        # at exit and the view would paint with a deleted delegate).
+        self._delegate=WallpaperDelegate(self); self.setItemDelegate(self._delegate); self._hover=-1; self._queue=[]
+        self.loader=QTimer(self); self.loader.timeout.connect(self.load_some)
+        self.setMinimumHeight(290)
+
+    def set_images(self, paths):
+        self.clear(); self._queue=[]
+        for path in paths:
+            it=QListWidgetItem(Path(path).stem.replace('_', ' ').replace('-', ' ')[:22]); it.setData(Qt.UserRole, path); it.setToolTip(path)
+            pm=QPixmap(150, 94); pm.fill(QColor('#d9e4e0')); it.setIcon(QIcon(pm)); self.addItem(it); self._queue.append(it)
+        self.loader.start(15)
+
+    def load_some(self):
+        for _ in range(3):
+            if not self._queue:
+                self.loader.stop(); return
+            it=self._queue.pop(0)
+            reader=QImageReader(it.data(Qt.UserRole)); reader.setAutoTransform(True)
+            size=reader.size()
+            if size.isValid():
+                size.scale(300, 188, Qt.KeepAspectRatioByExpanding); reader.setScaledSize(size)
+            img=reader.read()
+            if not img.isNull():
+                img=img.copy(max(0, (img.width()-300)//2), max(0, (img.height()-188)//2), min(300, img.width()), min(188, img.height()))
+                it.setIcon(QIcon(QPixmap.fromImage(img)))
+
+    def release_delegate(self):
+        try:
+            self.loader.stop(); self.setItemDelegate(QStyledItemDelegate(self))
+        except RuntimeError:
+            pass
+
+    def mouseMoveEvent(self, e):
+        it=self.itemAt(e.pos()); row=self.row(it) if it else -1
+        if row != self._hover:
+            self._hover=row; self.viewport().update()
+            if it: self.hovered.emit(it.data(Qt.UserRole))
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover=-1; self.viewport().update(); super().leaveEvent(e)
+
+
+class WallpaperDelegate(QStyledItemDelegate):
+    def paint(self, p, option, index):
+        grid=self.parent(); hover=index.row() == grid._hover; selected=bool(option.state & QStyle.State_Selected)
+        p.save(); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
+        r=QRectF(option.rect).adjusted(8, 6, -8, -24)
+        if hover:      # grow a little under the pointer
+            r=r.adjusted(-7, -5, 7, 5)
+        path=QPainterPath(); path.addRoundedRect(r, 10, 10)
+        pix=index.data(Qt.DecorationRole).pixmap(300, 188)
+        p.setClipPath(path); p.drawPixmap(r.toRect(), pix); p.setClipping(False)
+        accent=QColor(theme_accent())
+        if selected:
+            p.setPen(QPen(accent, 4)); p.setBrush(Qt.NoBrush); p.drawPath(path)
+            badge=QRectF(r.right()-24, r.top()+6, 18, 18); p.setPen(Qt.NoPen); p.setBrush(accent); p.drawEllipse(badge)
+            p.setPen(QPen(QColor('#ffffff'), 2)); p.drawPolyline(QPolygonF([QPointF(badge.left()+5, badge.center().y()), QPointF(badge.center().x()-1, badge.bottom()-5), QPointF(badge.right()-4, badge.top()+5)]))
+        elif hover:
+            p.setPen(QPen(accent, 2)); p.setBrush(Qt.NoBrush); p.drawPath(path)
+        p.setPen(option.palette.color(QPalette.Text)); f=QFont(option.font); f.setPointSizeF(max(7.5, f.pointSizeF()*0.9)); p.setFont(f)
+        p.drawText(QRectF(option.rect.x(), option.rect.bottom()-20, option.rect.width(), 18), Qt.AlignCenter, index.data(Qt.DisplayRole))
+        p.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(172, 126)
+
+
+class Page(QWidget):
+    """A settings page: title, hint and one or more rounded cards.
+    `self.v` is the layout of the first card."""
+    def __init__(self, title, hint=''):
+        super().__init__()
+        self.outer=QVBoxLayout(self); self.outer.setContentsMargins(26,22,26,10); self.outer.setSpacing(12)
+        t=QLabel(title); t.setObjectName('pageTitle'); self.outer.addWidget(t)
+        if hint:
+            h=QLabel(hint); h.setWordWrap(True); h.setObjectName('pageHint'); self.outer.addWidget(h)
+        self.v=self.new_card()
+
+    def new_card(self, title=''):
+        card=QFrame(); card.setObjectName('card')
+        lay=QVBoxLayout(card); lay.setContentsMargins(18,14,18,14); lay.setSpacing(10)
+        if title:
+            t=QLabel(title); t.setObjectName('cardTitle'); lay.addWidget(t)
+        self.outer.addWidget(card)
+        return lay
+
+    def finish(self):
+        self.outer.addStretch(1)
+        return self
+
+
+def form():
+    return RowForm()
+
+
+def theme_preview(theme, w=132, h=78):
+    """Tiny picture of a theme: desktop, Eduka-Desktop window and panel."""
+    surface, panel, accent, text=THEME_SWATCHES[theme]
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    g=QLinearGradient(0, 0, w, h); g.setColorAt(0, QColor('#9fd2b4')); g.setColorAt(1, QColor('#3f8f6a'))
+    if theme in (THEME_DARK, THEME_TRANSPARENT): g.setColorAt(0, QColor('#3a4a46')); g.setColorAt(1, QColor('#101413'))
+    path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, w, h), 10, 10); p.setClipPath(path); p.fillRect(pix.rect(), g)
+    win=QColor(surface)
+    if theme in (THEME_LIQUID, THEME_TRANSPARENT): win.setAlpha(190)
+    radius=3 if theme == THEME_LOW else 8
+    p.setPen(QPen(QColor(255,255,255,90), 1)); p.setBrush(win); p.drawRoundedRect(QRectF(10, 8, w-20, h-30), radius, radius)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(16, 14, 28, 6), 3, 3)
+    tc=QColor(text); tc.setAlpha(110); p.setBrush(tc)
+    for i in range(3):
+        if theme == THEME_MULTI: p.setBrush(QColor(MULTI_COLORS[i*3]))
+        p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
+    pc=QColor(panel)
+    if theme in (THEME_LIQUID, THEME_TRANSPARENT): pc.setAlpha(200)
+    p.setBrush(pc); p.drawRoundedRect(QRectF(6, h-16, w-12, 11), 5, 5)
+    if theme == THEME_MULTI:
+        rb=QLinearGradient(9, 0, 27, 0)
+        for i, c in enumerate(('#ef5350', '#ff9800', '#43a047', '#1e88e5', '#8e24aa')): rb.setColorAt(i/4, QColor(c))
+        p.setBrush(rb)
+    else:
+        p.setBrush(QColor(accent))
+    p.drawRoundedRect(QRectF(9, h-14, 18, 7), 3.5, 3.5)
+    p.end()
+    return pix
+
+
+def position_preview(edge, w=96, h=60, accent='#00a879'):
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor('#7a8f89'), 1.5)); p.setBrush(QColor('#e9f2ee')); p.drawRoundedRect(QRectF(2, 2, w-4, h-4), 6, 6)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent))
+    bar={'Bottom': QRectF(8, h-14, w-16, 7), 'Top': QRectF(8, 7, w-16, 7), 'Left': QRectF(7, 8, 7, h-16), 'Right': QRectF(w-14, 8, 7, h-16)}[edge]
+    p.drawRoundedRect(bar, 3.5, 3.5)
+    p.end()
+    return pix
+
+
+def hint_label(text):
+    h=QLabel(text); h.setWordWrap(True); h.setObjectName('fieldHint')
+    return h
+
+
+def sddm_conf_value(section, key):
+    """Value SDDM really uses: /etc/sddm.conf.d/*.conf in order, then /etc/sddm.conf."""
+    value=None
+    files=sorted(Path('/etc/sddm.conf.d').glob('*.conf')) if Path('/etc/sddm.conf.d').is_dir() else []
+    for path in files+[Path('/etc/sddm.conf')]:
+        v=_get_ini_value(path, section, key)
+        if v is not None: value=v
+    return value
+
+def sddm_greeter():
+    return shutil.which('sddm-greeter-qt6') or shutil.which('sddm-greeter')
+
+def is_admin_user():
+    try:
+        import grp
+        return grp.getgrnam('sudo').gr_gid in os.getgroups()
+    except Exception:
+        return False
+
+
+class LoginPreview(QWidget):
+    """Small live picture of the login screen: it changes as soon as a
+    style, color, picture or text is changed on the Login Screen page."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(352, 198)
+        self.cfg={}; self.bg=QPixmap(); self.logo=QPixmap()
+
+    def set_config(self, cfg, background=None, logo=None):
+        self.cfg=dict(cfg)
+        if background is not None:
+            self.bg=QPixmap(background) if background and os.path.isfile(background) else QPixmap()
+        if logo is not None:
+            self.logo=QPixmap(logo) if logo and os.path.isfile(logo) else QPixmap()
+        self.update()
+
+    def paintEvent(self, e):
+        c=self.cfg; style=c.get('style','light'); accent=QColor(c.get('accent','#00a879'))
+        dark=style == 'dark'; glass=style == 'glass'
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
+        r=QRectF(self.rect()); path=QPainterPath(); path.addRoundedRect(r, 14, 14); p.setClipPath(path)
+        if not self.bg.isNull():
+            pm=self.bg.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            p.drawPixmap(int((self.width()-pm.width())/2), int((self.height()-pm.height())/2), pm)
+        else:
+            g=QLinearGradient(0, 0, 0, self.height())
+            stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
+            for pos, col in zip((0.0, 0.5, 1.0), stops): g.setColorAt(pos, QColor(col))
+            p.fillRect(self.rect(), g)
+        p.fillRect(self.rect(), QColor(0,0,0,140) if dark else QColor(255,255,255,38) if glass else QColor(0,0,0,20))
+        cx=self.width()/2
+        if c.get('show_clock', True):
+            f=p.font(); f.setPixelSize(22); f.setWeight(QFont.Light); p.setFont(f); p.setPen(QColor('white'))
+            p.drawText(QRectF(0, 10, self.width(), 26), Qt.AlignCenter, format_clock(QTime.currentTime(), '24h'))
+        card=QRectF(cx-62, 44 if c.get('show_clock', True) else 34, 124, 118)
+        p.setPen(QPen(QColor(255,255,255,60) if dark else QColor(255,255,255,230), 1))
+        p.setBrush(QColor(38,38,38,235) if dark else QColor(255,255,255,140) if glass else QColor(255,255,255,245))
+        p.drawRoundedRect(card, 12, 12)
+        p.setBrush(QColor(255,255,255,30) if dark else QColor('white')); p.setPen(QPen(accent, 1.5))
+        p.drawEllipse(QPointF(cx, card.top()+20), 13, 13)
+        if not self.logo.isNull():
+            lg=self.logo.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation); p.drawPixmap(int(cx-lg.width()/2), int(card.top()+20-lg.height()/2), lg)
+        f=p.font(); f.setPixelSize(10); f.setBold(True); p.setFont(f); p.setPen(QColor('white') if dark else QColor('#10231e'))
+        p.drawText(QRectF(card.left(), card.top()+36, card.width(), 14), Qt.AlignCenter, c.get('title') or 'Edukasaun')
+        field=QColor('#383838') if dark else QColor(255,255,255,220)
+        for i in range(2):
+            fr=QRectF(card.left()+12, card.top()+56+i*22, card.width()-24, 16)
+            p.setPen(QPen(accent if i == 1 else QColor(0,0,0,40), 1)); p.setBrush(field); p.drawRoundedRect(fr, 8, 8)
+        p.setPen(Qt.NoPen); p.setBrush(accent); p.drawEllipse(QPointF(card.right()-20, card.top()+86), 6, 6)
+        f.setBold(False); f.setPixelSize(8); p.setFont(f); p.setPen(QColor(255,255,255,200) if dark else QColor('#5b6e69'))
+        if c.get('default_user'):
+            p.drawText(QRectF(card.left()+18, card.top()+56, 80, 16), Qt.AlignVCenter, c.get('default_user'))
+        bar=QRectF(cx-110, self.height()-22, 220, 15)
+        p.setPen(Qt.NoPen); p.setBrush(QColor(38,38,38,220) if dark else QColor(255,255,255,140) if glass else QColor(255,255,255,230)); p.drawRoundedRect(bar, 7.5, 7.5)
+        p.setBrush(accent); p.drawRoundedRect(QRectF(bar.left()+3, bar.top()+2.5, 46, 10), 5, 5)
+
+
+class Settings(QDialog):
+    def __init__(self):
+        super().__init__()
+        ensure_dirs(); icon_theme_setup(force=True)
+        self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        self.setWindowTitle(f'Eduka-Settings — {VERSION}')
+        self.setWindowIcon(get_icon(START_ICON, 'preferences-system'))
+        avail=QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else QRect(0,0,1024,600)
+        self.resize(min(940, max(760, avail.width()-80)), min(640, max(520, avail.height()-80)))
+        self.setMinimumSize(760, 520)
+        self.panel=read_panel_config(); self.menu=read_menu_config(); self.desktop=read_desktop_config()
+        self._initial_orca_enabled=bool(self.desktop.get('orca_enabled', False))
+        self._liquid_confirmed=normalize_theme_style(self.desktop.get('theme_style')) in (THEME_LIQUID, THEME_TRANSPARENT)
+        self._sddm_dirty=False; self._sddm_background=''; self._sddm_logo=''
+        self.sddm_timer=QTimer(self); self.sddm_timer.setSingleShot(True); self.sddm_timer.timeout.connect(self.realtime_sddm)
+        self.build()
+        self.panel_height.valueChanged.connect(self.update_preview)
+        for edit in self.findChildren(QLineEdit):
+            rounded_text_context_menu(edit)
+        self.load_values()
+        self.apply_theme_style()
+        self.status_timer=QTimer(self); self.status_timer.setSingleShot(True); self.status_timer.timeout.connect(lambda: self.status.setText(''))
+        for combo in self.findChildren(QComboBox):
+            round_combo(combo)
+            # Items with data are interface words: translate their labels.
+            for i in range(combo.count()):
+                if combo.itemData(i) is not None: combo.setItemText(i, _(combo.itemText(i)))
+        translate_tree(self)
+
+    # ------------------------------------------------------------------ layout
+    def build(self):
+        root=QHBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
+
+        side=QFrame(); side.setObjectName('sidebar'); side.setFixedWidth(232)
+        sl=QVBoxLayout(side); sl.setContentsMargins(16,18,16,14); sl.setSpacing(12)
+        brand=QHBoxLayout(); brand.setSpacing(10)
+        self.logo=QLabel(); self.logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(40,40)); brand.addWidget(self.logo)
+        names=QVBoxLayout(); names.setSpacing(2)
+        t=QLabel('Eduka Settings'); t.setObjectName('appTitle'); names.addWidget(t)
+        chip=QLabel(VERSION); chip.setObjectName('versionChip'); chip.setAlignment(Qt.AlignCenter); chip.setFixedWidth(chip.sizeHint().width()+16)
+        names.addWidget(chip); brand.addLayout(names, 1); sl.addLayout(brand)
+        self.nav=NavBar()
+        sl.addWidget(self.nav, 1)
+        reset=QPushButton('Reset to Defaults'); reset.setObjectName('resetButton'); reset.clicked.connect(self.reset_defaults); sl.addWidget(reset)
+        root.addWidget(side)
+
+        content=QVBoxLayout(); content.setContentsMargins(0,0,0,0); content.setSpacing(0)
+        self.stack=QStackedWidget()
+        groups=[
+            ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',self.page_appearance),
+                             ('wallpaper','Wallpaper','preferences-desktop-wallpaper',self.page_wallpaper),
+                             ('desktopicons','Desktop Icons','user-desktop',self.page_desktop_icons),
+                             ('effects','Effects','applications-graphics',self.page_effects)]),
+            ('DESKTOP', [('desktop','Eduka-Desktop','start-here',self.page_behavior),
+                         ('panel','Eduka-Panel','preferences-desktop',self.page_icon_name),
+                         ('clock','Clock','preferences-system-time',self.page_clock),
+                         ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
+            ('DEVICES', [('keyboard','Keyboard','input-keyboard',self.page_keyboard),
+                         ('mouse','Mouse','input-mouse',self.page_mouse),
+                         ('touchpad','Touchpad','input-touchpad',self.page_touchpad)]),
+            ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',self.page_general),
+                        ('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility),
+                        ('parental','Parental Control','preferences-system-parental-controls',self.page_parental),
+                        ('login','Login Screen','system-users',self.page_login),
+                        ('maintenance','Maintenance','applications-system',self.page_advanced)]),
+        ]
+        self.pages=[]; self.page_keys=[]; self.nav_rows={}
+        for gi, (group, entries) in enumerate(groups):
+            # Group heading and a line separate the sections.
+            self.nav.add_group(group, first=gi == 0)
+            for key, name, icon, builder in entries:
+                page=builder()
+                # Pages scroll on small (1024x600 / 1366x768) school screens.
+                scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
+                nav_icon=get_icon(icon,'preferences-system')
+                if key == 'touchpad':
+                    nav_icon=self._ei.touchpad_icon(48, accent=theme_accent())
+                self.nav_rows[key]=self.nav.add_item(nav_icon, name)
+                self.pages.append((name, icon, page)); self.page_keys.append(key); self.stack.addWidget(scroll)
+        self.nav.finish()
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['appearance'])
+        content.addWidget(self.stack, 1)
+
+        bar=QHBoxLayout(); bar.setContentsMargins(26,8,26,16); bar.setSpacing(8)
+        # Status gets room on the left so long messages never squeeze the buttons.
+        self.status=QLabel(''); self.status.setObjectName('statusLabel'); self.status.setAccessibleName('Settings status'); self.status.setWordWrap(True)
+        bar.addWidget(self.status, 1)
+        cancel=QPushButton('Close'); cancel.clicked.connect(self.reject); bar.addWidget(cancel)
+        apply=QPushButton('Apply'); apply.clicked.connect(self.apply_settings); bar.addWidget(apply)
+        save=QPushButton('Save && Close'); save.setObjectName('primary'); save.setDefault(True); save.clicked.connect(self.save_close); bar.addWidget(save)
+        apply.setToolTip('Apply all changes now and keep this window open (Ctrl+S)')
+        QShortcut(QKeySequence.Save, self, activated=self.apply_settings)
+        content.addLayout(bar)
+        root.addLayout(content, 1)
+        # Every change is used at once (after a short pause, so dragging a
+        # slider or typing does not restart the panel many times).
+        QTimer.singleShot(0, self.enable_live_apply)
+
+    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad')
+
+    def enable_live_apply(self):
+        """Connects the controls of the pages to a debounced Apply. The login
+        screen and Parental Control need an administrator password, so they keep
+        their own Save button; wallpaper, desktop icons and the input devices
+        apply themselves."""
+        self._live_timer=QTimer(self); self._live_timer.setSingleShot(True); self._live_timer.timeout.connect(self.live_apply)
+        self._live_busy=False
+        kick=lambda *_a: (not self._live_busy) and self._live_timer.start(700)
+        for key, (_name, _icon, page) in zip(self.page_keys, self.pages):
+            if key in self.LIVE_SKIP: continue
+            for w in page.findChildren(QWidget):
+                if isinstance(w, (QCheckBox, QRadioButton)) or (isinstance(w, QToolButton) and w.isCheckable()):
+                    w.toggled.connect(kick)
+                elif isinstance(w, QComboBox) and w is not getattr(self, 'theme', None):
+                    w.currentIndexChanged.connect(kick)
+                elif isinstance(w, (QSpinBox, QDoubleSpinBox, QSlider)):
+                    w.valueChanged.connect(kick)
+                elif isinstance(w, QLineEdit) and not w.isReadOnly() and not isinstance(w.parent(), QAbstractSpinBox):
+                    w.textChanged.connect(lambda *_a: (not self._live_busy) and self._live_timer.start(1200))
+        if hasattr(self, 'theme'): self.theme.currentTextChanged.connect(kick)
+
+    def live_apply(self):
+        if self._live_busy: return
+        self._live_busy=True
+        try:
+            self.apply_settings()
+        finally:
+            self._live_busy=False
+
+    # ------------------------------------------------------------------ pages
+    def page_general(self):
+        p=Page('Language & Startup', 'Language of greetings and messages, startup and the section Eduka-Desktop opens with.')
+        f=form()
+        self.start_login=QCheckBox('Preload Eduka-Desktop at login for a faster first opening'); f.addRow('', self.start_login)
+        self.language=QComboBox()
+        for code, label in LANGUAGES: self.language.addItem(label, code)
+        f.addRow('Language:', self.language)
+        if tetun_pack_installed():
+            f.addRow('', hint_label('The Tetun language pack is installed: choosing Tetun changes Eduka at once and every other program with a Tetun translation after you log out and in (others use Portuguese, then English).'))
+        else:
+            f.addRow('', hint_label('Edukasaun OS follows the language chosen when the computer starts. Eduka carries its own Tetun translation; install eduka-language-pack-tet to have Tetun in the other programs too.'))
+        self.default_section=QComboBox()
+        for x in CATEGORY_ORDER:
+            if x[0] != 'Favorites': self.default_section.addItem(x[0], x[0])
+        f.addRow('Open with:', self.default_section)
+        p.v.addLayout(f)
+        p.v.addWidget(hint_label('Eduka-Desktop is the start menu engine of Edukasaun OS; the visible system name stays Edukasaun Desktop.'))
+        return p.finish()
+
+    def page_appearance(self):
+        p=Page('Appearance', 'Theme, transparency, icons and mouse cursor. Every change is used on the whole desktop at once.')
+        p.v.addWidget(self.card_title('Theme'))
+        # The combo box keeps the chosen theme; the cards are its face.
+        self.theme=QComboBox(); self.theme.addItems(THEMES); self.theme.setVisible(False)
+        grid=QGridLayout(); grid.setSpacing(10); self.theme_cards={}; group=QButtonGroup(self)
+        for i, name in enumerate(THEMES):
+            card=QToolButton(); card.setObjectName('themeCard'); card.setCheckable(True); card.setText(name)
+            card.setIcon(QIcon(theme_preview(name))); card.setIconSize(QSize(132, 78)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            card.clicked.connect(lambda _=False, n=name: self.theme.setCurrentText(n))
+            group.addButton(card); grid.addWidget(card, i//3, i%3); self.theme_cards[name]=card
+        p.v.addLayout(grid)
+        self.theme.currentTextChanged.connect(lambda n: self.theme_cards[n].setChecked(True) if n in self.theme_cards else None)
+        # Accent color: replaces the green (or the theme's color) everywhere.
+        p.v.addWidget(self.card_title('Accent color'))
+        acc=QGridLayout(); acc.setHorizontalSpacing(8); acc.setVerticalSpacing(8); self.accent_swatches={}; self.accent_group=QButtonGroup(self)
+        for i, (value, name) in enumerate(ACCENT_CHOICES+[('custom', 'Other color…')]):
+            b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(30,30); b.setToolTip(name); b.setAccessibleName(name)
+            b.setCursor(Qt.PointingHandCursor)
+            if value == '':
+                b.setText('A'); b.setStyleSheet('QToolButton#ledSwatch{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #00a879,stop:1 #1e9bd7);color:white;font-weight:800;}')
+            elif value == 'custom':
+                b.setText('+'); b.setStyleSheet('QToolButton#ledSwatch{background:qconicalgradient(cx:0.5,cy:0.5,angle:0,stop:0 #ff3b30,stop:0.33 #ffd60a,stop:0.66 #0a84ff,stop:1 #ff3b30);color:white;font-weight:800;font-size:15px;}')
+                b.clicked.connect(self.pick_accent)
+            else:
+                b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}')
+            self.accent_group.addButton(b); acc.addWidget(b, i//9, i%9); self.accent_swatches[value]=b
+        accw=QWidget(); accw.setLayout(acc); p.v.addWidget(accw, 0, Qt.AlignLeft)
+        self.accent_value=''
+        self.accent_group.buttonClicked.connect(lambda b: self.set_accent(next((v for v, w in self.accent_swatches.items() if w is b), ''), from_click=True))
+        p.v.addWidget(hint_label('Eduka-Panel, Eduka-Desktop, the Action Center, Eduka-Settings and the leave screen use this color. "A" keeps the color of the theme.'))
+        f=form()
+        self.theme_info=hint_label(''); p.v.addWidget(self.theme_info)
+        # Ranges match what Eduka-Panel (0.50) and Eduka-Desktop (0.45) accept.
+        self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.50,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Panel opacity:', self.panel_trans)
+        self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Desktop opacity:', self.desktop_trans)
+        self.glass_blur=QCheckBox('Blur behind Liquid Glass (needs 3D graphics; off in VirtualBox)'); f.addRow('', self.glass_blur)
+        self.multicolor=QCheckBox('Multi-color: every menu category, Action Center tile and panel button gets its own color'); f.addRow('', self.multicolor)
+        self.multicolor.setChecked(bool(self.desktop.get('multicolor', False)))
+        self.low=QCheckBox('Low resource mode for older computers'); f.addRow('', self.low)
+        self.shadow=QCheckBox('Window shadow for Eduka-Desktop'); f.addRow('', self.shadow)
+        p.v.addLayout(f)
+        comp=p.new_card('Compositor')
+        comp.addWidget(hint_label('The compositor draws transparency and rounded corners. Without one Eduka uses an opaque look, never black corners.'))
+        self.comp_status=QLabel(''); self.comp_status.setObjectName('capability'); self.comp_status.setWordWrap(True); self.comp_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        comp.addWidget(self.comp_status)
+        fcomp=form()
+        self.compositor=QComboBox(); self.compositor.setAccessibleName('Compositor')
+        for key, label in COMPOSITOR_CHOICES: self.compositor.addItem(label, key)
+        fcomp.addRow('Compositor:', self.compositor); comp.addLayout(fcomp)
+        crow=QHBoxLayout()
+        b=QPushButton('Restart compositor'); b.clicked.connect(self.restart_compositor); crow.addWidget(b)
+        b=QPushButton('Copy report'); b.setToolTip('Copy the compositor report (for help and bug reports)'); b.clicked.connect(lambda: (QApplication.clipboard().setText(compositor_report()), self.show_status('Compositor report copied.')))
+        crow.addWidget(b); crow.addStretch(1); comp.addLayout(crow)
+        QTimer.singleShot(400, self.update_compositor_status)
+        icons=p.new_card('Icons')
+        fi=form()
+        # Any installed icon theme can be chosen; it is used by the whole
+        # desktop (LXQt, GTK apps, Eduka-Panel and Eduka-Desktop).
+        self.icon_theme=QComboBox(); self.icon_theme.setAccessibleName('Icon theme')
+        for name, label in list_icon_themes():
+            self.icon_theme.addItem(label if label == name else f'{label}  ({name})', name)
+        fi.addRow('Icon theme:', self.icon_theme)
+        fi.addRow('', hint_label('Used by the whole desktop. Install more icon themes (e.g. papirus-icon-theme) for more choices.'))
+        icons.addLayout(fi)
+        cursor=p.new_card('Mouse cursor')
+        fc=form()
+        self.cursor_theme=QComboBox(); self.cursor_theme.setAccessibleName('Cursor theme')
+        for name, label in list_cursor_themes():
+            self.cursor_theme.addItem(label if label == name else f'{label}  ({name})', name)
+        if self.cursor_theme.count() == 0:
+            self.cursor_theme.addItem('No cursor themes installed', ''); self.cursor_theme.setEnabled(False)
+        fc.addRow('Cursor theme:', self.cursor_theme)
+        self.cursor_size=QComboBox()
+        for size in (24, 32, 48, 64): self.cursor_size.addItem(f'{size} px' + (' (normal)' if size == 24 else ' (large)' if size >= 48 else ''), size)
+        fc.addRow('Cursor size:', self.cursor_size)
+        fc.addRow('', hint_label('New windows use the cursor at once; everything else after logging in again. More cursors: install e.g. breeze-cursor-theme or dmz-cursor-theme.'))
+        cursor.addLayout(fc)
+        self.theme.currentTextChanged.connect(self.theme_changed)
+        return p.finish()
+
+    def set_accent(self, value, from_click=False):
+        if value == 'custom':
+            return
+        self.accent_value=value or ''
+        b=self.accent_swatches.get(self.accent_value) or self.accent_swatches['custom']
+        b.setChecked(True)
+        if self.accent_value and self.accent_value not in self.accent_swatches:
+            self.accent_swatches['custom'].setStyleSheet(f'QToolButton#ledSwatch{{background:{self.accent_value};color:white;font-weight:800;font-size:15px;}}')
+
+    def pick_accent(self):
+        color=QColorDialog.getColor(QColor(self.accent_value or theme_accent()), self, 'Accent color')
+        if color.isValid():
+            self.set_accent(color.name())
+        else:
+            self.set_accent(self.accent_value)
+
+    # ------------------------------------------------------------ parental control
+    def page_parental(self):
+        from eduka_parental import EMOJIS, PRESETS, read_state, minutes_text, emoji_icon
+        p=Page('Parental Control', 'Limit how long this computer can be used. When the time is up your message appears over the whole screen, keyboard and mouse stop working and the computer shuts down.')
+        self.pc_status=QLabel(''); self.pc_status.setObjectName('capability'); self.pc_status.setWordWrap(True); p.v.addWidget(self.pc_status)
+        self.pc_enabled=QCheckBox('Use a time limit on this computer'); p.v.addWidget(self.pc_enabled)
+        p.v.addWidget(self.card_title('Time allowed'))
+        row=QHBoxLayout(); row.setSpacing(8); self.pc_presets={}
+        for secs, label in PRESETS:
+            b=QPushButton(label); b.setObjectName('chip'); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, v=secs: self.set_pc_seconds(v)); row.addWidget(b); self.pc_presets[secs]=b
+        row.addStretch(1); p.v.addLayout(row)
+        manual=QHBoxLayout(); manual.setSpacing(6)
+        manual.addWidget(QLabel('Or set it yourself:'))
+        self.pc_h=QSpinBox(); self.pc_h.setRange(0, 24); self.pc_h.setSuffix(' h')
+        self.pc_m=QSpinBox(); self.pc_m.setRange(0, 59); self.pc_m.setSuffix(' min')
+        self.pc_s=QSpinBox(); self.pc_s.setRange(0, 59); self.pc_s.setSuffix(' s')
+        for w, tip in ((self.pc_h, 'Hours'), (self.pc_m, 'Minutes'), (self.pc_s, 'Seconds')):
+            w.setToolTip(tip); w.setAccessibleName(tip); w.setMinimumWidth(84); w.valueChanged.connect(self.pc_time_changed); manual.addWidget(w)
+        self.pc_total=QLabel(''); self.pc_total.setObjectName('fieldHint'); manual.addWidget(self.pc_total)
+        manual.addStretch(1); p.v.addLayout(manual)
+        f=form()
+        self.pc_mode=QComboBox(); self.pc_mode.addItem('Each time the computer starts', 'boot'); self.pc_mode.addItem('In total per day', 'daily')
+        f.addRow('Count:', self.pc_mode); p.v.addLayout(f)
+        msg=p.new_card('Message before shutting down')
+        self.pc_message=QPlainTextEdit(); self.pc_message.setPlaceholderText('It is time to rest. See you later!'); self.pc_message.setFixedHeight(76)
+        self.pc_message.textChanged.connect(lambda: self.pc_message.toPlainText().__len__() > 300 and self.pc_message.setPlainText(self.pc_message.toPlainText()[:300]))
+        msg.addWidget(self.pc_message)
+        er=QGridLayout(); er.setSpacing(6); self.pc_emojis={}; eg=QButtonGroup(self)
+        for i, e in enumerate(EMOJIS):
+            b=QToolButton(); b.setObjectName('emojiChip'); b.setCheckable(True); b.setFixedSize(36,36); b.setCursor(Qt.PointingHandCursor)
+            ic=emoji_icon(e)
+            if ic.isNull(): b.setText(e)
+            else: b.setIcon(ic); b.setIconSize(QSize(24, 24))
+            eg.addButton(b); er.addWidget(b, i//8, i%8); self.pc_emojis[e]=b
+        er.setColumnStretch(8, 1); msg.addLayout(er)
+        btns=QHBoxLayout()
+        prev=QPushButton('Preview message'); prev.clicked.connect(self.preview_parental); btns.addWidget(prev)
+        btns.addStretch(1)
+        self.pc_save=QPushButton('Save Parental Control'); self.pc_save.setObjectName('primary'); self.pc_save.clicked.connect(self.save_parental); btns.addWidget(self.pc_save)
+        msg.addLayout(btns)
+        msg.addWidget(hint_label('Saving always asks for an administrator password, so only parents and teachers can change or switch off the limit. On the message screen a parent can press Ctrl+Alt+P to add 30 minutes.'))
+        self.load_parental()
+        t=QTimer(self); t.timeout.connect(self.update_parental_status); t.start(5000); self.update_parental_status()
+        return p.finish()
+
+    def load_parental(self):
+        try:
+            with open(PARENTAL_CONF, encoding='utf-8') as f: conf=json.load(f)
+        except Exception:
+            conf={}
+        self.pc_enabled.setChecked(bool(conf.get('enabled', False)))
+        try:
+            secs=int(conf['seconds']) if conf.get('seconds') is not None else int(conf.get('minutes', 60) or 60)*60
+        except Exception:
+            secs=3600
+        self.set_pc_seconds(secs)
+        idx=self.pc_mode.findData(conf.get('mode', 'boot')); self.pc_mode.setCurrentIndex(max(0, idx))
+        self.pc_message.setPlainText(str(conf.get('message', '')))
+        b=self.pc_emojis.get(conf.get('emoji', '😊')) or next(iter(self.pc_emojis.values())); b.setChecked(True)
+
+    def pc_seconds(self):
+        return max(60, min(86400, self.pc_h.value()*3600+self.pc_m.value()*60+self.pc_s.value()))
+
+    def set_pc_seconds(self, secs):
+        secs=max(60, min(86400, int(secs)))
+        for w, v in ((self.pc_h, secs//3600), (self.pc_m, secs%3600//60), (self.pc_s, secs%60)):
+            w.blockSignals(True); w.setValue(v); w.blockSignals(False)
+        self.pc_time_changed()
+
+    def pc_time_changed(self, *_a):
+        from eduka_parental import duration_text
+        raw=self.pc_h.value()*3600+self.pc_m.value()*60+self.pc_s.value(); secs=self.pc_seconds()
+        for v, b in self.pc_presets.items(): b.setChecked(v == secs)
+        text='= '+duration_text(secs)
+        if raw < 60: text+='  '+_('(at least 1 minute)')
+        elif raw > 86400: text+='  '+_('(at most 24 hours)')
+        self.pc_total.setText(text)
+
+    def parental_request(self):
+        emoji=next((e for e, b in self.pc_emojis.items() if b.isChecked()), '😊')
+        secs=self.pc_seconds()
+        return {'enabled': self.pc_enabled.isChecked(), 'seconds': secs, 'minutes': max(1, -(-secs//60)), 'mode': self.pc_mode.currentData(),
+                'message': self.pc_message.toPlainText().strip()[:300], 'emoji': emoji, 'reset': True}
+
+    def update_parental_status(self):
+        from eduka_parental import read_state, minutes_text
+        st=read_state()
+        if st.get('enabled') and st.get('phase') in ('ok', 'warn'):
+            used=minutes_text(st.get('used', 0)); left=minutes_text(st.get('remaining', 0))
+            self.pc_status.setText(_('✓ On: {u} used, {l} left.').replace('{u}', used).replace('{l}', left))
+        elif st.get('phase') == 'lock':
+            self.pc_status.setText(_('Time is up — the computer is shutting down.'))
+        elif not os.path.exists(PARENTAL_HELPER):
+            self.pc_status.setText(_('Parental Control works on Edukasaun OS (eduka-parental.service).'))
+        else:
+            self.pc_status.setText(_('Off: this computer can be used without a time limit.'))
+
+    def preview_parental(self):
+        from eduka_parental import ParentalLockScreen
+        r=self.parental_request()
+        self._pc_preview=ParentalLockScreen(r['message'], r['emoji'], preview=True); self._pc_preview.show_locked()
+
+    def save_parental(self):
+        if shutil.which('pkexec') is None or not os.path.exists(PARENTAL_HELPER):
+            self.show_status('Parental Control can only be changed on Edukasaun OS (pkexec missing).', error=True); return
+        try:
+            out=subprocess.run(['pkexec', PARENTAL_HELPER], input=json.dumps(self.parental_request()), capture_output=True, text=True, timeout=180)
+        except Exception as e:
+            self.show_status(str(e), error=True); return
+        if out.returncode == 0:
+            self.show_status('Parental Control saved.'); QTimer.singleShot(1500, self.update_parental_status)
+        else:
+            self.show_status('Not saved (no administrator password).', error=True)
+
+    def update_compositor_status(self):
+        i=compositor_info()
+        if i['running']:
+            text=_('✓ In use: {n}').replace('{n}', i['name'])
+            if i['backend']: text+=f" • {i['backend']}"
+            if i['started_by']: text+=' • '+_('started by {x}').replace('{x}', i['started_by'])
+        else:
+            text=_('⚠ No compositor: transparency is off and Eduka uses its opaque look.')
+            if picom_crash_count() >= 3:
+                text+='\n'+_('picom stopped working several times, so it is not started again. Press "Restart compositor" to try again.')
+        details=[_('Window manager: {w}').replace('{w}', i['wm'] or '?')]
+        if i['vm']: details.append(_('Virtual machine: {v} (XRender is used)').replace('{v}', 'VirtualBox' if i['vm'] == 'oracle' else i['vm']))
+        if not i['picom_installed']: details.append(_('picom is not installed'))
+        self.comp_status.setText(text+'\n'+' • '.join(details))
+
+    def restart_compositor(self):
+        save_desktop_config({'compositor': self.compositor.currentData()})
+        clear_picom_crashes(); stop_own_picom(); ensure_compositor()
+        QTimer.singleShot(600, self.update_compositor_status)
+        self.show_status('Compositor restarted.')
+
+    # ------------------------------------------------------------ wallpaper
+    def page_wallpaper(self):
+        import eduka_wallpaper as ew
+        self._ew=ew; cfg=ew.wallpaper_config(); self._wall=cfg
+        p=Page('Wallpaper', 'Pictures from /usr/share/Edukasaun/Backgrounds and your own. Point at a picture to see it bigger; changes show on the desktop at once.')
+        top=QHBoxLayout(); top.setSpacing(14)
+        self.wall_preview=QLabel(); self.wall_preview.setFixedSize(256, 144); self.wall_preview.setObjectName('wallPreview'); self.wall_preview.setAlignment(Qt.AlignCenter)
+        top.addWidget(self.wall_preview)
+        side=QVBoxLayout(); side.setSpacing(8)
+        f=form()
+        self.wall_mode=QComboBox()
+        for key, label in ew.MODES: self.wall_mode.addItem(label, key)
+        f.addRow('Fit:', self.wall_mode)
+        self.wall_color=QPushButton(''); self.wall_color.setObjectName('colorButton'); self.wall_color.setFixedSize(60, 28); self.wall_color.clicked.connect(self.pick_wall_color)
+        f.addRow('Background color:', self.wall_color)
+        side.addLayout(f)
+        add=QPushButton('Add pictures…'); add.clicked.connect(self.add_wallpapers); side.addWidget(add, 0, Qt.AlignLeft)
+        side.addStretch(1); top.addLayout(side, 1); p.v.addLayout(top)
+        self.wall_grid=WallpaperGrid(); p.v.addWidget(self.wall_grid)
+        self.wall_grid.hovered.connect(lambda path: self.update_wall_preview(path))
+        self.wall_hint=hint_label(''); p.v.addWidget(self.wall_hint)
+        sl=p.new_card('Slideshow')
+        self.wall_slide=QCheckBox('Change the wallpaper by itself (choose several pictures above)'); sl.addWidget(self.wall_slide)
+        fs=form()
+        self.wall_interval=QSpinBox(); self.wall_interval.setRange(1, 1440); self.wall_interval.setSuffix(' min'); fs.addRow('Change every:', self.wall_interval)
+        self.wall_transition=QComboBox()
+        for key, label in ew.TRANSITIONS: self.wall_transition.addItem(label, key)
+        fs.addRow('Transition speed:', self.wall_transition)
+        self.wall_random=QCheckBox('Random order'); fs.addRow('', self.wall_random)
+        sl.addLayout(fs)
+        # Load the current choice, then follow every change at once.
+        self.wall_mode.setCurrentIndex(max(0, self.wall_mode.findData(cfg['mode'])))
+        self.set_wall_color(cfg['color'])
+        self.wall_slide.setChecked(cfg['slideshow']); self.wall_interval.setValue(cfg['interval'])
+        self.wall_transition.setCurrentIndex(max(0, self.wall_transition.findData(cfg['transition']))); self.wall_random.setChecked(cfg['random'])
+        self.fill_wall_grid()
+        self._wall_timer=QTimer(self); self._wall_timer.setSingleShot(True); self._wall_timer.timeout.connect(self.apply_wall)
+        for sig in (self.wall_mode.currentIndexChanged, self.wall_interval.valueChanged, self.wall_transition.currentIndexChanged, self.wall_random.toggled):
+            sig.connect(lambda *_: self._wall_timer.start(250))
+        self.wall_slide.toggled.connect(self.wall_slide_toggled)
+        self.wall_grid.itemSelectionChanged.connect(lambda: self._wall_timer.start(250))
+        self.wall_slide_toggled(cfg['slideshow'], apply=False)
+        return p.finish()
+
+    def fill_wall_grid(self):
+        cfg=self._wall; paths=self._ew.list_wallpapers(cfg['extra'] + [i for i in cfg['images'] if i not in cfg['extra']])
+        self.wall_grid.blockSignals(True); self.wall_grid.set_images(paths)
+        for i in range(self.wall_grid.count()):
+            it=self.wall_grid.item(i); it.setSelected(it.data(Qt.UserRole) in cfg['images'])
+        self.wall_grid.blockSignals(False)
+        if not paths:
+            self.wall_hint.setText(_('No pictures in /usr/share/Edukasaun/Backgrounds yet — press "Add pictures…". The background color is used meanwhile.'))
+        else:
+            self.wall_hint.setText(_('{n} pictures. Click one to use it; with the slideshow on, choose several.').replace('{n}', str(len(paths))))
+        self.update_wall_preview()
+
+    def wall_slide_toggled(self, on, apply=True):
+        self.wall_grid.setSelectionMode(QAbstractItemView.MultiSelection if on else QAbstractItemView.SingleSelection)
+        for w in (self.wall_interval, self.wall_transition, self.wall_random): w.setEnabled(on)
+        if not on:
+            sel=self.wall_grid.selectedItems()
+            for it in sel[1:]: it.setSelected(False)
+        if apply: self._wall_timer.start(250)
+
+    def set_wall_color(self, color):
+        self._wall_color=QColor(color).name()
+        self.wall_color.setStyleSheet(f'QPushButton#colorButton{{background:{self._wall_color};border:2px solid #ffffff;border-radius:14px;}}')
+
+    def pick_wall_color(self):
+        c=QColorDialog.getColor(QColor(self._wall_color), self, 'Background color')
+        if c.isValid(): self.set_wall_color(c.name()); self._wall_timer.start(100)
+
+    def add_wallpapers(self):
+        files, _f=QFileDialog.getOpenFileNames(self, 'Add pictures', str(Path.home()/'Pictures'), 'Pictures (*.png *.jpg *.jpeg *.webp *.bmp *.svg)')
+        if files:
+            self._wall['extra']=list(dict.fromkeys(self._wall['extra']+files)); self._ew.save_wallpaper_config(self._wall); self.fill_wall_grid()
+
+    def wall_choice(self):
+        cfg=dict(self._wall)
+        cfg.update(mode=self.wall_mode.currentData(), color=self._wall_color, slideshow=self.wall_slide.isChecked(),
+                   interval=self.wall_interval.value(), transition=self.wall_transition.currentData(), random=self.wall_random.isChecked(),
+                   images=[it.data(Qt.UserRole) for it in self.wall_grid.selectedItems()] or ([] if self.wall_grid.count() else cfg['images']))
+        return cfg
+
+    def update_wall_preview(self, path=None):
+        cfg=self.wall_choice(); img=path if path is not None else (cfg['images'][0] if cfg['images'] else '')
+        sw, sh=self._ew.screen_size(); k=256.0/sw
+        pix=QPixmap.fromImage(self._ew.render(img, cfg['mode'], cfg['color'], (int(sw*k), int(sh*k)))).scaled(256, 144, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.wall_preview.setPixmap(pix)
+
+    def apply_wall(self):
+        cfg=self.wall_choice(); self._wall=cfg
+        self._ew.save_wallpaper_config(cfg); self.update_wall_preview()
+        self._ew.apply_wallpaper(cfg)
+        touch_reload()   # Eduka-Panel starts or stops the slideshow
+        self.show_status(_('Wallpaper applied.'))
+
+    # ------------------------------------------------------------ desktop icons
+    def page_desktop_icons(self):
+        import eduka_wallpaper as ew
+        self._ew=ew
+        p=Page('Desktop Icons', 'Icons shown on the desktop. Every change appears at once.')
+        shown=ew.desktop_shortcuts(); self.desk_icons={}
+        labels={'Home': ('Home folder', 'user-home'), 'Trash': ('Trash', 'user-trash'), 'Computer': ('Computer', 'computer'), 'Network': ('Network', 'network-workgroup')}
+        for key, _f in ew.SHORTCUTS:
+            text, icon=labels[key]
+            cb=QCheckBox(text); cb.setIcon(get_icon(icon, 'folder')); cb.setIconSize(QSize(22, 22)); cb.setChecked(key in shown)
+            cb.toggled.connect(lambda *_: self._desk_timer.start(300)); p.v.addWidget(cb); self.desk_icons[key]=cb
+        self.desk_drives=QCheckBox('USB sticks, memory cards and external disks (HDD / SSD) while they are plugged in')
+        self.desk_drives.setIcon(get_icon('drive-removable-media', 'drive-harddisk')); self.desk_drives.setIconSize(QSize(22, 22))
+        self.desk_drives.setChecked(bool(read_desktop_config().get('desktop_drives', True)))
+        self.desk_drives.toggled.connect(lambda on: (save_desktop_config({'desktop_drives': bool(on)}), touch_reload(), self.show_status(_('Desktop icons updated.'))))
+        p.v.addWidget(self.desk_drives)
+        p.v.addWidget(hint_label('The desktop restarts for a moment when Home, Trash, Computer or Network change.'))
+        self._desk_timer=QTimer(self); self._desk_timer.setSingleShot(True); self._desk_timer.timeout.connect(self.apply_desktop_icons)
+        return p.finish()
+
+    def apply_desktop_icons(self):
+        names={k for k, cb in self.desk_icons.items() if cb.isChecked()}
+        if self._ew.set_desktop_shortcuts(names):
+            self.show_status(_('Desktop icons updated.'))
+
+    # ------------------------------------------------------------ keyboard, mouse, touchpad
+    def _input_slider(self, lo, hi, value, fmt, step=1):
+        box=QHBoxLayout(); box.setSpacing(10)
+        sl=QSlider(Qt.Horizontal); sl.setRange(lo, hi); sl.setSingleStep(step); sl.setPageStep(step*5); sl.setValue(int(value))
+        lab=QLabel(fmt(sl.value())); lab.setObjectName('fieldHint'); lab.setMinimumWidth(92)
+        sl.valueChanged.connect(lambda v: lab.setText(fmt(v)))
+        box.addWidget(sl, 1); box.addWidget(lab)
+        return sl, box
+
+    def _input_changed(self, *_a):
+        self._input_timer.start(250)
+
+    def input_widgets_ready(self):
+        if not hasattr(self, '_input_timer'):
+            self._input_timer=QTimer(self); self._input_timer.setSingleShot(True); self._input_timer.timeout.connect(self.apply_input)
+            import eduka_input
+            self._ei=eduka_input; self.input_cfg=eduka_input.input_config()
+        return self._ei, self.input_cfg
+
+    def page_keyboard(self):
+        ei, cfg=self.input_widgets_ready()
+        p=Page('Keyboard', 'Keyboard layouts, the key that switches them and key repeat. Changes work at once.')
+        f=form()
+        self.kb_list=QListWidget(); self.kb_list.setObjectName('layoutList'); self.kb_list.setFixedHeight(112)
+        names=dict(ei.keyboard_layouts()); self._kb_names=names
+        for code in (cfg['layouts'] or ei.current_layouts() or ['us']):
+            it=QListWidgetItem(get_icon('input-keyboard'), f"{names.get(code, code)}  ({code})"); it.setData(Qt.UserRole, code); self.kb_list.addItem(it)
+        btns=QVBoxLayout(); btns.setSpacing(6)
+        add=QPushButton(get_icon('list-add'), ' Add…'); add.clicked.connect(self.add_kb_layout); btns.addWidget(add)
+        rem=QPushButton(get_icon('list-remove'), ' Remove'); rem.clicked.connect(self.remove_kb_layout); btns.addWidget(rem)
+        up=QPushButton(get_icon('go-up'), ' First'); up.setToolTip('Make this the main layout'); up.clicked.connect(self.first_kb_layout); btns.addWidget(up)
+        btns.addStretch(1)
+        row=QHBoxLayout(); row.addWidget(self.kb_list, 1); row.addLayout(btns)
+        f.addRow('Layouts:', row)
+        f.addRow('', hint_label('The first layout is used when you log in. Eduka-Panel shows the active one (for example US).'))
+        self.kb_switch=QComboBox()
+        for key, label in ei.SWITCH_KEYS: self.kb_switch.addItem(label, key)
+        self.kb_switch.setCurrentIndex(max(0, self.kb_switch.findData(cfg['switch'])))
+        f.addRow('Switch layout with:', self.kb_switch)
+        self.kb_delay, box=self._input_slider(150, 1000, cfg['repeat_delay'], lambda v: _('{n} ms').replace('{n}', str(v)), 10)
+        f.addRow('Repeat delay:', box)
+        self.kb_rate, box=self._input_slider(5, 60, cfg['repeat_rate'], lambda v: _('{n} per second').replace('{n}', str(v)))
+        f.addRow('Repeat speed:', box)
+        self.kb_numlock=QCheckBox('Turn on Num Lock when I log in'); self.kb_numlock.setChecked(bool(cfg['numlock'])); f.addRow('', self.kb_numlock)
+        p.v.addLayout(f)
+        test=QLineEdit(); test.setPlaceholderText(_('Type here to test the layout and the repeat speed')); p.v.addWidget(test)
+        for sig in (self.kb_switch.currentIndexChanged, self.kb_delay.valueChanged, self.kb_rate.valueChanged, self.kb_numlock.toggled):
+            sig.connect(self._input_changed)
+        return p.finish()
+
+    def kb_codes(self):
+        return [self.kb_list.item(i).data(Qt.UserRole) for i in range(self.kb_list.count())]
+
+    def add_kb_layout(self):
+        dlg=QDialog(self); dlg.setWindowTitle(_('Add a keyboard layout')); v=QVBoxLayout(dlg)
+        search=QLineEdit(); search.setPlaceholderText(_('Search, for example Portuguese')); v.addWidget(search)
+        lst=QListWidget(); v.addWidget(lst, 1); dlg.resize(420, 460)
+        have=set(self.kb_codes())
+        for code, name in self._ei.keyboard_layouts():
+            if code in have: continue
+            it=QListWidgetItem(f'{name}  ({code})'); it.setData(Qt.UserRole, code); lst.addItem(it)
+        search.textChanged.connect(lambda t: [lst.item(i).setHidden(t.lower() not in lst.item(i).text().lower()) for i in range(lst.count())])
+        bb=QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel); bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); v.addWidget(bb)
+        lst.itemDoubleClicked.connect(lambda *_: dlg.accept())
+        if dlg.exec_() == QDialog.Accepted and lst.currentItem() and self.kb_list.count() < 4:
+            code=lst.currentItem().data(Qt.UserRole)
+            it=QListWidgetItem(get_icon('input-keyboard'), f"{self._kb_names.get(code, code)}  ({code})"); it.setData(Qt.UserRole, code); self.kb_list.addItem(it)
+            self._input_changed()
+
+    def remove_kb_layout(self):
+        if self.kb_list.count() > 1 and self.kb_list.currentRow() >= 0:
+            self.kb_list.takeItem(self.kb_list.currentRow()); self._input_changed()
+
+    def first_kb_layout(self):
+        row=self.kb_list.currentRow()
+        if row > 0:
+            self.kb_list.insertItem(0, self.kb_list.takeItem(row)); self.kb_list.setCurrentRow(0); self._input_changed()
+
+    def page_mouse(self):
+        ei, cfg=self.input_widgets_ready()
+        p=Page('Mouse', 'Pointer speed, buttons, double-click and the scroll wheel. Changes work at once.')
+        f=form()
+        speed=lambda v: _('Slow') if v < -40 else _('Fast') if v > 40 else _('Normal')
+        self.ms_speed, box=self._input_slider(-100, 100, round(float(cfg['mouse_speed'])*100), speed, 5)
+        f.addRow('Pointer speed:', box)
+        self.ms_left=QCheckBox('Left-handed (swap the left and right buttons)'); self.ms_left.setChecked(bool(cfg['left_handed'])); f.addRow('', self.ms_left)
+        self.ms_natural=QCheckBox('Natural scrolling (content follows the wheel)'); self.ms_natural.setChecked(bool(cfg['mouse_natural'])); f.addRow('', self.ms_natural)
+        self.ms_middle=QCheckBox('Press both buttons together for a middle click'); self.ms_middle.setChecked(bool(cfg['middle_emulation'])); f.addRow('', self.ms_middle)
+        self.ms_dclick, box=self._input_slider(200, 900, cfg['double_click'], lambda v: _('{n} ms').replace('{n}', str(v)), 10)
+        f.addRow('Double-click time:', box)
+        self.ms_wheel=QSpinBox(); self.ms_wheel.setRange(1, 10); self.ms_wheel.setValue(int(cfg['wheel_lines'])); self.ms_wheel.setSuffix(_(' lines'))
+        f.addRow('Wheel scrolls:', self.ms_wheel)
+        p.v.addLayout(f)
+        test=QPushButton(get_icon('face-plain', 'emblem-default'), '  '+_('Double-click here to test')); test.setObjectName('dclickTest'); test.setMinimumHeight(54)
+        self._dclick_state=False
+        def dbl(e, b=test):
+            self._dclick_state=not self._dclick_state
+            b.setIcon(get_icon('face-smile' if self._dclick_state else 'face-plain', 'emblem-default')); b.setText('  '+(_('Well done!') if self._dclick_state else _('Double-click here to test')))
+        test.mouseDoubleClickEvent=dbl; p.v.addWidget(test)
+        found=[d['name'] for d in ei.pointer_devices() if not d['touchpad']]
+        p.v.addWidget(hint_label(_('Found: {d}').replace('{d}', ', '.join(found)) if found else _('Settings are used by every mouse that is plugged in.')))
+        self.ms_speed.valueChanged.connect(self._input_changed); self.ms_dclick.valueChanged.connect(self._input_changed); self.ms_wheel.valueChanged.connect(self._input_changed)
+        for cb in (self.ms_left, self.ms_natural, self.ms_middle): cb.toggled.connect(self._input_changed)
+        self.ms_dclick.valueChanged.connect(lambda v: QApplication.setDoubleClickInterval(v))
+        return p.finish()
+
+    def page_touchpad(self):
+        ei, cfg=self.input_widgets_ready()
+        pads=ei.touchpads()
+        p=Page('Touchpad', 'The touchpad of a laptop. Changes work at once.')
+        top=QHBoxLayout(); top.setSpacing(16)
+        self.tp_view=ei.TouchpadView(accent=theme_accent()); self.tp_view.setFixedSize(150, 116)
+        top.addWidget(self.tp_view)
+        info=QVBoxLayout(); info.setSpacing(6)
+        name=QLabel(', '.join(d['name'] for d in pads) if pads else _('No touchpad found on this computer.')); name.setObjectName('cardTitle'); name.setWordWrap(True); info.addWidget(name)
+        info.addWidget(hint_label('Move a finger or click on the touchpad: the picture copies it.' if pads else 'The settings are kept and used when a laptop touchpad is found.'))
+        info.addStretch(1); top.addLayout(info, 1); p.v.addLayout(top)
+        f=form()
+        self.tp_enabled=QCheckBox('Touchpad on'); self.tp_enabled.setChecked(bool(cfg['tp_enabled'])); f.addRow('', self.tp_enabled)
+        self.tp_tap=QCheckBox('Tap to click (one finger left, two fingers right)'); self.tp_tap.setChecked(bool(cfg['tp_tap'])); f.addRow('', self.tp_tap)
+        self.tp_natural=QCheckBox('Natural scrolling (content follows the fingers)'); self.tp_natural.setChecked(bool(cfg['tp_natural'])); f.addRow('', self.tp_natural)
+        self.tp_dwt=QCheckBox('Turn off while typing'); self.tp_dwt.setChecked(bool(cfg['tp_dwt'])); f.addRow('', self.tp_dwt)
+        self.tp_scroll=QComboBox()
+        for key, label in ei.SCROLL_METHODS: self.tp_scroll.addItem(label, key)
+        self.tp_scroll.setCurrentIndex(max(0, self.tp_scroll.findData(cfg['tp_scroll']))); f.addRow('Scrolling:', self.tp_scroll)
+        speed=lambda v: _('Slow') if v < -40 else _('Fast') if v > 40 else _('Normal')
+        self.tp_speed, box=self._input_slider(-100, 100, round(float(cfg['tp_speed'])*100), speed, 5); f.addRow('Pointer speed:', box)
+        self.tp_icon=QCheckBox('Show the touchpad on Eduka-Panel'); self.tp_icon.setChecked(bool(cfg['tp_icon'])); f.addRow('', self.tp_icon)
+        p.v.addLayout(f)
+        for cb in (self.tp_enabled, self.tp_tap, self.tp_natural, self.tp_dwt, self.tp_icon): cb.toggled.connect(self._input_changed)
+        self.tp_scroll.currentIndexChanged.connect(self._input_changed); self.tp_speed.valueChanged.connect(self._input_changed)
+        self.tp_icon.toggled.connect(lambda *_: QTimer.singleShot(400, touch_reload))
+        if pads and shutil.which('xinput'):
+            self._tp_proc=QProcess(self); self._tp_state={}
+            self._tp_proc.readyReadStandardOutput.connect(self._tp_events)
+            self._tp_proc.start('xinput', ['test-xi2', '--root', str(pads[0]['id'])])
+            QApplication.instance().aboutToQuit.connect(self._tp_proc.kill)
+        return p.finish()
+
+    def _tp_events(self):
+        data=bytes(self._tp_proc.readAllStandardOutput()).decode('utf-8', 'ignore')
+        for ev in self._ei.parse_xi2(data.splitlines(), self._tp_state):
+            if ev[0] == 'move': self.tp_view.motion(ev[1], ev[2])
+            elif ev[0] == 'press': self.tp_view.press(ev[1])
+            else: self.tp_view.release(ev[1])
+
+    def collect_input(self):
+        cfg=dict(self.input_cfg)
+        if hasattr(self, 'kb_list'):
+            cfg.update(layouts=self.kb_codes(), switch=self.kb_switch.currentData() or '', repeat_delay=self.kb_delay.value(), repeat_rate=self.kb_rate.value(), numlock=self.kb_numlock.isChecked())
+        if hasattr(self, 'ms_speed'):
+            cfg.update(mouse_speed=self.ms_speed.value()/100.0, left_handed=self.ms_left.isChecked(), mouse_natural=self.ms_natural.isChecked(),
+                       middle_emulation=self.ms_middle.isChecked(), double_click=self.ms_dclick.value(), wheel_lines=self.ms_wheel.value())
+        if hasattr(self, 'tp_enabled'):
+            cfg.update(tp_enabled=self.tp_enabled.isChecked(), tp_tap=self.tp_tap.isChecked(), tp_natural=self.tp_natural.isChecked(), tp_dwt=self.tp_dwt.isChecked(),
+                       tp_scroll=self.tp_scroll.currentData(), tp_speed=self.tp_speed.value()/100.0, tp_icon=self.tp_icon.isChecked())
+        return cfg
+
+    def apply_input(self):
+        if not hasattr(self, '_ei'): return
+        cfg=self.collect_input(); self.input_cfg=cfg
+        self._ei.save_input_config(cfg); self._ei.apply_all(cfg)
+        if hasattr(self, 'tp_view'): self.tp_view.disabled=not cfg['tp_enabled']; self.tp_view.update()
+        self.show_status(_('Keyboard, mouse and touchpad settings applied.'))
+
+    THEME_INFO = {
+        THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
+        THEME_LOW: 'Eduka-Low-Theme (after Yaru-remix): flat and fully opaque. Transparency, the compositor and all effects are switched off — for very low spec computers.',
+        THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',
+        THEME_LIQUID: 'Soft milky glass with light rims. Needs a compositor (started automatically); without one the default theme is used.',
+        THEME_DARK: 'Edukasaun-Dark (Orchis dark): Eduka-Panel, Eduka-Desktop, GTK and Qt applications and window borders turn dark.',
+        THEME_MULTI: 'Eduka-MultiColor (after Graphite by vinceliuice): calm light grey for applications, and a different color for every menu category, Action Center tile and panel button.',
+    }
+
+    def update_theme_info(self):
+        name=self.theme.currentText()
+        self.theme_info.setText(self.THEME_INFO.get(name, ''))
+        self.glass_blur.setEnabled(name in (THEME_LIQUID, THEME_TRANSPARENT))
+        if hasattr(self, 'multicolor'):
+            # Eduka-MultiColor is always multi-colored; Eduka-Low stays flat.
+            self.multicolor.setEnabled(name not in (THEME_MULTI, THEME_LOW))
+        opaque=name == THEME_LOW
+        for w in (self.panel_trans, self.desktop_trans, self.shadow): w.setEnabled(not opaque)
+        if hasattr(self, 'effects_on'): self.update_effects_state()
+
+    def liquid_glass_capability(self):
+        memory_gib=0.0
+        try:
+            for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+                if line.startswith('MemTotal:'):
+                    memory_gib=float(line.split()[1])/(1024*1024); break
+        except Exception:
+            pass
+        cpu_threads=max(1, int(os.cpu_count() or 1))
+        compositor=compositor_running(force=True) or shutil.which('picom') is not None
+        # Glass without blur is cheap: 2 GB RAM and two CPU threads are enough.
+        return memory_gib, cpu_threads, compositor, memory_gib >= 1.8 and cpu_threads >= 2
+
+    def _leave_liquid(self):
+        self.theme.blockSignals(True); self.theme.setCurrentText(THEME_DEFAULT); self.theme.blockSignals(False)
+        self.low.setEnabled(True); self.low.setChecked(self._low_before_liquid); self.update_theme_info()
+
+    def theme_changed(self, theme):
+        self.update_theme_info(); self.mark_sddm_follow()
+        if theme not in (THEME_LIQUID, THEME_TRANSPARENT):
+            self._liquid_confirmed=False
+            self.low.setEnabled(True)
+            if theme == THEME_LOW: self.low.setChecked(True)
+            return
+        self._low_before_liquid=self.low.isChecked()
+        self.low.setChecked(False); self.low.setEnabled(False)
+        if self._liquid_confirmed:
+            return
+        memory_gib, cpu_threads, compositor, capable=self.liquid_glass_capability()
+        detected=f'Memory: {memory_gib:.1f} GiB • CPU threads: {cpu_threads} • Compositor: {"running" if compositor_running(force=True) else ("will be started" if compositor else "none (default theme is used)")}'
+        if not capable:
+            QMessageBox.warning(self, theme, f'{theme} needs at least 2 GB of memory and two CPU threads.\n\n'+detected)
+            self._leave_liquid(); return
+        self._liquid_confirmed=True
+
+    def page_accessibility(self):
+        p=Page('Accessibility', 'Clearer vision, spoken navigation and visible status information.')
+        f=form()
+        self.visual_access=QCheckBox('High contrast, opaque surfaces and larger text'); f.addRow('Vision:', self.visual_access)
+        self.hearing_access=QCheckBox('Show network, sound and alert status as text on Eduka-Panel'); f.addRow('Hearing:', self.hearing_access)
+        self.orca=QCheckBox('Orca screen reader — speaks focused applications and menus'); f.addRow('Screen reader:', self.orca)
+        voice=QPushButton(get_icon('preferences-desktop-accessibility'), ' Orca Voice Settings'); voice.clicked.connect(self.open_orca_voice_settings)
+        row=QHBoxLayout(); row.addWidget(voice); row.addStretch(); f.addRow('Voice:', row)
+        p.v.addLayout(f)
+        orca_status='Orca is ready.' if orca_available() else 'Orca is not available in this session.'
+        p.v.addWidget(hint_label(orca_status+' Pointer announcements use a short dwell so speech stays smooth.'))
+        return p.finish()
+
+    def page_icon_name(self):
+        p=Page('Eduka-Panel', 'The start button, the panel size and taskbar, and the clock of the Action Center.')
+        p.v.addWidget(self.card_title('Start button'))
+        f=form()
+        # Preview is drawn on a strip with the real panel height, so the icon
+        # appears exactly as large as it will on Eduka-Panel.
+        self.preview_strip=QFrame(); self.preview_strip.setObjectName('previewStrip')
+        strip=QHBoxLayout(self.preview_strip); strip.setContentsMargins(10,4,10,4)
+        self.preview=QPushButton(); self.preview.setObjectName('previewButton'); self.preview.setFocusPolicy(Qt.NoFocus)
+        strip.addWidget(self.preview); strip.addStretch(); self.preview_strip.setMinimumWidth(120); self.preview_strip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.preview_info=hint_label(''); self.preview_info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); self.preview_info.setMinimumHeight(30)
+        pv=QVBoxLayout(); pv.setSpacing(4); pv.addWidget(self.preview_strip); pv.addWidget(self.preview_info)
+        f.addRow('Preview:', pv)
+        self.label=QLineEdit(); self.label.setMaxLength(24); self.label.setPlaceholderText('Edukasaun'); f.addRow('Button name:', self.label)
+        self.icon=QLineEdit(); self.icon.setPlaceholderText(START_ICON); self.icon.setMinimumWidth(120); browse=QPushButton('Browse…'); browse.clicked.connect(self.browse_icon); default_icon=QPushButton('Default'); default_icon.setToolTip('Use the Edukasaun start icon'); default_icon.clicked.connect(lambda: self.icon.setText(START_ICON))
+        row=QHBoxLayout(); row.addWidget(self.icon,1); row.addWidget(browse); row.addWidget(default_icon); f.addRow('Button icon:', row)
+        self.show_text=QCheckBox('Show text beside icon'); f.addRow('', self.show_text)
+        self.icon_size=QSpinBox(); self.icon_size.setRange(16,64); self.icon_size.setSuffix(' px'); self.icon_size.setFixedWidth(118)
+        self.icon_slider=QSlider(Qt.Horizontal); self.icon_slider.setRange(16,64); self.icon_slider.setAccessibleName('Button icon size')
+        self.icon_slider.valueChanged.connect(self.icon_size.setValue); self.icon_size.valueChanged.connect(self.icon_slider.setValue)
+        size_row=QHBoxLayout(); size_row.addWidget(self.icon_slider,1); size_row.addWidget(self.icon_size); f.addRow('Icon size:', size_row)
+        self.keep_aspect=QCheckBox('Keep picture proportions'); self.keep_aspect.setToolTip('Wide pictures such as a school logo keep their shape'); f.addRow('', self.keep_aspect)
+        for signal in (self.label.textChanged, self.icon.textChanged, self.show_text.toggled, self.icon_size.valueChanged, self.keep_aspect.toggled):
+            signal.connect(self.update_preview)
+        p.v.addLayout(f)
+        where=p.new_card('Position')
+        prow=QHBoxLayout(); prow.setSpacing(10); self.pos_cards={}; pgroup=QButtonGroup(self)
+        for edge in PANEL_POSITIONS:
+            card=QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(edge)
+            card.setIcon(QIcon(position_preview(edge))); card.setIconSize(QSize(96, 60)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            pgroup.addButton(card); prow.addWidget(card); self.pos_cards[edge]=card
+        where.addLayout(prow)
+        where.addWidget(hint_label('Left and right show a vertical panel with icons only. Right-click Eduka-Panel → Panel Position changes it too.'))
+        shape=p.new_card('Panel style')
+        srow=QHBoxLayout(); srow.setSpacing(10); self.shape_cards={}; sgroup=QButtonGroup(self)
+        for key, label in PANEL_STYLES:
+            card=QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(label)
+            card.setIcon(QIcon(panel_style_preview(key))); card.setIconSize(QSize(96, 60)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            sgroup.addButton(card); srow.addWidget(card); self.shape_cards[key]=card
+        shape.addLayout(srow)
+        shape.addWidget(hint_label('Long covers the whole screen edge, Floating is a rounded bar with a little space around it, Short is a smaller centered bar, Dock grows and shrinks with its icons. Right-click Eduka-Panel → Panel Style changes it too.'))
+        fs=form()
+        self.panel_clock_seconds=QCheckBox('Show seconds on the panel clock'); fs.addRow('', self.panel_clock_seconds)
+        self.panel_clock_blink=QCheckBox('Blinking colon on the panel clock'); fs.addRow('', self.panel_clock_blink)
+        shape.addLayout(fs)
+        panel=p.new_card('Panel and taskbar')
+        fp=form()
+        self.panel_height=QSpinBox(); self.panel_height.setRange(34,58); self.panel_height.setSuffix(' px'); fp.addRow('Panel height:', self.panel_height)
+        self.panel_width=QSpinBox(); self.panel_width.setRange(70,100); self.panel_width.setSuffix(' %'); fp.addRow('Panel width:', self.panel_width)
+        self.taskbar_style=QComboBox()
+        for v in ('Icon and Text','Icon only','Text only'): self.taskbar_style.addItem(v, v)
+        fp.addRow('Taskbar style:', self.taskbar_style)
+        panel.addLayout(fp)
+        return p.finish()
+
+    # ------------------------------------------------------------------ clock
+    def page_clock(self):
+        p=Page('Clock', 'The clock of the Action Center (click the time on Eduka-Panel). Click the clock there to see the world globe.')
+        f=form()
+        self.clock_style=QComboBox()
+        for key, label in (('digital','Digital'), ('analog','Analog'), ('led','LED (seven segments)')): self.clock_style.addItem(label, key)
+        f.addRow('Clock face:', self.clock_style)
+        self.clock_format=QComboBox(); self.clock_format.addItem('24 hours (14:30)', '24h'); self.clock_format.addItem('12 hours (2:30 PM)', '12h'); f.addRow('Time format:', self.clock_format)
+        self.clock_seconds=QCheckBox('Show seconds'); f.addRow('', self.clock_seconds)
+        self.clock_blink=QCheckBox('Blinking colon ( : )'); f.addRow('', self.clock_blink)
+        swatches=QHBoxLayout(); swatches.setSpacing(8); self.led_swatches={}; lgroup=QButtonGroup(self)
+        for value, name in [('', 'Theme color')]+LED_COLORS:
+            b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(26,26); b.setToolTip(name)
+            if value:
+                b.setStyleSheet(f'QToolButton#ledSwatch{{background:{value};}}')
+            else:
+                b.setText('A'); b.setStyleSheet('QToolButton#ledSwatch{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #00a879,stop:1 #26a69a);color:white;font-weight:800;}')
+            lgroup.addButton(b); swatches.addWidget(b); self.led_swatches[value]=b
+        swatches.addStretch(); f.addRow('Clock color:', swatches)
+        f.addRow('', hint_label('Used by the digital, analog and LED clock. "A" follows the theme.'))
+        p.v.addLayout(f)
+        self.clock_preview=QLabel(); self.clock_preview.setObjectName('capability'); self.clock_preview.setAlignment(Qt.AlignCenter)
+        p.v.addWidget(self.clock_preview)
+        for sig in (self.clock_style.currentIndexChanged, self.clock_format.currentIndexChanged, self.clock_seconds.toggled, self.clock_blink.toggled, lgroup.buttonClicked):
+            sig.connect(lambda *_: self.update_clock_preview())
+        t=QTimer(self); t.timeout.connect(self.update_clock_preview); t.start(1000)
+        return p.finish()
+
+    def led_color(self):
+        for value, b in self.led_swatches.items():
+            if b.isChecked(): return value
+        return ''
+
+    def update_clock_preview(self):
+        if not hasattr(self, 'clock_preview'): return
+        now=QTime.currentTime(); colon=':' if not self.clock_blink.isChecked() or now.second() % 2 == 0 else ' '
+        text=format_clock(now, self.clock_format.currentData(), self.clock_seconds.isChecked(), colon)
+        style=self.clock_style.currentData()
+        color=self.led_color() or ('#00e676' if style == 'led' else '')
+        self.clock_preview.setText(f'Preview: {text}')
+        self.clock_preview.setStyleSheet(f'font-family:monospace;font-size:22px;font-weight:800;' + (f'color:{color};' if color else ''))
+        pass
+
+    # ------------------------------------------------------------------ effects
+    def page_effects(self):
+        p=Page('Effects', 'Animations for Eduka-Desktop: movement when the pointer goes over a category, and an effect when an application starts.')
+        mem, threads, ok=effects_capability()
+        cap=QLabel(); cap.setObjectName('capability'); cap.setWordWrap(True)
+        cap.setText((f'✓ This computer can use effects ({mem:.1f} GiB memory, {threads} CPU threads).' if ok else
+                     f'Effects need at least 4 GB of memory and 4 CPU threads. This computer: {mem:.1f} GiB, {threads} threads — effects stay off to keep it fast.'))
+        p.v.addWidget(cap)
+        f=form()
+        self.effects_on=QCheckBox('Enable effects in Eduka-Desktop'); f.addRow('', self.effects_on)
+        self.effect_hover=QComboBox()
+        for key, label in EFFECT_HOVER: self.effect_hover.addItem(label, key)
+        f.addRow('Category pointer:', self.effect_hover)
+        f.addRow('', hint_label('Used for the categories and the application tiles. Wave lifts the icon, Glow pulses a colored ring, Slide moves the name aside, Pop makes the icon grow, Bounce makes it jump.'))
+        self.effect_launch=QComboBox()
+        for key, label in EFFECT_LAUNCH: self.effect_launch.addItem(label, key)
+        f.addRow('Opening an application:', self.effect_launch)
+        f.addRow('', hint_label('Bubbles rise from the tile, Zoom in grows the icon, Zoom out shrinks it, Ripple spreads rings, Bounce jumps the icon, Confetti scatters colors, Fade dissolves Eduka-Desktop.'))
+        self.effect_speed=QComboBox()
+        for value, label in EFFECT_SPEEDS: self.effect_speed.addItem(label, value)
+        f.addRow('Speed:', self.effect_speed)
+        self.effect_size=QComboBox()
+        for value, label in EFFECT_SIZES: self.effect_size.addItem(label, value)
+        f.addRow('Size:', self.effect_size)
+        self.effect_random=QCheckBox('Random effects (a different effect each time)'); f.addRow('', self.effect_random)
+        p.v.addLayout(f)
+        tiles=p.new_card('Application tiles')
+        ft=form()
+        self.tile_size=QComboBox()
+        for value, label in TILE_SIZES: self.tile_size.addItem(label, value)
+        ft.addRow('Tile size:', self.tile_size)
+        ft.addRow('', hint_label('Tiles start in the top-left corner and fill the width; there is never a sideways scroll bar.'))
+        tiles.addLayout(ft)
+        self.effects_note=hint_label('Eduka-Low-Theme is chosen: effects stay off with this theme.'); p.v.addWidget(self.effects_note)
+        self.effects_on.setEnabled(ok); self.effects_on.toggled.connect(lambda *_: self.update_effects_state())
+        self._effects_capable=ok
+        return p.finish()
+
+    def update_effects_state(self):
+        allowed=self._effects_capable and self.theme.currentText() != THEME_LOW
+        self.effects_note.setVisible(self.theme.currentText() == THEME_LOW)
+        self.effects_on.setEnabled(allowed)
+        if not allowed: self.effects_on.setChecked(False)
+        for w in (self.effect_hover, self.effect_launch, self.effect_speed, self.effect_size, self.effect_random): w.setEnabled(allowed and self.effects_on.isChecked())
+
+    def card_title(self, text):
+        t=QLabel(text); t.setObjectName('cardTitle')
+        return t
+
+    # ------------------------------------------------------------------ notifications
+    def page_notifications(self):
+        p=Page('Notifications', 'Eduka-Panel shows every notification of the desktop (LXQt notifications are switched off in Eduka-Desktop).')
+        f=form()
+        self.dnd=QCheckBox('Do Not Disturb — keep notifications silent (urgent ones still appear)'); f.addRow('', self.dnd)
+        self.notify_seconds=QSpinBox(); self.notify_seconds.setRange(3, 30); self.notify_seconds.setSuffix(' s'); f.addRow('Show for:', self.notify_seconds)
+        self.notify_history=QCheckBox('Keep a history (bell on Eduka-Panel, latest one in the Action Center)'); f.addRow('', self.notify_history)
+        p.v.addLayout(f)
+        test=QPushButton(get_icon('preferences-system-notifications'), ' Send a test notification'); test.clicked.connect(self.test_notification)
+        row=QHBoxLayout(); row.addWidget(test); row.addStretch(); p.v.addLayout(row)
+        return p.finish()
+
+    def test_notification(self):
+        sent=False
+        try:
+            from PyQt5.QtDBus import QDBusConnection, QDBusMessage, QDBusArgument
+            m=QDBusMessage.createMethodCall('org.freedesktop.Notifications','/org/freedesktop/Notifications','org.freedesktop.Notifications','Notify')
+            rid=QVariant(0); rid.convert(QVariant.UInt)
+            acts=QDBusArgument(); acts.add([], QMetaType.QStringList)
+            m.setArguments(['Eduka-Settings', rid, 'preferences-system-notifications', greeting_text()+'!', 'Notifications from your applications appear like this.', acts, {}, -1])
+            sent=QDBusConnection.sessionBus().call(m).type() == QDBusMessage.ReplyMessage
+        except Exception:
+            sent=False
+        self.show_status('Test notification sent.' if sent else 'No notification server answered (is Eduka-Panel running?).', error=not sent)
+
+    def page_behavior(self):
+        p=Page('Eduka-Desktop', 'Size and layout of Eduka-Desktop (the start menu). Lock, Log Out, Restart and Shut Down are in the Action Center (click the clock).')
+        f=form()
+        self.layout_default=QComboBox()
+        for v in ('Grid','List'): self.layout_default.addItem(v, v)
+        f.addRow('Default layout:', self.layout_default)
+        # Ranges match the limits Eduka-Desktop and Eduka-Panel enforce.
+        self.width=QSpinBox(); self.width.setRange(94,99); self.width.setSuffix(' %'); f.addRow('Desktop width:', self.width)
+        self.height=QSpinBox(); self.height.setRange(78,95); self.height.setSuffix(' %'); f.addRow('Desktop height:', self.height)
+        p.v.addLayout(f)
+        return p.finish()
+
+    # ------------------------------------------------------------------ login screen (SDDM)
+    def page_login(self):
+        p=Page('Login Screen', 'The Edukasaun login screen (SDDM). The preview changes at once; the login screen itself is saved automatically.')
+        top=QHBoxLayout(); top.setSpacing(16)
+        self.login_preview=LoginPreview(); top.addWidget(self.login_preview, 0, Qt.AlignTop)
+        info=QVBoxLayout(); info.setSpacing(6)
+        self.sddm_state=QLabel(''); self.sddm_state.setWordWrap(True); self.sddm_state.setObjectName('fieldHint'); info.addWidget(self.sddm_state)
+        self.sddm_fix=QPushButton('Use the Edukasaun login screen'); self.sddm_fix.clicked.connect(lambda: (setattr(self, '_sddm_dirty', True), self.apply_sddm(show=True))); info.addWidget(self.sddm_fix)
+        self.sddm_saved=QLabel(''); self.sddm_saved.setObjectName('statusLabel'); self.sddm_saved.setWordWrap(True); info.addWidget(self.sddm_saved)
+        info.addStretch(); top.addLayout(info, 1)
+        p.v.addLayout(top)
+        p.v=p.new_card('Style')
+        f=form()
+        self.sddm_style=QComboBox()
+        for key, label in SDDM_STYLES: self.sddm_style.addItem(label, key)
+        f.addRow('Style:', self.sddm_style)
+        self.sddm_accent_value='#00a879'
+        self.sddm_accent=QPushButton(''); self.sddm_accent.setObjectName('swatch'); self.sddm_accent.setToolTip('Accent color of the login button'); self.sddm_accent.clicked.connect(self.pick_sddm_accent)
+        arow=QHBoxLayout(); arow.addWidget(self.sddm_accent); arow.addStretch(); f.addRow('Accent color:', arow)
+        self.sddm_title=QLineEdit(); self.sddm_title.setMaxLength(40); self.sddm_title.setPlaceholderText('Edukasaun'); f.addRow('Title:', self.sddm_title)
+        self.sddm_clock=QCheckBox('Show the clock'); f.addRow('', self.sddm_clock)
+        p.v.addLayout(f)
+
+        pics=p.new_card('Pictures')
+        fp=form()
+        self.sddm_bg_thumb=self._thumb(176, 99)
+        bg_buttons=QVBoxLayout(); bg_buttons.setSpacing(6)
+        for text, handler in [('Choose picture…', self.choose_sddm_background), ('Use desktop wallpaper', self.use_wallpaper_for_sddm), ('Default gradient', lambda: self.set_sddm_background('reset'))]:
+            b=QPushButton(text); b.clicked.connect(handler); bg_buttons.addWidget(b)
+        bg_buttons.addStretch()
+        brow=QHBoxLayout(); brow.addWidget(self.sddm_bg_thumb); brow.addLayout(bg_buttons); brow.addStretch(); fp.addRow('Background:', brow)
+        fp.addRow('', hint_label('Stored as /usr/share/Edukasaun/SDDM/Default.png — you can also replace that file directly.'))
+        self.sddm_logo_thumb=self._thumb(72, 72)
+        logo_buttons=QVBoxLayout(); logo_buttons.setSpacing(6)
+        for text, handler in [('Choose logo…', self.choose_sddm_logo), ('Edukasaun logo', lambda: self.set_sddm_logo('reset'))]:
+            b=QPushButton(text); b.clicked.connect(handler); logo_buttons.addWidget(b)
+        logo_buttons.addStretch()
+        lrow=QHBoxLayout(); lrow.addWidget(self.sddm_logo_thumb); lrow.addLayout(logo_buttons); lrow.addStretch(); fp.addRow('Logo:', lrow)
+        pics.addLayout(fp)
+
+        signin=p.new_card('Sign-in')
+        fs=form()
+        users=self.human_users()
+        self.sddm_user=QComboBox(); self.sddm_user.setEditable(True); self.sddm_user.addItems(['']+users); fs.addRow('Pre-filled user:', self.sddm_user)
+        self.sddm_autologin=QCheckBox('Log in automatically as'); self.sddm_autologin_user=QComboBox(); self.sddm_autologin_user.addItems(users)
+        auto=QHBoxLayout(); auto.addWidget(self.sddm_autologin); auto.addWidget(self.sddm_autologin_user, 1); fs.addRow('', auto)
+        fs.addRow('', hint_label('The live session always logs in automatically. Automatic login on an installed computer means anyone can use it without a password.'))
+        signin.addLayout(fs)
+        actions=QHBoxLayout()
+        preview=QPushButton(get_icon('document-preview','view-preview'), ' Full-screen test'); preview.setToolTip('Opens the real login screen in test mode; close it with Alt+F4'); preview.clicked.connect(self.preview_sddm)
+        self.sddm_apply=QPushButton(' Save Login Screen'); self.sddm_apply.setObjectName('primary'); self.sddm_apply.clicked.connect(lambda: self.apply_sddm(show=True))
+        actions.addStretch(); actions.addWidget(preview); actions.addWidget(self.sddm_apply)
+        signin.addLayout(actions)
+
+        self.sddm_style.currentIndexChanged.connect(lambda *_: self.sddm_accent.setEnabled(self.sddm_style.currentData() != 'follow'))
+        for signal in (self.sddm_style.currentIndexChanged, self.sddm_title.textChanged, self.sddm_clock.toggled, self.sddm_user.currentTextChanged, self.sddm_autologin.toggled, self.sddm_autologin_user.currentIndexChanged):
+            signal.connect(self.mark_sddm_dirty)
+        return p.finish()
+
+    def _thumb(self, w, h):
+        lab=QLabel(); lab.setObjectName('thumb'); lab.setFixedSize(w, h); lab.setAlignment(Qt.AlignCenter)
+        return lab
+
+    @staticmethod
+    def human_users():
+        try:
+            return sorted(u.pw_name for u in pwd.getpwall() if 1000 <= u.pw_uid < 60000 and u.pw_shell not in ('/usr/sbin/nologin','/bin/false'))
+        except Exception:
+            return []
+
+    def mark_sddm_dirty(self, *_):
+        self.update_login_preview()
+        if getattr(self, '_loading', False): return
+        self._sddm_dirty=True
+        if self.realtime:
+            # Administrators: saved automatically, without a password prompt
+            # (polkit rule 50-edukasaun-desktop.rules).
+            self.set_saved_text('Saving…'); self.sddm_timer.start(900)
+        else:
+            self.set_saved_text('Not saved yet — press "Save Login Screen".', error=True)
+
+    def set_saved_text(self, text, error=False):
+        self.sddm_saved.setText(text); self.sddm_saved.setProperty('error', bool(error))
+        self.sddm_saved.style().unpolish(self.sddm_saved); self.sddm_saved.style().polish(self.sddm_saved)
+
+    def realtime_sddm(self):
+        if self._sddm_dirty and self.apply_sddm(show=False, quiet=True):
+            self.set_saved_text('✓ Saved — the login screen shows this now.')
+
+    def update_login_preview(self):
+        if not hasattr(self, 'login_preview') or not hasattr(self, 'theme'):
+            return
+        req=self.sddm_request()
+        cfg=self.read_sddm_config()
+        bg=None if self._sddm_background == '' else ('' if self._sddm_background == 'reset' else self._sddm_background)
+        logo=None if self._sddm_logo == '' else ('/usr/share/Edukasaun/Logo/Edukasaun Logo.png' if self._sddm_logo == 'reset' else self._sddm_logo)
+        if getattr(self, '_preview_init', False) is False:
+            bg=cfg.get('background','') if bg is None else bg; logo=cfg.get('logo','') if logo is None else logo; self._preview_init=True
+        self.login_preview.set_config(req, bg, logo)
+
+    def update_sddm_state(self):
+        active=sddm_conf_value('Theme', 'Current') or '(SDDM default)'
+        greeter=sddm_greeter()
+        ok=active == 'edukasaun'
+        lines=[('✓ ' if ok else '⚠ ')+f'Login theme in use: {active}']
+        lines.append(f"Greeter: {os.path.basename(greeter) + (' (Qt 6)' if greeter.endswith('qt6') else ' (Qt 5)') if greeter else 'SDDM is not installed'}")
+        auto=sddm_conf_value('Autologin', 'User')
+        lines.append(f'Automatic login: {auto}' if auto else 'Automatic login: off (live session: always on)')
+        lines.append('Changes are saved automatically.' if self.realtime else 'Saving asks for an administrator password.')
+        self.sddm_state.setText('\n'.join(_(l) for l in lines))
+        self.sddm_fix.setVisible(not ok and greeter is not None)
+        self.sddm_apply.setVisible(not self.realtime)
+
+    def mark_sddm_follow(self):
+        if getattr(self, '_loading', False) or not hasattr(self, 'sddm_style'): return
+        if self.sddm_style.currentData() == 'follow':
+            self._sddm_dirty=True
+
+    def read_sddm_config(self):
+        cfg={'style':'light','accent':'#00a879','title':'Edukasaun','defaultUser':'edukasaun','showClock':'true',
+             'background':'/usr/share/Edukasaun/SDDM/Default.png','logo':'/usr/share/Edukasaun/Logo/Edukasaun Logo.png'}
+        for name in ('theme.conf','theme.conf.user'):
+            parser=configparser.ConfigParser(interpolation=None)
+            try:
+                parser.read(SDDM_THEME_DIR/name, encoding='utf-8')
+                if parser.has_section('General'):
+                    cfg.update({k: v for k, v in parser.items('General')})
+            except Exception:
+                pass
+        cfg['defaultUser']=cfg.get('defaultuser', cfg.get('defaultUser', ''))
+        cfg['showClock']=cfg.get('showclock', cfg.get('showClock', 'true'))
+        return cfg
+
+    def autologin_user(self):
+        for path in ('/etc/sddm.conf.d/20-eduka-autologin.conf',):
+            try:
+                for line in Path(path).read_text(encoding='utf-8').splitlines():
+                    if line.strip().startswith('User='):
+                        return line.split('=',1)[1].strip()
+            except Exception:
+                pass
+        return ''
+
+    def set_thumb(self, label, path, fallback_text):
+        pix=QPixmap(path) if path and os.path.isfile(path) else QPixmap()
+        if pix.isNull():
+            label.setPixmap(QPixmap()); label.setText(fallback_text)
+        else:
+            label.setText(''); label.setPixmap(pix.scaled(label.size()-QSize(6,6), Qt.KeepAspectRatioByExpanding if label.width() > 100 else Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def set_sddm_background(self, path):
+        self._sddm_background=path; self.mark_sddm_dirty()
+        self.set_thumb(self.sddm_bg_thumb, '' if path == 'reset' else path, 'Green gradient')
+
+    def set_sddm_logo(self, path):
+        self._sddm_logo=path; self.mark_sddm_dirty()
+        self.set_thumb(self.sddm_logo_thumb, '/usr/share/Edukasaun/Logo/Edukasaun Logo.png' if path == 'reset' else path, 'Logo')
+
+    def choose_sddm_background(self):
+        f,_=QFileDialog.getOpenFileName(self,'Login screen background',str(Path.home()/'Pictures'),'Pictures (*.png *.jpg *.jpeg *.webp *.bmp)')
+        if f: self.set_sddm_background(f)
+
+    def choose_sddm_logo(self):
+        f,_=QFileDialog.getOpenFileName(self,'Login screen logo',str(Path.home()/'Pictures'),'Pictures (*.png *.jpg *.jpeg *.webp *.bmp)')
+        if f: self.set_sddm_logo(f)
+
+    def use_wallpaper_for_sddm(self):
+        wallpaper=None
+        for conf in (Path.home()/'.config/pcmanfm-qt/lxqt/settings.conf', Path.home()/'.config/pcmanfm-qt/default/settings.conf'):
+            value=_get_ini_value(conf, 'Desktop', 'Wallpaper')
+            if value and os.path.isfile(value):
+                wallpaper=value; break
+        if wallpaper:
+            self.set_sddm_background(wallpaper)
+        else:
+            self.show_status('No desktop wallpaper found. Choose a picture instead.', error=True)
+
+    @property
+    def realtime(self):
+        return is_admin_user() and shutil.which('pkexec') is not None and os.path.exists(SDDM_HELPER)
+
+    def pick_sddm_accent(self):
+        color=QColorDialog.getColor(QColor(self.sddm_accent_value), self, 'Accent color')
+        if color.isValid():
+            self.set_sddm_accent(color.name()); self.mark_sddm_dirty()
+
+    def set_sddm_accent(self, value):
+        self.sddm_accent_value=value
+        self.sddm_accent.setStyleSheet(f'QPushButton#swatch{{background:{value};border:2px solid rgba(255,255,255,200);}}')
+
+    def sddm_request(self):
+        style=self.sddm_style.currentData()
+        accent=self.sddm_accent_value
+        if style == 'follow':
+            style={THEME_DARK:'dark', THEME_TRANSPARENT:'dark', THEME_LIQUID:'glass'}.get(self.theme.currentText(), 'light')
+            accent=SDDM_ACCENTS[style]
+        return {'style': style, 'accent': accent, 'title': self.sddm_title.text().strip() or 'Edukasaun',
+                'default_user': self.sddm_user.currentText().strip(), 'show_clock': self.sddm_clock.isChecked(),
+                'background': self._sddm_background, 'logo': self._sddm_logo,
+                'autologin_user': self.sddm_autologin_user.currentText() if self.sddm_autologin.isChecked() else ''}
+
+    def apply_sddm(self, show=False, quiet=False):
+        if shutil.which('pkexec') is None or not os.path.exists(SDDM_HELPER):
+            if quiet: self.set_saved_text('Not saved: this computer has no pkexec / Eduka login helper.', error=True)
+            if not show:
+                return False    # automatic sync: nothing to do outside Edukasaun OS
+            self.show_status('The login screen can only be changed on Edukasaun OS (pkexec missing).', error=True); return False
+        request=json.dumps(self.sddm_request())
+        try:
+            out=subprocess.run(['pkexec', SDDM_HELPER], input=request, capture_output=True, text=True, timeout=180)
+        except Exception as exc:
+            self.show_status(f'Login screen not changed: {exc}', error=True); return False
+        if out.returncode != 0:
+            reason=(out.stderr or out.stdout).strip().splitlines()
+            if out.returncode in (126, 127):
+                reason=['administrator password was not given']
+            self.show_status('Login screen not changed: '+(reason[-1] if reason else 'unknown error'), error=True); return False
+        self._sddm_dirty=False; self._sddm_background=''; self._sddm_logo=''
+        if not quiet:
+            self.load_sddm_values()
+        self.update_sddm_state()
+        if show: self.show_status('Login screen updated.'); self.set_saved_text('✓ Saved.')
+        return True
+
+    def preview_sddm(self):
+        greeter=shutil.which('sddm-greeter-qt6') or shutil.which('sddm-greeter')
+        if not greeter or not SDDM_THEME_DIR.exists():
+            self.show_status('SDDM is not installed on this computer.', error=True); return
+        safe_popen([greeter, '--test-mode', '--theme', str(SDDM_THEME_DIR)])
+        self.show_status('Preview opened (shows the applied settings). Close it with Alt+F4.')
+
+    def load_sddm_values(self):
+        self._loading=True
+        cfg=self.read_sddm_config()
+        follow=bool(self.menu.get('sddm_follow', True))
+        style='follow' if follow else cfg.get('style','light')
+        idx=self.sddm_style.findData(style); self.sddm_style.setCurrentIndex(max(0, idx))
+        self.sddm_accent.setEnabled(style != 'follow')
+        self.set_sddm_accent(cfg.get('accent','#00a879'))
+        self.sddm_title.setText(cfg.get('title','Edukasaun'))
+        self.sddm_clock.setChecked(str(cfg.get('showClock','true')).lower() != 'false')
+        self.sddm_user.setCurrentText(cfg.get('defaultUser',''))
+        auto=self.autologin_user()
+        self.sddm_autologin.setChecked(bool(auto))
+        if auto: self.sddm_autologin_user.setCurrentText(auto)
+        self.set_thumb(self.sddm_bg_thumb, cfg.get('background',''), 'Green gradient')
+        self.set_thumb(self.sddm_logo_thumb, cfg.get('logo',''), 'Logo')
+        self._preview_init=False; self.update_login_preview()
+        self.update_sddm_state()
+        self._loading=False
+
+    # ------------------------------------------------------------------ maintenance
+    def page_advanced(self):
+        p=Page('Maintenance', 'Recovery actions. They never change your saved settings.')
+        actions=[
+            ('view-refresh','Rebuild application list','Use after installing or removing applications.', self.rebuild_apps),
+            ('start-here','Reload Eduka-Desktop','Reload the start menu applications and style.', self.reload_desktop),
+            ('system-reboot','Restart Eduka-Panel','Restart the bottom panel if it stops responding.', self.restart_panel),
+            ('edit-clear','Repair LXQt theme and session','Use if LXQt asks for a window manager or the theme looks wrong. Your old settings are kept as a backup.', self.repair_lxqt),
+            ('help-about','About Edukasaun Desktop','Version and credits.', lambda: safe_popen(['eduka-about'])),
+        ]
+        for icon, text, hint, handler in actions:
+            b=QPushButton(get_icon(icon), '  '+text); b.setObjectName('maintButton'); b.setIconSize(QSize(22,22)); b.setToolTip(hint); b.setAccessibleDescription(hint); b.clicked.connect(handler); p.v.addWidget(b)
+            h=hint_label(hint); h.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); h.setContentsMargins(6,0,0,4); p.v.addWidget(h)
+        return p.finish()
+
+    def rebuild_apps(self):
+        safe_popen(['eduka-app-cache','--warm'])
+        QTimer.singleShot(1500, lambda: send_menu_command('reload-apps'))
+        self.show_status('Application list is being rebuilt.')
+
+    def reload_desktop(self):
+        if menu_daemon_alive():
+            send_menu_command('reload-apps')
+        else:
+            ensure_menu_daemon(show=False)
+        self.show_status('Eduka-Desktop reloaded.')
+
+    def restart_panel(self):
+        safe_popen('pkill -x eduka-panel; sleep 0.3; env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-panel', shell=True)
+        self.show_status('Eduka-Panel is restarting.')
+
+    def repair_lxqt(self):
+        if QMessageBox.question(self, 'Repair LXQt settings',
+                'Move your LXQt settings aside so LXQt recreates them from the Edukasaun defaults?\n\n'
+                'Nothing is deleted: the old settings are kept in ~/.config/lxqt.backup-… . '
+                'Log out and log in again afterwards.') != QMessageBox.Yes:
+            return
+        try:
+            out=subprocess.run(['eduka-lxqt-repair'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+            ok=out.returncode == 0; text=out.stdout.strip().splitlines()
+        except Exception as exc:
+            ok=False; text=[str(exc)]
+        self.show_status(('LXQt settings repaired. Log out and log in again.' if ok else 'Repair failed: '+(text[-1] if text else 'unknown error')), error=not ok)
+
+    def show_status(self, text, error=False):
+        self.status.setText(text); self.status.setProperty('error', bool(error))
+        self.status.style().unpolish(self.status); self.status.style().polish(self.status)
+        self.status_timer.start(8000)
+
+    # ------------------------------------------------------------------ preview / theme
+    def update_preview(self, *_):
+        if not hasattr(self, 'panel_height'):
+            return
+        label=self.label.text().strip() or 'Edukasaun'
+        icon=self.icon.text().strip() or START_ICON
+        panel_h=self.panel_height.value()
+        usable=panel_h-8
+        requested=self.icon_size.value()
+        shown=max(16, min(requested, usable))
+        size=menu_button_icon_size(icon, shown, self.keep_aspect.isChecked())
+        self.preview.setText((' '+label) if self.show_text.isChecked() else '')
+        self.preview.setIcon(get_icon(icon, 'start-here')); self.preview.setIconSize(size)
+        self.preview_strip.setFixedHeight(panel_h)
+        radius=max(12, int(panel_h/2)); btn_radius=max(10, int(panel_h/2.4))
+        theme=self.theme.currentText() if hasattr(self, 'theme') else THEME_DEFAULT
+        if theme == THEME_DARK:
+            strip_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #343434,stop:1 #212121)'; strip_border='rgba(255,255,255,40)'
+            btn_bg='#26a69a'; btn_border='#26a69a'; btn_text='#ffffff'
+        else:
+            strip_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #e6f2ee)'; strip_border='#cfe3dc'
+            btn_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #12b98a,stop:1 #00936a)'; btn_border='#00936a'; btn_text='#ffffff'
+        self.preview_strip.setStyleSheet(f'QFrame#previewStrip{{background:{strip_bg};border:1px solid {strip_border};border-radius:{radius}px;}}'
+                                         f'QPushButton#previewButton{{background:{btn_bg};border:1px solid {btn_border};border-radius:{btn_radius}px;padding:2px 14px;font-weight:700;color:{btn_text};}}')
+        info=f'Shown at {size.width()}×{size.height()} px on a {panel_h} px panel.'
+        if requested > usable:
+            info+=f' Larger than {usable} px needs a taller panel (Behavior → Panel height).'
+        if os.path.isfile(icon):
+            real=QImageReader(icon).size()
+            if real.isValid():
+                info=f'Picture {real.width()}×{real.height()} px. '+info
+        self.preview_info.setText(info)
+
+    def apply_theme_style(self):
+        """The Settings window follows the Eduka theme; spin boxes and combo
+        boxes get their arrows in every theme."""
+        theme=current_theme()
+        self.setStyleSheet(settings_qss(theme) + arrow_qss(theme in DARK_THEMES))
+        if hasattr(self, 'theme_cards'):
+            for name, card in self.theme_cards.items(): card.setIcon(QIcon(theme_preview(name)))
+        # Icons follow the (possibly just changed) icon theme.
+        for key, (name, icon, _page) in zip(self.page_keys, self.pages):
+            ic=self._ei.touchpad_icon(48, accent=theme_accent()) if key == 'touchpad' and hasattr(self, '_ei') else get_icon(icon, 'preferences-system')
+            self.nav.item(self.nav_rows[key]).setIcon(ic)
+        self.logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(40,40))
+
+    def load_values(self):
+        """Fill every control from the saved configuration."""
+        self._loading=True
+        panel, desktop, menu = self.panel, self.desktop, self.menu
+        self.start_login.setChecked(menu_daemon_autostart_enabled())
+        idx=self.language.findData(menu.get('language','system')); self.language.setCurrentIndex(max(0, idx))
+        self.default_section.setCurrentIndex(max(0, self.default_section.findData(desktop.get('last_category','Edukasaun'))))
+        theme=normalize_theme_style(desktop.get('theme_style'))
+        self.theme.blockSignals(True); self.theme.setCurrentText(theme); self.theme.blockSignals(False)
+        current_icons=icon_theme_setup(force=True)
+        idx=self.icon_theme.findData(current_icons)
+        if idx >= 0: self.icon_theme.setCurrentIndex(idx)
+        self._initial_icon_theme=self.icon_theme.currentData()
+        idx=self.cursor_theme.findData(current_cursor_theme())
+        if idx >= 0: self.cursor_theme.setCurrentIndex(idx)
+        idx=self.cursor_size.findData(current_cursor_size()); self.cursor_size.setCurrentIndex(max(0, idx))
+        self._initial_cursor=(self.cursor_theme.currentData(), self.cursor_size.currentData())
+        self._initial_theme=theme
+        self._liquid_confirmed = theme in (THEME_LIQUID, THEME_TRANSPARENT)
+        self.panel_trans.setValue(float(panel.get('transparency',0.54)))
+        self.desktop_trans.setValue(float(desktop.get('transparency',0.51)))
+        self.glass_blur.setChecked(bool(desktop.get('glass_blur', False)))
+        self._low_before_liquid=bool(desktop.get('low_resource_mode',True))
+        self.low.setChecked(False if theme in (THEME_LIQUID, THEME_TRANSPARENT) else self._low_before_liquid)
+        self.low.setEnabled(theme not in (THEME_LIQUID, THEME_TRANSPARENT))
+        if theme in self.theme_cards: self.theme_cards[theme].setChecked(True)
+        self.shadow.setChecked(bool(desktop.get('enable_shadows',False)))
+        self.set_accent(str(desktop.get('accent_color','') or ''))
+        self.compositor.setCurrentIndex(max(0, self.compositor.findData(desktop.get('compositor', 'auto'))))
+        self.visual_access.setChecked(bool(desktop.get('visual_accessibility',False)))
+        self.hearing_access.setChecked(bool(desktop.get('hearing_accessibility',False)))
+        self.orca.setChecked(bool(desktop.get('orca_enabled',False)))
+        self.label.setText(panel.get('menu_label','Edukasaun'))
+        self.icon.setText(panel.get('menu_icon',START_ICON)); self.icon.setCursorPosition(0)
+        self.show_text.setChecked(bool(panel.get('show_menu_text',True)))
+        self.icon_size.setValue(int(panel.get('menu_icon_size',26)))
+        self.keep_aspect.setChecked(bool(panel.get('menu_icon_keep_aspect',True)))
+        self.layout_default.setCurrentIndex(max(0, self.layout_default.findData(desktop.get('layout','Grid'))))
+        self.width.setValue(int(desktop.get('width_percent',98)))
+        self.height.setValue(int(desktop.get('height_percent',92)))
+        self.panel_height.setValue(int(panel.get('height',42)))
+        self.panel_width.setValue(int(panel.get('width_percent',96)))
+        self.taskbar_style.setCurrentIndex(max(0, self.taskbar_style.findData(panel.get('taskbar_style','Icon and Text'))))
+        self.clock_style.setCurrentIndex(max(0, self.clock_style.findData(panel.get('clock_style','digital'))))
+        self.clock_format.setCurrentIndex(max(0, self.clock_format.findData(panel.get('clock_format','24h'))))
+        self.clock_seconds.setChecked(bool(panel.get('clock_seconds', False))); self.clock_blink.setChecked(bool(panel.get('clock_blink', False)))
+        (self.led_swatches.get(str(panel.get('clock_color','') or '').lower()) or self.led_swatches['']).setChecked(True)
+        self.pos_cards[panel_position(panel)].setChecked(True)
+        self.shape_cards[panel_style(panel)].setChecked(True)
+        self.panel_clock_seconds.setChecked(bool(panel.get('panel_clock_seconds', False))); self.panel_clock_blink.setChecked(bool(panel.get('panel_clock_blink', False)))
+        self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
+        self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
+        self.effect_launch.setCurrentIndex(max(0, self.effect_launch.findData(desktop.get('effect_launch','bubble'))))
+        pick=lambda combo, value: combo.setCurrentIndex(min(range(combo.count()), key=lambda i: abs(float(combo.itemData(i))-float(value))))
+        try:
+            pick(self.effect_speed, desktop.get('effect_speed', 1.0)); pick(self.effect_size, desktop.get('effect_size', 1.0)); pick(self.tile_size, desktop.get('tile_size', 132))
+        except Exception:
+            pass
+        self.effect_random.setChecked(bool(desktop.get('effect_random', False)))
+        self.update_effects_state(); self.update_clock_preview()
+        self.notify_seconds.setValue(int(panel.get('notify_seconds', 7)))
+        self.notify_history.setChecked(bool(panel.get('notify_history', True)))
+        try:
+            self.dnd.setChecked(bool(json.loads((BASE_CONFIG/'panel-state.json').read_text(encoding='utf-8')).get('dnd', False)))
+        except Exception:
+            self.dnd.setChecked(False)
+        self.update_theme_info()
+        self._loading=False
+        self.load_sddm_values()
+        self.update_preview()
+
+    # About is intentionally centralized in Eduka-Desktop.
+
+    def browse_icon(self):
+        f,_=QFileDialog.getOpenFileName(self,'Choose panel icon','/usr/share/icons','Images (*.png *.svg *.xpm *.jpg)')
+        if f:
+            self.icon.setText(f)
+
+    def open_orca_voice_settings(self):
+        if not orca_available():
+            QMessageBox.warning(self, 'Orca unavailable', 'Orca is not installed or is not available in this desktop session.')
+            return
+        if not safe_popen(['orca','--setup']):
+            QMessageBox.warning(self, 'Orca settings', 'Orca Voice Settings could not be opened in this desktop session.')
+
+    def open_page(self, key):
+        if key in self.nav_rows:
+            self.nav.setCurrentRow(self.nav_rows[key])
+
+    def activate_existing_window(self):
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.show(); self.raise_(); self.activateWindow()
+
+    # ------------------------------------------------------------------ save / apply
+    def collect(self):
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
+        menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
+        return panel, desktop, menu
+
+    def save_all(self):
+        panel, desktop, menu = self.collect()
+        save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
+        self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
+        set_menu_daemon_autostart(self.start_login.isChecked())
+        try:
+            lang_change=sync_session_language(menu.get('language', 'system'))
+        except Exception:
+            lang_change=''
+        if lang_change:
+            QTimer.singleShot(300, lambda c=lang_change: self.show_status(_('Tetun is used in all programs after you log out and in.') if c == 'set' else _('The system language is used in all programs after you log out and in.')))
+        # Theme for the whole desktop: GTK, Qt palette and window borders.
+        if desktop['theme_style'] != self._initial_theme or desktop['theme_style'] in SYSTEM_THEMES:
+            apply_desktop_theme(desktop['theme_style'])
+            self._initial_theme=desktop['theme_style']
+        chosen_icons=self.icon_theme.currentData()
+        if chosen_icons and chosen_icons != getattr(self, '_initial_icon_theme', None):
+            if set_icon_theme(chosen_icons):
+                self._initial_icon_theme=chosen_icons
+        cursor=(self.cursor_theme.currentData(), self.cursor_size.currentData())
+        if cursor[0] and cursor != getattr(self, '_initial_cursor', None):
+            if set_cursor_theme(*cursor):
+                self._initial_cursor=cursor
+        # Do Not Disturb lives in Eduka-Panel's state file (also the Action Center tile).
+        try:
+            state_path=BASE_CONFIG/'panel-state.json'
+            state=json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+            if bool(state.get('dnd', False)) != self.dnd.isChecked():
+                state['dnd']=self.dnd.isChecked(); write_json(state_path, state)
+        except Exception:
+            pass
+        try: repair_qt_palette()
+        except Exception: pass
+        # Compositor mode follows the theme (picom with blur for Liquid Glass).
+        ensure_compositor()
+        QTimer.singleShot(700, self.update_compositor_status)
+        icon_theme_setup(force=True)
+        self.apply_theme_style(); self.update_preview()
+        ok, message = self.sync_orca(desktop)
+        touch_reload(); send_menu_command('reload-style')
+        if self._sddm_dirty:
+            self.apply_sddm(show=False)
+        if not ok:
+            QMessageBox.warning(self,'Orca unavailable',message)
+        return ok, message
+
+    def apply_settings(self):
+        ok, message = self.save_all()
+        if ok:
+            # Inline confirmation instead of a dialog after every Apply.
+            if not self.status.property('error') or not self.status.text():
+                self.show_status('Settings applied. '+message if message else 'Applied: Eduka-Panel, Eduka-Desktop and the desktop theme are updated.')
+        else:
+            self.show_status('Settings applied, but Orca could not be enabled.', error=True)
+
+    def save_close(self):
+        ok, _message = self.save_all()
+        if ok:
+            self.accept()
+
+    def sync_orca(self, desktop):
+        enabled=bool(desktop.get('orca_enabled', False))
+        if enabled or enabled != self._initial_orca_enabled:
+            ok, message=configure_orca(enabled)
+            if not ok:
+                desktop['orca_enabled']=False
+                self.orca.setChecked(False)
+                save_desktop_config(desktop)
+                return False, message
+            self._initial_orca_enabled=enabled
+            return True, message
+        return True, ''
+
+    def reset_defaults(self):
+        if QMessageBox.question(self,'Reset settings',f'Restore the {VERSION} defaults for Eduka-Desktop, Eduka-Menu and Eduka-Panel?\n\nTheme, transparency, size, layout and the menu button are reset. Favorites, pinned applications and the login screen are kept.') != QMessageBox.Yes:
+            return
+        if self._initial_orca_enabled:
+            configure_orca(False); self._initial_orca_enabled=False
+        sddm_follow=self.menu.get('sddm_follow', True)
+        write_json(panel_config_path(), DEFAULT_PANEL); write_json(desktop_config_path(), DEFAULT_DESKTOP)
+        write_json(menu_config_path(), dict(DEFAULT_MENU, sddm_follow=sddm_follow))
+        set_menu_daemon_autostart(True)
+        apply_desktop_theme(THEME_DEFAULT)
+        ensure_compositor()
+        # 'reset' makes Eduka-Desktop also drop its remembered layout,
+        # category, search and colors, not only re-read the style.
+        touch_reload(); send_menu_command('reset')
+        self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
+        self.load_values(); self.apply_theme_style()
+        self.show_status('Default settings restored for Eduka-Desktop, Eduka-Menu and Eduka-Panel.')
+
+def requested_page():
+    args=sys.argv[1:]
+    if '--page' in args and args.index('--page')+1 < len(args):
+        return args[args.index('--page')+1]
+    return ''
+
+def activate_running_settings(socket_name, page=''):
+    socket=QLocalSocket(); socket.connectToServer(socket_name)
+    if socket.waitForConnected(500):
+        socket.write(f'activate {page}\n'.encode()); socket.flush(); socket.waitForBytesWritten(300); socket.disconnectFromServer(); return True
+    if shutil.which('xdotool'):
+        return safe_popen(['xdotool','search','--name','Eduka-Settings','windowmap','windowactivate'])
+    return False
+
+def run_single_instance():
+    ensure_dirs(); app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-settings'); app.setDesktopFileName('eduka-settings'); socket_name=f'eduka-settings-{os.getuid()}'
+    lock_file=open(SETTINGS_LOCK, 'w')
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        activate_running_settings(socket_name, requested_page())
+        return 0
+    QLocalServer.removeServer(socket_name)
+    server=QLocalServer()
+    if not server.listen(socket_name):
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        return 1
+    window=Settings(); window.open_page(requested_page())
+    def accept_activation():
+        connection=server.nextPendingConnection(); page=''
+        if connection:
+            connection.waitForReadyRead(80); data=bytes(connection.readAll()).decode('utf-8','ignore').split()
+            page=data[1] if len(data) > 1 else ''
+            connection.disconnectFromServer()
+        window.open_page(page); window.activate_existing_window()
+    server.newConnection.connect(accept_activation)
+    window.show(); result=app.exec_(); server.close(); QLocalServer.removeServer(socket_name)
+    try: fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except Exception: pass
+    return result
+
+if __name__ == '__main__':
+    install_crash_log('eduka-settings')
+    exit_now(run_single_instance())
