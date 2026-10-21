@@ -41,10 +41,10 @@ class LeaveScreen(QWidget):
             self.setAttribute(Qt.WA_TranslucentBackground)
         dark=is_dark_theme()
         accent=theme_accent()
-        card_bg='rgba(38,38,38,245)' if dark else 'rgba(255,255,255,248)'
-        text='#ffffff' if dark else '#10231e'; sub='rgba(255,255,255,160)' if dark else '#5b6e69'
-        tile='rgba(255,255,255,16)' if dark else '#f1f6f4'
-        border='rgba(255,255,255,30)' if dark else 'rgba(0,120,90,30)'
+        # Same colors as the menus and dialog boxes of the theme.
+        t=theme_tokens(); card=QColor(t['bg']); card.setAlpha(245)
+        card_bg=f'rgba({card.red()},{card.green()},{card.blue()},245)'
+        text=t['text']; sub=t['sub']; tile=t['hover'] if not dark else 'rgba(255,255,255,16)'; border=t['border']
         self.setStyleSheet(f"""
             QFrame#card{{background:{card_bg};border:1px solid {border};border-radius:28px;}}
             QLabel{{color:{text};background:transparent;}}

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Eduka-Default
+Comment=Edukasaun OS theme, based on the Orchis theme (teal, light) by vinceliuice, GPL-3.0
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Eduka-Default
+MetacityTheme=Eduka-Default
+ButtonLayout=:minimize,maximize,close

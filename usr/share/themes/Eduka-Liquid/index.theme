@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Eduka-Liquid
+Comment=Edukasaun OS theme, based on the Orchis theme (blue, light) by vinceliuice, GPL-3.0
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Eduka-Liquid
+MetacityTheme=Eduka-Liquid
+ButtonLayout=:minimize,maximize,close

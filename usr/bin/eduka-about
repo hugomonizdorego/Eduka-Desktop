@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
 )
 
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
-from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, theme_accent, _
+from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, theme_accent, theme_tokens, dialog_qss, _
 
 
 class AboutDialog(QDialog):
@@ -34,7 +34,7 @@ class AboutDialog(QDialog):
         header_layout.addWidget(logo)
         title = QLabel(
             f"<b style='font-size:22px'>Edukasaun Desktop</b><br>"
-            f"<span style='font-size:15px;color:#008b68'>{_('Suite Version')} {VERSION}</span>"
+            f"<span style='font-size:15px;color:{theme_accent()}'>{_('Suite Version')} {VERSION}</span>"
         )
         header_layout.addWidget(title, 1)
         root.addWidget(header)
@@ -43,16 +43,14 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('Eduka-Panel shows USB sticks, memory cards and external disks with Open, Eject and Safely remove, and a live touchpad picture.'),
-            _('Eduka-Settings now sets the wallpaper (with slideshow), the desktop icons, keyboard, mouse and touchpad; changes work at once.'),
-            _('New theme Eduka-MultiColor: a different color for every menu category, Action Center tile and panel button.'),
-            _('Parental Control: times from 5 minutes, set to the hour, minute and second; emoji pictures that show on every computer.'),
-            _('Compositor check: which compositor runs, a choice in Eduka-Settings and safe picom settings for every picom version.'),
-            _('Accent color for the whole desktop (Eduka-Settings → Appearance).'),
+            _('Every theme now changes the whole desktop: GTK and Qt programs, dialog boxes, menus and the window borders.'),
+            _('Eduka-Panel: Long, Floating, Short and Dock styles; Wi-Fi, Bluetooth, sound and battery work right in the panel.'),
+            _('Eduka-Settings sets the wallpaper, desktop icons, keyboard, mouse and touchpad; changes work at once.'),
+            _('Parental Control: times from 5 minutes, set to the hour, minute and second.'),
         ]
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [
-            ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark theme')),
+            ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark, Eduka-Default and Eduka-Liquid themes')),
             ('Yaru-remix', 'Muqtxdir', 'https://github.com/Muqtxdir/yaru-remix', 'GPL-3.0, CC BY-SA 4.0', _('Eduka-Low-Theme')),
             ('Graphite GTK theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Graphite-gtk-theme', 'GPL-3.0', _('Eduka-MultiColor theme')),
             ('Liquid Glass', 'Ryosuke Watanabe (ryohsuke1231)', 'https://github.com/ryohsuke1231/liquid-glass', 'MIT', _('Look of the Liquid Glass theme')),
@@ -92,14 +90,12 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
-        self.setStyleSheet("""
-        QDialog{background:#f5fbf8;color:#1f2d2a;}
-        QFrame{background:transparent;border:0;}
-        QLabel{color:#1f2d2a;}
-        QTextBrowser{background:white;color:#1f2d2a;border:1px solid #dbe8e3;border-radius:14px;padding:12px;}
-        QPushButton{background:#00a879;color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}
-        QPushButton:hover{background:#008f68;}
-        a{color:#00785a;}
+        t = theme_tokens()
+        self.setStyleSheet(dialog_qss(scoped=False) + f"""
+        QFrame{{background:transparent;border:0;}}
+        QTextBrowser{{background:{t['card']};color:{t['text']};border:1px solid {t['border']};border-radius:14px;padding:12px;}}
+        QPushButton{{background:{t['accent']};color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}}
+        QPushButton:hover{{background:{t['accent']};border:1px solid {t['text']};}}
         """)
 
 

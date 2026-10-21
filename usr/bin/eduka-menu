@@ -654,7 +654,7 @@ class EdukaMenu(QWidget):
         self.cats.setItemDelegate(CategoryDelegate(self.cats)); self.cats.setMouseTracking(True); self.cats.setUniformItemSizes(True); self.cats.viewport().installEventFilter(self); self._hover_row=None
         self._orca_hover_item=None
         self.orca_hover_timer=QTimer(self); self.orca_hover_timer.setSingleShot(True); self.orca_hover_timer.timeout.connect(self._focus_hovered_category)
-        for name,icon,_ in self.category_entries():
+        for name,icon,_needles in self.category_entries():
             self.cats.addItem(QListWidgetItem(get_icon(icon), '  '+name))
         self.cats.currentItemChanged.connect(self.change_category); self.cats.itemEntered.connect(self.category_hovered); body.addWidget(self.cats)
         center=QFrame(); center.setObjectName('contentCard'); center.setContextMenuPolicy(Qt.CustomContextMenu); center.customContextMenuRequested.connect(self.desktop_context); center_lay=QVBoxLayout(center); center_lay.setContentsMargins(14,12,14,12); center_lay.setSpacing(10)
@@ -921,7 +921,7 @@ class EdukaMenu(QWidget):
         current = self.current_category if preserve else 'Edukasaun'
         self.cats.blockSignals(True)
         self.cats.clear()
-        for name, icon, _ in self.category_entries():
+        for name, icon, _needles in self.category_entries():
             self.cats.addItem(QListWidgetItem(get_icon(icon), '  '+name))
         names = [self.cats.item(i).text().strip() for i in range(self.cats.count())]
         if current not in names:
@@ -1225,6 +1225,7 @@ class EdukaMenu(QWidget):
         self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
         icon_theme_setup(force=True)
         QApplication.instance().setStyleSheet(tooltip_qss())
+        apply_app_palette()
         self.layout_mode=self.desktop_cfg.get('layout','Grid')
         if reset:
             self.search.blockSignals(True); self.search.clear(); self.search.blockSignals(False)

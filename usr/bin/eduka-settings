@@ -243,7 +243,7 @@ class WallpaperGrid(QListWidget):
         self.loader.start(15)
 
     def load_some(self):
-        for _ in range(3):
+        for _i in range(3):
             if not self._queue:
                 self.loader.stop(); return
             it=self._queue.pop(0)
@@ -613,6 +613,7 @@ class Settings(QDialog):
             group.addButton(card); grid.addWidget(card, i//3, i%3); self.theme_cards[name]=card
         p.v.addLayout(grid)
         self.theme.currentTextChanged.connect(lambda n: self.theme_cards[n].setChecked(True) if n in self.theme_cards else None)
+        p.v.addWidget(hint_label('Every theme also changes the other programs (GTK and Qt), dialog boxes, menus and the window borders, so the whole desktop has one look.'))
         # Accent color: replaces the green (or the theme's color) everywhere.
         p.v.addWidget(self.card_title('Accent color'))
         acc=QGridLayout(); acc.setHorizontalSpacing(8); acc.setVerticalSpacing(8); self.accent_swatches={}; self.accent_group=QButtonGroup(self)
@@ -1708,6 +1709,7 @@ class Settings(QDialog):
         self.preview_info.setText(info)
 
     def apply_theme_style(self):
+        apply_app_palette()
         """The Settings window follows the Eduka theme; spin boxes and combo
         boxes get their arrows in every theme."""
         theme=current_theme()

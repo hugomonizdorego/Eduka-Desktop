@@ -1,0 +1,5 @@
+Eduka-Default is the Orchis GTK theme (https://github.com/vinceliuice/Orchis-theme,
+teal accent, light colors, standard size) by vinceliuice, built with its
+install.sh (sassc) and renamed for Edukasaun OS. Licensed under the GNU GPL
+version 3 (see COPYING). The xfwm4 and openbox-3 window borders are generated
+by tools/gen-wm-themes.py with the same colors.

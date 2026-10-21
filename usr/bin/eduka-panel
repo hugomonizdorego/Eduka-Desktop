@@ -1554,7 +1554,7 @@ def raise_application(pid=None, player=None):
             pids.add(str(int(pid)))
             # Browsers play sound in a child process: also try its parents.
             cur=str(int(pid))
-            for _ in range(4):
+            for _i in range(4):
                 stat=Path(f'/proc/{cur}/stat').read_text().rsplit(')', 1)[1].split()
                 cur=stat[1]
                 if cur in ('0', '1'): break
@@ -1867,6 +1867,7 @@ class ActionCenter(PopupFrame):
         MEDIA_WANTED['on']=True
 
         grid=QGridLayout(); grid.setSpacing(8); self.tiles={}; self.tile_grid=grid
+        for col in range(6): grid.setColumnStretch(col, 1)
         for i,(key,label,icon) in enumerate(self.TILES):
             t=QToolButton(); t.setObjectName('acTile'); t.setText(tr('dnd') if key == 'dnd' else label)
             t.setIcon(get_icon(icon,'video-display' if key == 'display' else 'preferences-system-notifications' if key == 'dnd' else 'preferences-system'))
@@ -1876,7 +1877,7 @@ class ActionCenter(PopupFrame):
             t.setAccessibleName(label); t.setProperty('on', False); t.setProperty('mc', str(i % len(MULTI_COLORS))); t.setCursor(Qt.PointingHandCursor)
             t.clicked.connect(lambda _=False,k=key: self.tile_clicked(k))
             t.setContextMenuPolicy(Qt.CustomContextMenu); t.customContextMenuRequested.connect(lambda _pos,k=key: self.tile_settings(k))
-            grid.addWidget(t, i//3, i%3); self.tiles[key]=t
+            grid.addWidget(t, i//3, (i%3)*2, 1, 2); self.tiles[key]=t
         self.bv.addLayout(grid)
         self._led=True
         self.blink=QTimer(self); self.blink.timeout.connect(self.blink_led)
@@ -2159,6 +2160,15 @@ class ActionCenter(PopupFrame):
             self.zone_info.setText(f"{name} • {format_clock(now.time(), self.clock_format)} • {z['offset']} {z['abbr'] if not z['abbr'].startswith(('+','-')) else ''}".rstrip()+f"\n{dst}")
 
     # -------------------------------------------------------------- tiles
+    def layout_tiles(self, shown):
+        """Three tiles per row; a shorter last row is stretched to the full
+        width, so a missing tile (no Bluetooth) never leaves a hole."""
+        for t in self.tiles.values(): self.tile_grid.removeWidget(t)
+        rows=[shown[i:i+3] for i in range(0, len(shown), 3)]
+        for r, row in enumerate(rows):
+            span=6//len(row)
+            for c, t in enumerate(row): self.tile_grid.addWidget(t, r, c*span, 1, span)
+
     def set_tile(self, key, on, enabled=True, tip=''):
         t=self.tiles[key]
         if bool(t.property('on')) != bool(on):
@@ -2217,8 +2227,7 @@ class ActionCenter(PopupFrame):
         if self.tiles['bluetooth'].isVisibleTo(self) != want or not hasattr(self, '_tiles_laid'):
             self._tiles_laid=True; self.tiles['bluetooth'].setVisible(want)
             shown=[t for k, t in self.tiles.items() if k != 'bluetooth' or want]
-            for t in self.tiles.values(): self.tile_grid.removeWidget(t)
-            for i, t in enumerate(shown): self.tile_grid.addWidget(t, i//3, i%3)
+            self.layout_tiles(shown)
         self.set_tile('airplane', bool(st.get('airplane')), wifi_on is not None, 'Turn all wireless radios off')
         self.set_tile('display', False, True, 'Monitor and resolution settings')
         self.set_tile('dnd', dnd_enabled(), True, tr('dnd', self.lang)+': only urgent notifications pop up')
@@ -2789,6 +2798,9 @@ class NetworkPopup(PopupFrame):
         if self.panel.last_status.get('wifi_on') is False:
             self.show_message(_('Wi-Fi is off.')); return
         nets=result.get('networks') or []
+        active=next((n['ssid'] for n in nets if n['active']), '')
+        self.wifi_sub.setVisible(True)
+        self.wifi_sub.setText(_('Connected to {n}').replace('{n}', active) if active else _('Not connected'))
         if not nets:
             self.show_message(_('No Wi-Fi networks found.')); return
         self.clear_list(); self.known=result.get('known') or set()
@@ -3480,6 +3492,9 @@ class EdukaPanel(QWidget):
         self.touchpad_devices=[]; self._input_sig=None; self._input_workers=[]; self._tp_proc=None; self._tp_id=None; self._tp_state={}
         self.input_timer=QTimer(self); self.input_timer.timeout.connect(self.check_input_devices); self.input_timer.start(5000)
         QTimer.singleShot(1200, lambda: self.check_input_devices(first=True))
+        # After an update: the theme brings its new system part once (GTK,
+        # Qt colors, window borders), then the palette is checked.
+        QTimer.singleShot(700, self.apply_theme_after_update)
         # White text on a white menu in Qt programs (pcmanfm-qt desktop menu)?
         QTimer.singleShot(900, lambda: repair_qt_palette())
         # Wallpaper slideshow (Eduka-Settings → Wallpaper).
@@ -3602,6 +3617,7 @@ class EdukaPanel(QWidget):
         app=QApplication.instance()
         if app is not None and app.styleSheet() != tooltip_qss():
             app.setStyleSheet(tooltip_qss())
+            apply_app_palette()
         self.load_config()
         self.update_tasks()
         self.update_status_icons()
@@ -4155,6 +4171,15 @@ class EdukaPanel(QWidget):
         self.show_popup_above(p, self.drives_button)
 
     # ------------------------------------------------------------ keyboard, mouse, touchpad
+    def apply_theme_after_update(self):
+        try:
+            cfg=read_desktop_config()
+            if cfg.get('theme_applied') != VERSION:
+                apply_desktop_theme(cfg.get('theme_style'))
+                save_desktop_config({'theme_applied': VERSION})
+        except Exception:
+            pass
+
     def multicolor_qss(self, theme, dark, radius, bg_alpha):
         """Eduka-MultiColor (or the Multi-color switch): the start button is a
         rainbow, every launcher, tray button and window button has its own color."""

@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.24_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.9.25_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.24_all.deb
+   rm ./edukasaun-desktop-menu_0.9.25_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -166,6 +166,20 @@ and other greeters.
   virtual machine, OpenGL renderer, picom version and its last warnings).
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
+
+## One theme for the whole desktop (0.9.25)
+
+- `SYSTEM_THEMES` in `eduka_common.py` covers every Eduka theme:
+  GTK theme (`usr/share/themes/Eduka-Default`, `Eduka-Liquid`, `Eduka-Low`,
+  `Edukasaun-Dark`, `Eduka-MultiColor`), Qt palette, window border theme.
+- `apply_desktop_theme()` writes GTK 2/3/4 settings, lxqt.conf `[Palette]`
+  (accent as highlight), `[Qt] style=Fusion`, `[General] theme=light|dark`,
+  `~/.config/gtk-4.0/gtk.css` (only Eduka's own file) and the Openbox/xfwm4
+  theme; only changed values are written.
+- `THEME_TOKENS` / `theme_tokens()`, `dialog_qss()`, `menu_qss()` and
+  `apply_app_palette()` give Eduka's dialogs, menus and tooltips the theme
+  colors. Eduka-Panel applies the theme once after each update
+  (`theme_applied` in the desktop settings).
 
 ## Panel styles and panel popups (0.9.24)
 

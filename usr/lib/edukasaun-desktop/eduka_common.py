@@ -21,7 +21,7 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.9.24"
+VERSION = "0.9.25"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -614,8 +614,57 @@ def _old_liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
 TOOLTIP_QSS = 'QToolTip{background:#fbfefc;color:#1f2d2a;border:1px solid rgba(0,120,90,70);padding:5px 8px;border-radius:8px;}'
 TOOLTIP_QSS_DARK = 'QToolTip{background:#383838;color:#ffffff;border:1px solid rgba(255,255,255,40);padding:5px 8px;border-radius:8px;}'
 
+# Colors of every Eduka theme for menus, tooltips and dialog boxes, so a
+# message box or a right-click menu looks like the rest of the theme.
+THEME_TOKENS = {
+    THEME_DEFAULT: dict(bg='#f4f8f6', card='#ffffff', text='#1f2d2a', sub='#5b6e69', border='#d3e0db', field='#ffffff', hover='#e7f3ee'),
+    THEME_LOW: dict(bg='#f7f7f7', card='#ffffff', text='#3d3d3d', sub='#666666', border='#d6d6d6', field='#ffffff', hover='#e9e9e9'),
+    THEME_LIQUID: dict(bg='#f0f5f9', card='#ffffff', text='#1c2b33', sub='#5a6b75', border='#d3e3ec', field='#ffffff', hover='#e4f1f8'),
+    THEME_DARK: dict(bg='#2c2c2c', card='#383838', text='#f0f0f0', sub='#a6a6a6', border='#474747', field='#383838', hover='#404040'),
+    THEME_TRANSPARENT: dict(bg='#1e1e1e', card='#262626', text='#f2f2f2', sub='#9c9c9c', border='#3a3a3a', field='#2b2b2b', hover='#333333'),
+    THEME_MULTI: dict(bg='#f5f5f5', card='#ffffff', text='#212121', sub='#616161', border='#dcdcdc', field='#ffffff', hover='#eceffd'),
+}
+
+def theme_tokens(theme=None):
+    theme=theme or current_theme()
+    t=dict(THEME_TOKENS.get(theme, THEME_TOKENS[THEME_DEFAULT]))
+    t['accent']=custom_accent() or THEME_ACCENTS.get(theme, '#00a879')
+    t['radius']=8 if theme == THEME_LOW else 12
+    return t
+
+def dialog_qss(scoped=True):
+    """Message boxes, input boxes, file and color choosers of the Eduka
+    programs in the colors of the theme (scoped: only those dialog types)."""
+    t=theme_tokens(); r=t['radius']
+    kinds=['QMessageBox', 'QInputDialog', 'QFileDialog', 'QColorDialog', 'QFontDialog', 'QProgressDialog'] if scoped else ['QDialog']
+    def sel(rule): return ','.join(f'{k}{rule}' for k in kinds)
+    def sub(child): return ','.join(f'{k} {child}' for k in kinds)
+    return (f"{sel('')}{{background:{t['bg']};color:{t['text']};}}"
+            f"{sub('QLabel')}{{color:{t['text']};background:transparent;}}"
+            f"{sub('QPushButton')}{{background:{t['card']};color:{t['text']};border:1px solid {t['border']};border-radius:{r-2}px;padding:6px 16px;min-width:70px;font-weight:700;}}"
+            f"{sub('QPushButton:hover')}{{background:{t['hover']};border:1px solid {t['accent']};}}"
+            f"{sub('QPushButton:default')}{{background:{t['accent']};color:#ffffff;border:1px solid {t['accent']};}}"
+            f"{sub('QLineEdit')},{sub('QSpinBox')},{sub('QComboBox')},{sub('QTextEdit')},{sub('QPlainTextEdit')},{sub('QTextBrowser')}{{background:{t['field']};color:{t['text']};border:1px solid {t['border']};border-radius:{r-4}px;padding:4px 6px;selection-background-color:{t['accent']};selection-color:#ffffff;}}"
+            f"{sub('QLineEdit:focus')}{{border:1px solid {t['accent']};}}"
+            f"{sub('QListView')},{sub('QTreeView')}{{background:{t['field']};color:{t['text']};border:1px solid {t['border']};border-radius:{r-4}px;selection-background-color:{t['accent']};selection-color:#ffffff;}}"
+            f"{sub('QCheckBox')},{sub('QRadioButton')}{{color:{t['text']};}}")
+
 def tooltip_qss():
-    return TOOLTIP_QSS_DARK if is_dark_theme() else TOOLTIP_QSS
+    """Application stylesheet: tooltips and dialog boxes follow the theme."""
+    t=theme_tokens()
+    tip=(f"QToolTip{{background:{t['card']};color:{t['text']};border:1px solid {t['border']};padding:5px 8px;border-radius:8px;}}")
+    return tip+dialog_qss()
+
+def menu_qss():
+    t=theme_tokens(); dark=is_dark_theme()
+    return (f"QMenu{{background:{t['card'] if not dark else t['bg']};color:{t['text']};border:1px solid {t['border']};border-radius:14px;padding:6px 5px;}}"
+            f"QMenu::item{{background:transparent;padding:7px 28px 7px 10px;margin:1px 2px;border-radius:9px;color:{t['text']};}}"
+            f"QMenu::item:selected{{background:{t['accent']};color:#ffffff;}}"
+            f"QMenu::item:disabled{{color:{t['sub']};background:transparent;}}"
+            "QMenu::icon{padding-left:6px;}"
+            f"QMenu::separator{{height:1px;background:{t['border']};margin:5px 12px;}}"
+            "QMenu::indicator{width:14px;height:14px;padding-left:6px;}"
+            "QMenu::right-arrow{width:8px;height:8px;margin-right:8px;}")
 
 MENU_QSS_DARK = """
 QMenu{background:#2c2c2c;color:#ffffff;border:1px solid rgba(255,255,255,40);border-radius:14px;padding:6px 5px;}
@@ -771,6 +820,13 @@ LIGHT_PALETTE = {
     'window_text_color': '#1f2d2a', 'text_color': '#1f2d2a', 'highlighted_text_color': '#ffffff',
     'link_color': '#00785a', 'link_visited_color': '#5b6e69',
 }
+LIQUID_PALETTE = {
+    'window_color': '#eef3f7', 'base_color': '#ffffff', 'highlight_color': '#1e9bd7',
+    'window_text_color': '#1c2b33', 'text_color': '#1c2b33', 'highlighted_text_color': '#ffffff',
+    'link_color': '#126f9c', 'link_visited_color': '#5a6b75',
+}
+TRANS_PALETTE = dict(DARK_PALETTE, **{'window_color': '#1e1e1e', 'base_color': '#171717', 'highlight_color': '#6c6c6c',
+                                       'window_text_color': '#f2f2f2', 'text_color': '#f2f2f2', 'link_color': '#d9d9d9', 'link_visited_color': '#a0a0a0'})
 THEME_BACKUP = BASE_CONFIG/'desktop-theme-backup.json'
 
 def _contrast(a, b):
@@ -821,8 +877,12 @@ def repair_qt_palette():
 DESKTOP_DARK_THEME = 'Edukasaun-Dark'
 # Eduka theme -> (GTK theme, prefer dark, Qt palette, window border theme)
 SYSTEM_THEMES = {
+    # 0.9.25: every Eduka theme brings its own GTK theme, Qt colors and
+    # window borders, so no window or dialog keeps an old look.
+    THEME_DEFAULT: ('Eduka-Default', False, LIGHT_PALETTE, 'Eduka-Default'),
+    THEME_LIQUID: ('Eduka-Liquid', False, LIQUID_PALETTE, 'Eduka-Liquid'),
     THEME_DARK: ('Edukasaun-Dark', True, DARK_PALETTE, 'Edukasaun-Dark'),
-    THEME_TRANSPARENT: ('Edukasaun-Dark', True, DARK_PALETTE, 'Eduka-Transparan'),
+    THEME_TRANSPARENT: ('Edukasaun-Dark', True, TRANS_PALETTE, 'Eduka-Transparan'),
     THEME_LOW: ('Eduka-Low', False, LOW_PALETTE, 'Eduka-Low'),
     THEME_MULTI: ('Eduka-MultiColor', False, MULTI_PALETTE, 'Eduka-MultiColor'),
 }
@@ -830,11 +890,21 @@ SYSTEM_THEMES = {
 def _home(*parts):
     return Path.home().joinpath(*parts)
 
-def _openbox_rc():
+def _openbox_rc(create=False):
     for name in ('lxqt-rc.xml', 'rc.xml'):
         path=_home('.config','openbox',name)
         if path.exists():
             return path
+    if create and shutil.which('openbox'):
+        # LXQt starts Openbox with ~/.config/openbox/lxqt-rc.xml; without a
+        # copy of its own the window borders could not follow the theme.
+        for src in ('/etc/xdg/openbox/lxqt-rc.xml', '/usr/share/lxqt/openbox/lxqt-rc.xml', '/etc/xdg/openbox/rc.xml'):
+            if os.path.exists(src):
+                try:
+                    dst=_home('.config','openbox','lxqt-rc.xml'); dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dst); return dst
+                except Exception:
+                    break
     return None
 
 def _openbox_theme(path):
@@ -881,13 +951,38 @@ def _set_xfwm4_theme(name):
     if shutil.which('xfconf-query'):
         safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-s',name])
 
+GTK4_MARK = '/* Eduka-Desktop theme — written by Eduka-Settings, replaced on every theme change */'
+
+def _link_gtk4_theme(name, dark=False):
+    """GTK 4 / libadwaita programs ignore gtk-theme-name; they read
+    ~/.config/gtk-4.0/gtk.css. Eduka writes a small file that imports the
+    theme's GTK 4 style — only when the file is Eduka's own or missing."""
+    css=_home('.config', 'gtk-4.0', 'gtk.css')
+    src=None
+    for base in (Path('/usr/share/themes'), _home('.themes'), _home('.local', 'share', 'themes')):
+        for f in (('gtk-dark.css', 'gtk.css') if dark else ('gtk.css',)):
+            if (base/name/'gtk-4.0'/f).exists():
+                src=base/name/'gtk-4.0'/f; break
+        if src: break
+    try:
+        if css.exists() and GTK4_MARK not in css.read_text(encoding='utf-8', errors='ignore'):
+            return False           # the person's own GTK 4 style stays
+        if src is None:
+            if css.exists(): css.unlink()
+            return False
+        css.parent.mkdir(parents=True, exist_ok=True)
+        css.write_text(f'{GTK4_MARK}\n@import url("file://{src}");\n', encoding='utf-8')
+        return True
+    except Exception:
+        return False
+
 def apply_desktop_theme(theme=None):
     """Make the whole desktop follow the Eduka theme.
 
-    Edukasaun-Dark switches GTK applications (GTK 2/3/4), Qt applications
-    (LXQt palette) and the window borders (xfwm4 or Openbox) to the bundled
-    Edukasaun-Dark theme (Orchis dark). The user's previous choices are saved
-    first and restored when another Eduka theme is chosen.
+    Every Eduka theme switches GTK applications (GTK 2/3/4), Qt applications
+    (LXQt palette with Fusion, the LXQt theme) and the window borders (xfwm4
+    or Openbox) to its bundled theme. The user's previous choices are saved
+    the first time and restored for a theme that has no system part.
     """
     theme=normalize_theme_style(theme if theme is not None else read_desktop_config().get('theme_style'))
     lxqt=_home('.config','lxqt','lxqt.conf')
@@ -909,17 +1004,35 @@ def apply_desktop_theme(theme=None):
                 'xfwm4_compositing': _xfwm4_get('/general/use_compositing'),
             }
             write_json(THEME_BACKUP, backup)
+        # Only changed values are written: Eduka-Panel watches these files.
         for path in (gtk3, gtk4):
-            _set_ini_value(path, 'Settings', 'gtk-theme-name', gtk_name)
-            _set_ini_value(path, 'Settings', 'gtk-application-prefer-dark-theme', 'true' if prefer_dark else 'false')
-        lines=[l for l in (gtk2.read_text(encoding='utf-8', errors='ignore').splitlines() if gtk2.exists() else []) if not l.strip().startswith('gtk-theme-name')]
+            for key, value in (('gtk-theme-name', gtk_name), ('gtk-application-prefer-dark-theme', 'true' if prefer_dark else 'false')):
+                if _get_ini_value(path, 'Settings', key) != value:
+                    _set_ini_value(path, 'Settings', key, value)
+        old2=gtk2.read_text(encoding='utf-8', errors='ignore') if gtk2.exists() else ''
+        lines=[l for l in old2.splitlines() if not l.strip().startswith('gtk-theme-name')]
         lines.append(f'gtk-theme-name="{gtk_name}"')
-        gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+        if '\n'.join(lines)+'\n' != old2:
+            gtk2.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+        palette=dict(palette)
+        accent=custom_accent() if theme != THEME_MULTI else ''
+        if accent:
+            # The chosen accent color also marks selections in Qt programs.
+            palette.update(highlight_color=accent, link_color=accent)
         for key, value in palette.items():
-            _set_ini_value(lxqt, 'Palette', key, value)
-        ob=_openbox_rc()
-        if ob: _set_openbox_theme(ob, wm_name)
-        if shutil.which('xfwm4') and _xfwm4_theme() is not None:
+            if _get_ini_value(lxqt, 'Palette', key) != value:
+                _set_ini_value(lxqt, 'Palette', key, value)
+        # Fusion draws exactly these colors (other Qt styles may ignore them,
+        # which gave white text on white menus).
+        if (_get_ini_value(lxqt, 'Qt', 'style') or '').lower() not in ('fusion', 'kvantum', 'kvantum-dark'):
+            _set_ini_value(lxqt, 'Qt', 'style', 'Fusion')
+        lxqt_theme='dark' if prefer_dark else 'light'
+        if Path('/usr/share/lxqt/themes', lxqt_theme).is_dir() and _get_ini_value(lxqt, 'General', 'theme') != lxqt_theme:
+            _set_ini_value(lxqt, 'General', 'theme', lxqt_theme)
+        _link_gtk4_theme(gtk_name, prefer_dark)
+        ob=_openbox_rc(create=True)
+        if ob and _openbox_theme(ob) != wm_name: _set_openbox_theme(ob, wm_name)
+        if shutil.which('xfwm4') and _xfwm4_theme() not in (None, wm_name):
             _set_xfwm4_theme(wm_name)
             # The low theme also switches xfwm4's compositor off.
             _xfwm4_set('/general/use_compositing', 'bool', 'false' if theme == THEME_LOW else 'true')
@@ -1143,11 +1256,42 @@ def translate_tree(root):
 
 _ORIG={}
 
+def apply_app_palette(app=None):
+    """Qt colors of the current Eduka theme for this program, so its dialog
+    boxes (messages, file and color choosers, input boxes) look like the
+    theme even outside an LXQt session."""
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtGui import QPalette, QColor
+        app=app or QApplication.instance()
+        if app is None: return
+        theme=current_theme()
+        pal=dict(SYSTEM_THEMES.get(theme, (None, False, LIGHT_PALETTE, None))[2])
+        acc=custom_accent() or THEME_ACCENTS.get(theme)
+        if acc: pal.update(highlight_color=acc)
+        p=QPalette()
+        win=QColor(pal['window_color']); base=QColor(pal['base_color']); text=QColor(pal['text_color']); wtext=QColor(pal['window_text_color'])
+        dark=win.lightness() < 128
+        for role, c in ((QPalette.Window, win), (QPalette.WindowText, wtext), (QPalette.Base, base),
+                        (QPalette.AlternateBase, win.lighter(106) if dark else win.darker(103)), (QPalette.Text, text),
+                        (QPalette.Button, win.lighter(115) if dark else win), (QPalette.ButtonText, wtext),
+                        (QPalette.Highlight, QColor(pal['highlight_color'])), (QPalette.HighlightedText, QColor(pal['highlighted_text_color'])),
+                        (QPalette.ToolTipBase, base), (QPalette.ToolTipText, text), (QPalette.Link, QColor(pal['link_color'])),
+                        (QPalette.LinkVisited, QColor(pal['link_visited_color'])), (QPalette.BrightText, QColor('#ffffff'))):
+            p.setColor(role, c)
+        faint=QColor(text); faint.setAlpha(120)
+        p.setColor(QPalette.PlaceholderText, faint)
+        for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+            p.setColor(QPalette.Disabled, role, faint)
+        app.setPalette(p)
+    except Exception:
+        pass
+
 def install_translations(app=None):
     """Translate texts the Eduka programs set at run time. Only exact
     interface texts from the catalogs change; names, titles and paths stay."""
     from PyQt5.QtWidgets import QLabel, QAbstractButton, QWidget, QLineEdit, QMenu, QMessageBox, QAction
-    round_tooltips(app); install_accent()
+    round_tooltips(app); install_accent(); apply_app_palette(app)
     if _ORIG:
         return
     _ORIG.update(label=QLabel.setText, button=QAbstractButton.setText, tooltip=QWidget.setToolTip,
@@ -1614,7 +1758,7 @@ def round_menu(menu):
     Without a compositor the menu stays an opaque window with a small radius,
     so no black corners appear.
     """
-    qss=MENU_QSS_DARK if is_dark_theme() else MENU_QSS
+    qss=menu_qss()
     if compositor_running():
         menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
