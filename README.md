@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.10.0~beta1_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.10.0~beta2_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.10.0~beta1_all.deb
+   rm ./edukasaun-desktop-menu_0.10.0~beta2_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -178,8 +178,15 @@ and other greeters.
 - Icons: `_follow_icon_theme()` sets Papirus / Papirus-Dark with the theme
   while `icon_theme_follow` is on.
 - `VERSION` is the shown version ("0.10.0 Beta"), `DEB_VERSION` the
-  package version (0.10.0~beta1) that `tools/build-deb.sh` compares with
-  DEBIAN/control.
+  package version (0.10.0~beta2) that `tools/build-deb.sh` compares with
+  DEBIAN/control. `theme_applied` stores `DEB_VERSION`, so a package update
+  that keeps the shown version still re-applies the theme once.
+- Update 2 colors: accent mint `#3fa684`, sky blue `#5b9bd5` (start button),
+  surfaces `#edf7f2` / `#fcfefd`, text `#24403a`; tiles and categories use
+  `PASTEL_COLORS` / `PASTEL_TILES`. Raised cards use a vertical color fade
+  and a 1 px outline (no thick `border-bottom` on round corners, which Qt
+  draws with tails). GTK: Orchis `-t green` with `$green-*`, `$sea-*`,
+  `$orange-*` (warnings), `$grey-050…250` and `$white` changed.
 
 ## One theme for the whole desktop (0.9.25)
 

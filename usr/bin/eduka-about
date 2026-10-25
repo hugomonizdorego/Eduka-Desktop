@@ -43,7 +43,7 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('New default theme Eduka-Pastel: cream, mint and coral with big round cards — for the desktop, programs, dialog boxes and the login screen.'),
+            _('Eduka-Pastel, the default theme, now in soft mint green and sky blue with colorful raised cards — for the desktop, programs, dialog boxes and the login screen.'),
             _('Icons: Papirus follows the theme (light or dark), so every icon has the same style.'),
             _('Every theme now changes the whole desktop: GTK and Qt programs, dialog boxes, menus and the window borders.'),
             _('Eduka-Panel: Long, Floating, Short and Dock styles; Wi-Fi, Bluetooth, sound and battery work right in the panel.'),

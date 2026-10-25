@@ -23,12 +23,12 @@ def exit_now(code=0):
 
 VERSION = "0.10.0 Beta"
 # Debian package version (a "~" sorts before the final 0.10.0, after 0.9.25).
-DEB_VERSION = "0.10.0~beta1"
+DEB_VERSION = "0.10.0~beta2"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
-THEME_PASTEL = "Eduka-Pastel"          # 0.10.0 default: cream, mint and coral, soft and round
+THEME_PASTEL = "Eduka-Pastel"          # 0.10.0 default: soft mint green and sky blue, round and raised
 THEME_LIQUID = "Liquid Glass"
 THEME_DARK = "Edukasaun-Dark"
 THEME_LOW = "Eduka-Low-Theme"          # after Yaru-remix: flat, opaque, no effects
@@ -37,10 +37,10 @@ THEME_MULTI = "Eduka-MultiColor"      # after Graphite (light): a color for ever
 THEMES = [THEME_PASTEL, THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT, THEME_MULTI]
 DEFAULT_THEME = THEME_PASTEL
 # Eduka-Pastel: the soft colors of the cards, badges and category icons.
-PASTEL = {'cream': '#fbf5ee', 'card': '#fffdfb', 'mint': '#dce9e3', 'mint_deep': '#5f9d8d', 'coral': '#ef8063', 'coral_deep': '#e36f52',
-          'peach': '#fbdcd3', 'butter': '#fdeec8', 'sky': '#dce8f7', 'lilac': '#ece3f7', 'text': '#3b2a25', 'sub': '#7a6a64',
-          'border': '#efe4da', 'shadow': '#eadfd4'}
-PASTEL_COLORS = ['#ef8063', '#5f9d8d', '#f6b94a', '#7fa4d8', '#a78bdb', '#e9779a', '#6fb5a3', '#f29e6b', '#8fb0e6', '#c59adf']
+PASTEL = {'surface': '#edf7f2', 'card': '#fcfefd', 'mint': '#d6efe6', 'mint_deep': '#3f9a7e', 'accent': '#3fa684', 'accent_deep': '#2f8f6f',
+          'blue': '#5b9bd5', 'blue_soft': '#d8e9f9', 'peach': '#fde3d6', 'butter': '#fdeec8', 'sky': '#dce8f7', 'lilac': '#ece3f7', 'text': '#24403a', 'sub': '#5d7671',
+          'border': '#d9eae3', 'shadow': '#cfe3db'}
+PASTEL_COLORS = ['#3fa684', '#5b9bd5', '#e0a42e', '#9b7fd2', '#e2729a', '#36a3ad', '#6cb85c', '#4fa3d9', '#6f8fe0', '#c084d6']
 # Colors of Eduka-MultiColor (and of the "Multi-color" switch in Eduka-Settings):
 # every category, Action Center tile and panel button group gets its own.
 MULTI_COLORS = ['#ef5350', '#ff9800', '#f9a825', '#43a047', '#00acc1', '#1e88e5', '#5b6ee1', '#8e24aa', '#d81b60', '#00897b']
@@ -626,7 +626,7 @@ TOOLTIP_QSS_DARK = 'QToolTip{background:#383838;color:#ffffff;border:1px solid r
 # Colors of every Eduka theme for menus, tooltips and dialog boxes, so a
 # message box or a right-click menu looks like the rest of the theme.
 THEME_TOKENS = {
-    THEME_PASTEL: dict(bg='#fbf5ee', card='#fffdfb', text='#3b2a25', sub='#7a6a64', border='#efe4da', field='#fffdfb', hover='#fbe7df'),
+    THEME_PASTEL: dict(bg='#edf7f2', card='#fcfefd', text='#24403a', sub='#5d7671', border='#d9eae3', field='#fcfefd', hover='#e4f3ed'),
     THEME_DEFAULT: dict(bg='#f4f8f6', card='#ffffff', text='#1f2d2a', sub='#5b6e69', border='#d3e0db', field='#ffffff', hover='#e7f3ee'),
     THEME_LOW: dict(bg='#f7f7f7', card='#ffffff', text='#3d3d3d', sub='#666666', border='#d6d6d6', field='#ffffff', hover='#e9e9e9'),
     THEME_LIQUID: dict(bg='#f0f5f9', card='#ffffff', text='#1c2b33', sub='#5a6b75', border='#d3e3ec', field='#ffffff', hover='#e4f1f8'),
@@ -831,9 +831,9 @@ LIGHT_PALETTE = {
     'link_color': '#00785a', 'link_visited_color': '#5b6e69',
 }
 PASTEL_PALETTE = {
-    'window_color': '#fbf5ee', 'base_color': '#fffdfb', 'highlight_color': '#ef8063',
-    'window_text_color': '#3b2a25', 'text_color': '#3b2a25', 'highlighted_text_color': '#ffffff',
-    'link_color': '#e36f52', 'link_visited_color': '#7a6a64',
+    'window_color': '#edf7f2', 'base_color': '#fcfefd', 'highlight_color': '#3fa684',
+    'window_text_color': '#24403a', 'text_color': '#24403a', 'highlighted_text_color': '#ffffff',
+    'link_color': '#2f8f6f', 'link_visited_color': '#5d7671',
 }
 LIQUID_PALETTE = {
     'window_color': '#eef3f7', 'base_color': '#ffffff', 'highlight_color': '#1e9bd7',
@@ -1570,7 +1570,7 @@ def set_icon_theme(name):
     icon_theme_setup(force=True); touch_reload()
     return True
 
-THEME_ACCENTS = {THEME_PASTEL: '#ef8063', THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
+THEME_ACCENTS = {THEME_PASTEL: '#3fa684', THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
 
 # ---------------------------------------------------------------------------
 # Accent color. Eduka-Settings → Appearance → Accent color replaces the green

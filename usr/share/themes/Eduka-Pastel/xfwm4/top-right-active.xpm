@@ -1,7 +1,7 @@
 /* XPM */
 static char *top_right[] = {
 "8 30 2 1",
-". c #fbf5ee",
+". c #edf7f2",
 "# c None",
 "....####",
 ".....###",
