@@ -22,14 +22,14 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.9.25_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.10.0~beta1_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.9.25_all.deb
+   rm ./edukasaun-desktop-menu_0.10.0~beta1_all.deb
    ```
 
 The post-install script does not start any GUI inside the chroot; Eduka-Panel
@@ -166,6 +166,20 @@ and other greeters.
   virtual machine, OpenGL renderer, picom version and its last warnings).
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
+
+## Eduka-Pastel and versions (0.10.0 Beta)
+
+- `THEME_PASTEL` (`Eduka-Pastel`) is `DEFAULT_THEME`: colors in `PASTEL`,
+  `PASTEL_COLORS`, `PASTEL_PALETTE`, `THEME_TOKENS` (eduka_common.py),
+  `PASTEL_UI` / `pastel_ac_qss()` (panel), `UI['pastel']` (menu) and
+  `SETTINGS_PALETTES[THEME_PASTEL]` (settings, with `nav_sel_bg`, `radius`,
+  `pill`, `shadow`). GTK theme `usr/share/themes/Eduka-Pastel` (Orchis with
+  a changed `_color-palette-default.scss`), SDDM `style=pastel`.
+- Icons: `_follow_icon_theme()` sets Papirus / Papirus-Dark with the theme
+  while `icon_theme_follow` is on.
+- `VERSION` is the shown version ("0.10.0 Beta"), `DEB_VERSION` the
+  package version (0.10.0~beta1) that `tools/build-deb.sh` compares with
+  DEBIAN/control.
 
 ## One theme for the whole desktop (0.9.25)
 

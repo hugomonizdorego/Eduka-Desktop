@@ -43,6 +43,8 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
+            _('New default theme Eduka-Pastel: cream, mint and coral with big round cards — for the desktop, programs, dialog boxes and the login screen.'),
+            _('Icons: Papirus follows the theme (light or dark), so every icon has the same style.'),
             _('Every theme now changes the whole desktop: GTK and Qt programs, dialog boxes, menus and the window borders.'),
             _('Eduka-Panel: Long, Floating, Short and Dock styles; Wi-Fi, Bluetooth, sound and battery work right in the panel.'),
             _('Eduka-Settings sets the wallpaper, desktop icons, keyboard, mouse and touchpad; changes work at once.'),
@@ -51,6 +53,7 @@ class AboutDialog(QDialog):
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [
             ('Orchis theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Edukasaun-Dark, Eduka-Default and Eduka-Liquid themes')),
+            ('Orchis theme (Eduka-Pastel colors)', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Orchis-theme', 'GPL-3.0', _('Eduka-Pastel theme')),
             ('Yaru-remix', 'Muqtxdir', 'https://github.com/Muqtxdir/yaru-remix', 'GPL-3.0, CC BY-SA 4.0', _('Eduka-Low-Theme')),
             ('Graphite GTK theme', 'Vince Liu (vinceliuice)', 'https://github.com/vinceliuice/Graphite-gtk-theme', 'GPL-3.0', _('Eduka-MultiColor theme')),
             ('Liquid Glass', 'Ryosuke Watanabe (ryohsuke1231)', 'https://github.com/ryohsuke1231/liquid-glass', 'MIT', _('Look of the Liquid Glass theme')),

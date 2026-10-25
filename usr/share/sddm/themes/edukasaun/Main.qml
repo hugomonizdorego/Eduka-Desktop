@@ -3,7 +3,7 @@
 //
 // Settings (theme.conf, overridden by theme.conf.user written by
 // Eduka-Settings → Login Screen):
-//   style=light|dark|glass  accent=#rrggbb  title=…  showClock=true|false
+//   style=light|dark|glass|pastel  accent=#rrggbb  title=…  showClock=true|false
 //   background=/usr/share/Edukasaun/SDDM/Default.png  logo=…  defaultUser=…
 //
 // Bottom bar: session, keyboard layout and language on the left;
@@ -27,26 +27,27 @@ Rectangle {
 
     // ------------------------------------------------------------ settings
     property int sessionIndex: sessionModel.lastIndex >= 0 ? sessionModel.lastIndex : 0
-    property string style: ["light", "dark", "glass"].indexOf(String(config.style)) >= 0 ? String(config.style) : "light"
+    property string style: ["light", "dark", "glass", "pastel"].indexOf(String(config.style)) >= 0 ? String(config.style) : "light"
     property bool contrast: false
     property bool largeText: false
     property bool dark: style === "dark"
     property bool glass: style === "glass"
-    property color accent: contrast ? "#ffd400" : (/^#[0-9a-fA-F]{6}$/.test(String(config.accent)) ? String(config.accent) : (dark ? "#26a69a" : (glass ? "#1e9bd7" : "#00a879")))
+    property bool pastel: style === "pastel"
+    property color accent: contrast ? "#ffd400" : (/^#[0-9a-fA-F]{6}$/.test(String(config.accent)) ? String(config.accent) : (dark ? "#26a69a" : (glass ? "#1e9bd7" : (pastel ? "#ef8063" : "#00a879"))))
     property bool showClock: String(config.showClock) !== "false"
     property bool busy: false
     property bool menuOpen: menus.open !== ""
     property real s: Math.max(0.75, Math.min(1.25, height / 768)) * (largeText ? 1.25 : 1.0)
 
-    property color cardColor: contrast ? "#000000" : (dark ? "#e6202322" : (glass ? "#8cffffff" : "#f2ffffff"))
-    property color cardBorder: contrast ? "#ffffff" : (dark ? "#33ffffff" : (glass ? "#e6ffffff" : "#d9ffffff"))
+    property color cardColor: contrast ? "#000000" : (dark ? "#e6202322" : (glass ? "#8cffffff" : (pastel ? "#f5fffdfb" : "#f2ffffff")))
+    property color cardBorder: contrast ? "#ffffff" : (dark ? "#33ffffff" : (glass ? "#e6ffffff" : (pastel ? "#efe4da" : "#d9ffffff")))
     property color fieldColor: contrast ? "#000000" : (dark ? "#2e3432" : (glass ? "#d9ffffff" : "#ffffff"))
-    property color fieldBorder: contrast ? "#ffffff" : (dark ? "#40ffffff" : (glass ? "#f2ffffff" : "#d3e0db"))
-    property color textColor: contrast ? "#ffffff" : (dark ? "#ffffff" : "#10231e")
-    property color subColor: contrast ? "#ffffff" : (dark ? "#b3ffffff" : "#5b6e69")
-    property color hintColor: contrast ? "#d9ffffff" : (dark ? "#80ffffff" : "#8aa29b")
-    property color barColor: contrast ? "#000000" : (dark ? "#d9202322" : (glass ? "#80ffffff" : "#e6ffffff"))
-    property color hoverColor: contrast ? "#333333" : (dark ? "#1affffff" : "#1a00785a")
+    property color fieldBorder: contrast ? "#ffffff" : (dark ? "#40ffffff" : (glass ? "#f2ffffff" : (pastel ? "#eadfd4" : "#d3e0db")))
+    property color textColor: contrast ? "#ffffff" : (dark ? "#ffffff" : (pastel ? "#3b2a25" : "#10231e"))
+    property color subColor: contrast ? "#ffffff" : (dark ? "#b3ffffff" : (pastel ? "#7a6a64" : "#5b6e69"))
+    property color hintColor: contrast ? "#d9ffffff" : (dark ? "#80ffffff" : (pastel ? "#a89890" : "#8aa29b"))
+    property color barColor: contrast ? "#000000" : (dark ? "#d9202322" : (glass ? "#80ffffff" : (pastel ? "#e6fbf5ee" : "#e6ffffff")))
+    property color hoverColor: contrast ? "#333333" : (dark ? "#1affffff" : (pastel ? "#1aef8063" : "#1a00785a"))
 
     // ------------------------------------------------------------ language
     // Language of this screen: the one picked in the menu, else the system's.
@@ -231,9 +232,9 @@ Rectangle {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.dark ? "#2f3b39" : (root.glass ? "#bfe3f5" : "#e9f6c9") }
-            GradientStop { position: 0.5; color: root.dark ? "#1f2a28" : (root.glass ? "#7fb9dc" : "#8fcf7a") }
-            GradientStop { position: 1.0; color: root.dark ? "#121616" : (root.glass ? "#2f6f9a" : "#1f6b45") }
+            GradientStop { position: 0.0; color: root.dark ? "#2f3b39" : (root.glass ? "#bfe3f5" : (root.pastel ? "#fbdcd3" : "#e9f6c9")) }
+            GradientStop { position: 0.5; color: root.dark ? "#1f2a28" : (root.glass ? "#7fb9dc" : (root.pastel ? "#fbf5ee" : "#8fcf7a")) }
+            GradientStop { position: 1.0; color: root.dark ? "#121616" : (root.glass ? "#2f6f9a" : (root.pastel ? "#dce9e3" : "#1f6b45")) }
         }
     }
     Image {
@@ -250,9 +251,10 @@ Rectangle {
         anchors.fill: parent
         visible: !root.contrast
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.dark ? "#a6000000" : "#4d000000" }
-            GradientStop { position: 0.45; color: root.dark ? "#73000000" : "#1a000000" }
-            GradientStop { position: 1.0; color: root.dark ? "#b3000000" : "#59000000" }
+            // Pastel: a warm, lighter shade so the soft colors stay soft.
+            GradientStop { position: 0.0; color: root.dark ? "#a6000000" : (root.pastel ? "#40603a30" : "#4d000000") }
+            GradientStop { position: 0.45; color: root.dark ? "#73000000" : (root.pastel ? "#0d000000" : "#1a000000") }
+            GradientStop { position: 1.0; color: root.dark ? "#b3000000" : (root.pastel ? "#33603a30" : "#59000000") }
         }
     }
     Rectangle { anchors.fill: parent; visible: root.contrast; color: "#000000" }

@@ -2,7 +2,7 @@
 """Apply Edukasaun login screen (SDDM) settings. Runs as root via pkexec.
 
 Reads one JSON object from standard input (written by Eduka-Settings):
-  style          light | dark | glass
+  style          light | dark | glass | pastel
   accent         #rrggbb
   title          short text shown on the login card
   default_user   user name pre-filled on the login screen ('' = none)
@@ -26,7 +26,7 @@ AUTOLOGIN = '/etc/sddm.conf.d/20-eduka-autologin.conf'
 THEME_PIN = '/etc/sddm.conf.d/zz-edukasaun-theme.conf'
 METADATA = THEME_DIR + '/metadata.desktop'
 SESSION = 'edukasaun-desktop.desktop'
-STYLES = ('light', 'dark', 'glass')
+STYLES = ('light', 'dark', 'glass', 'pastel')
 MAX_IMAGE = 25 * 1024 * 1024
 
 

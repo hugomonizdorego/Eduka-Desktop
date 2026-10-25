@@ -37,13 +37,19 @@ CATEGORY_HIGHLIGHT_COLORS = [
 _RNG = random.SystemRandom()
 PALETTE = {'colors': list(CATEGORY_HIGHLIGHT_COLORS), 'offset': 0}
 
+def base_colors():
+    """The colors of the categories and tiles: pastel with Eduka-Pastel."""
+    if globals().get('UI', {}).get('pastel'):
+        return [tuple(int(c[i:i+2], 16) for i in (1, 3, 5)) for c in PASTEL_COLORS]
+    return list(CATEGORY_HIGHLIGHT_COLORS)
+
 def reshuffle_palette():
     """New color order for the next opening of Eduka-Desktop.
 
     Called while the menu is hidden, so opening stays instant and every
     opening shows a fresh set of category and application colors.
     """
-    colors=list(CATEGORY_HIGHLIGHT_COLORS)
+    colors=base_colors()
     previous=PALETTE['colors'][0] if PALETTE['colors'] else None
     _RNG.shuffle(colors)
     if colors[0] == previous and len(colors) > 1:
@@ -93,7 +99,7 @@ def _mix_dark(rgb, amount, base=(44, 44, 44)):
     """Blend a color toward the Edukasaun-Dark surface."""
     return tuple(int(b + (value - b) * amount) for value, b in zip(rgb, base))
 
-UI = {'dark': False, 'low': False, 'trans': False, 'multi': False}
+UI = {'dark': False, 'low': False, 'trans': False, 'multi': False, 'pastel': False}
 FX = {'hover': 'none', 'launch': 'none', 'tile': 132, 'speed': 1.0, 'size': 1.0, 'random': False}   # Eduka-Settings → Effects (strong computers only)
 
 
@@ -170,7 +176,8 @@ def launch_kind():
 
 def random_accent(exclude=None):
     """A new random palette color, never the one a tile shows right now."""
-    choices=[c for c in CATEGORY_HIGHLIGHT_COLORS if c != exclude] or list(CATEGORY_HIGHLIGHT_COLORS)
+    pool=base_colors()
+    choices=[c for c in pool if c != exclude] or pool
     return _RNG.choice(choices)
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -204,6 +211,9 @@ class CategoryDelegate(QStyledItemDelegate):
 
         if selected and UI['low'] and not high_contrast:
             bg = QColor('#315bef'); border = QColor('#315bef'); text_color = QColor('#ffffff')
+        elif selected and UI['pastel'] and not high_contrast:
+            # The chosen category: a white pill with a soft shadow line.
+            bg = QColor(255, 253, 251); border = QColor(227, 214, 203); text_color = QColor(46, 32, 28)
         elif selected:
             bg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             bg.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue()))
@@ -229,6 +239,11 @@ class CategoryDelegate(QStyledItemDelegate):
                 bg.setColorAt(0, QColor(60, 60, 60)); bg.setColorAt(0.5, deep); bg.setColorAt(1, QColor(52, 52, 52))
                 border = QColor(accent.red(), accent.green(), accent.blue(), 230)
                 text_color = QColor(255, 255, 255)
+        elif UI['pastel'] and not high_contrast and not selected:
+            # Eduka-Pastel: rows sit on the mint sidebar; hover is a soft white pill.
+            bg = QColor(255, 255, 255, 150 if hover else 0)
+            border = QColor(255, 255, 255, 0)
+            text_color = QColor(59, 42, 37)
         elif UI['multi'] and not high_contrast:
             # Eduka-MultiColor: every category is a soft block of its own color
             # with a colored edge; hover makes the color stronger.
@@ -255,7 +270,8 @@ class CategoryDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(QRectF(rect).adjusted(-1.5, -1.5, 1.5, 1.5), 13, 13)
         painter.setBrush(QBrush(bg))
         painter.setPen(QPen(border, 1))
-        painter.drawRoundedRect(rect, 6 if UI['low'] else 12, 6 if UI['low'] else 12)
+        rr=6 if UI['low'] else 18 if UI['pastel'] else 12
+        painter.drawRoundedRect(rect, rr, rr)
         lift=int(round(-4*size*wave)) if kind in ('wave', 'bounce') else 0
         shift=int(round(10*size*wave)) if kind == 'slide' else (int(round(3*size*wave)) if kind == 'wave' else 0)
 
@@ -272,7 +288,7 @@ class CategoryDelegate(QStyledItemDelegate):
         elif selected:
             badge = icon_rect.adjusted(-5, -5, 5, 5)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(255, 255, 255, 70))
+            painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 80) if UI['pastel'] else QColor(255, 255, 255, 70))
             painter.drawRoundedRect(badge, 9, 9)
 
         icon = index.data(Qt.DecorationRole)
@@ -335,6 +351,15 @@ class AppButton(QToolButton):
             QToolButton{{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);border-radius:15px;padding:8px;color:rgba(242,242,242,235);font-weight:800;}}
             QToolButton:hover,QToolButton:focus{{background:rgba(217,217,217,40);border:1px solid rgb({r},{g},{b});color:#ffffff;}}
             QToolButton:pressed{{background:rgba(217,217,217,60);}}
+            """)
+            return
+        elif UI['pastel']:
+            # Eduka-Pastel: white rounded cards with a soft shadow line; the
+            # pointer tints the card with its pastel color.
+            self.setStyleSheet(f"""
+            QToolButton{{background:rgba(255,253,251,{max(a, 230)});border:1px solid #f0e6dc;border-bottom:3px solid #eadfd4;border-radius:22px;padding:8px;color:#3b2a25;font-weight:800;}}
+            QToolButton:hover,QToolButton:focus{{background:rgb({lr},{lg},{lb});border:1px solid rgb({r},{g},{b});border-bottom:3px solid rgb({r},{g},{b});color:#2e201c;}}
+            QToolButton:pressed{{background:rgb({pr},{pg},{pb});border:1px solid rgb({r},{g},{b});}}
             """)
             return
         elif UI['dark']:
@@ -722,6 +747,10 @@ class EdukaMenu(QWidget):
         low=theme == THEME_LOW and not accessibility
         trans=theme == THEME_TRANSPARENT and composited and not accessibility
         UI['dark']=dark; UI['low']=low; UI['trans']=trans; UI['multi']=multicolor_on(dcfg) and not low
+        pastel=theme == THEME_PASTEL and not accessibility; UI['pastel']=pastel
+        # Pastel category and tile colors (the badges of the pastel dashboard).
+        if sorted(PALETTE['colors']) != sorted(base_colors()):
+            reshuffle_palette()
         fx=effects_settings(); FX.update(hover=fx['hover'], launch=fx['launch'], speed=fx['speed'], size=fx['size'], random=fx['random'], tile=fx['tile'])
         alpha = max(0.45, min(1.0, float(dcfg.get('transparency', 0.51))))
         set_surface_from_transparency(alpha, accessibility)
@@ -737,6 +766,8 @@ class EdukaMenu(QWidget):
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{bg_alpha});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
         elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
+        elif pastel:
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(251,245,238,{max(bg_alpha, 246)});border:1px solid #efe4da;border-bottom:2px solid #e3d6cb;border-radius:{max(radius, 28) if composited else 0}px;}} QLabel{{color:#3b2a25;}}')
         elif theme == THEME_MULTI and not accessibility:
             # Graphite light: neutral greys, the colors come from the categories.
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,250,250,{bg_alpha});border:1px solid rgba(0,0,0,28);border-radius:{radius}px;}} QLabel{{color:#212121;}}')
@@ -811,7 +842,23 @@ class EdukaMenu(QWidget):
             app=QApplication.instance()
             if app is not None and app.styleSheet() != tooltip_qss():
                 app.setStyleSheet(tooltip_qss())
-            self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + accessibility_qss)
+            pastel_qss = (
+                'QLineEdit{background:#fffdfb;border:1px solid #efe4da;border-bottom:2px solid #eadfd4;border-radius:20px;padding:8px 14px;color:#3b2a25;selection-background-color:#ef8063;}'
+                'QLineEdit:focus{border:1px solid #f4a084;border-bottom:2px solid #ef8063;}'
+                'QPushButton{background:#fffdfb;border:1px solid #efe4da;border-bottom:2px solid #eadfd4;border-radius:16px;color:#3b2a25;font-weight:800;}'
+                'QPushButton:hover{background:#fff4ee;border:1px solid #f4a084;}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f4a084,stop:1 #ec7a5c);color:white;border:1px solid #ef8063;}'
+                'QPushButton#closeButton{background:#fbe1d8;color:#e36f52;border:0;}'
+                'QFrame#contentCard{background:rgba(255,253,251,235);border:1px solid #f0e6dc;border-bottom:2px solid #eadfd4;border-radius:26px;}'
+                'QFrame#sideCard{background:rgba(255,253,251,235);border:1px solid #f0e6dc;border-bottom:2px solid #eadfd4;border-radius:26px;}'
+                'QListWidget#categoryList{background:#dce9e3;border:0;border-radius:26px;}'
+                'QFrame#sysInfoCard{background:#fbf5ee;border:1px solid #f0e6dc;border-radius:16px;}'
+                'QScrollBar:vertical{background:transparent;}'
+                'QScrollBar::handle:vertical{background:rgba(239,128,99,110);border-radius:4px;}'
+                'QLabel#brandTitle,QLabel#sectionTitle,QLabel#infoTitle{color:#2e201c;}'
+                'QLabel#brandSub,QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#7a6a64;}'
+            ) if pastel else ''
+            self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + pastel_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
         # The drop shadow re-renders the whole window on every repaint; only
         # when the user asked for shadows and a compositor can show them.

@@ -13,13 +13,23 @@ SDDM_THEME_DIR = Path('/usr/share/sddm/themes/edukasaun')
 SDDM_HELPER = '/usr/lib/edukasaun-desktop/eduka-sddm-apply'
 PARENTAL_HELPER = '/usr/lib/edukasaun-desktop/eduka-parental-apply'
 PARENTAL_CONF = '/etc/edukasaun-desktop/parental.json'
-SDDM_STYLES = [('follow', 'Follow Eduka-Desktop theme'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass')]
-SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
+SDDM_STYLES = [('follow', 'Follow Eduka-Desktop theme'), ('pastel', 'Pastel'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass')]
+SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7', 'pastel': '#ef8063'}
 
 # Colors of the Settings window for each Eduka theme. The window itself is
 # opaque (it is a normal application window); Liquid Glass uses a cool,
 # milky palette and Edukasaun-Dark the Orchis dark colors.
 SETTINGS_PALETTES = {
+    # Eduka-Pastel: cream page, mint sidebar, white rounded cards, coral pills;
+    # the chosen page is a white pill with a soft shadow line.
+    THEME_PASTEL: {
+        'bg': '#fbf5ee', 'sidebar': '#dce9e3', 'card': '#fffdfb', 'border': '#f0e6dc',
+        'text': '#3b2a25', 'title': '#2e201c', 'sub': '#7a6a64', 'accent': '#ef8063', 'accent_hover': '#f4977d',
+        'field': '#fffdfb', 'field_border': '#eadfd4', 'hover': 'rgba(255,255,255,150)', 'button': '#fffaf5',
+        'chip': '#fbe1d8', 'chip_text': '#c8573c', 'reset': '#fdeec8', 'reset_text': '#7a5200',
+        'groove': '#f3e6dc', 'ok': '#3f8f7b', 'error': '#c8473c',
+        'nav_sel_bg': '#fffdfb', 'nav_sel_text': '#2e201c', 'radius': 22, 'pill': 16, 'shadow': '#e3d6cb',
+    },
     THEME_DEFAULT: {
         'bg': '#eef3f1', 'sidebar': '#e4ece8', 'card': '#ffffff', 'border': '#dfe8e4',
         'text': '#1f2d2a', 'title': '#10231e', 'sub': '#5b6e69', 'accent': '#00a879', 'accent_hover': '#00b683',
@@ -66,6 +76,7 @@ SETTINGS_PALETTES = {
 }
 # Small previews of the themes (surface, panel, accent, text) for the theme cards.
 THEME_SWATCHES = {
+    THEME_PASTEL: ('#fffdfb', '#dce9e3', '#ef8063', '#3b2a25'),
     THEME_DEFAULT: ('#f4faf7', '#ffffff', '#00a879', '#1f2d2a'),
     THEME_LOW: ('#f7f7f7', '#323030', '#315bef', '#3d3d3d'),
     THEME_LIQUID: ('#dcecf6', '#ffffff', '#1e9bd7', '#1c2b33'),
@@ -87,7 +98,7 @@ def check_icon_path():
     return str(path)
 
 def settings_qss(theme):
-    c=SETTINGS_PALETTES.get(theme, SETTINGS_PALETTES[THEME_DEFAULT])
+    c=SETTINGS_PALETTES.get(theme, SETTINGS_PALETTES[DEFAULT_THEME])
     tick=check_icon_path()
     return f"""
 QDialog{{background:{c['bg']};}}
@@ -99,9 +110,9 @@ QListWidget#navList{{background:transparent;border:0;outline:0;padding:0;}}
 QListWidget#navList::item{{padding:10px 10px;border-radius:12px;margin:2px 0;color:{c['text']};font-weight:600;}}
 QListWidget#navList::item:hover{{background:{c['hover']};}}
 QListWidget#navList::item:selected{{background:{c['accent']};color:#ffffff;}}
-QToolButton#navItem{{background:transparent;border:0;border-radius:11px;padding:6px 10px;text-align:left;color:{c['text']};font-weight:600;}}
+QToolButton#navItem{{background:transparent;border:0;border-radius:{c.get('pill', 11)-2 if c.get('shadow') else 11}px;padding:6px 10px;text-align:left;color:{c['text']};font-weight:600;}}
 QToolButton#navItem:hover{{background:{c['hover']};}}
-QToolButton#navItem:checked{{background:{c['accent']};color:#ffffff;}}
+QToolButton#navItem:checked{{background:{c.get('nav_sel_bg', c['accent'])};color:{c.get('nav_sel_text', '#ffffff')};{('border-bottom:2px solid '+c['shadow']+';') if c.get('shadow') else ''}}}
 QLabel#navGroup{{color:{c['sub']};font-size:10px;font-weight:800;letter-spacing:1px;padding:4px 10px 2px 10px;}}
 QComboBox:disabled,QSpinBox:disabled,QDoubleSpinBox:disabled,QLineEdit:disabled{{color:{c['sub']};background:{c['button']};}}
 QFrame#navLine{{background:{c['border']};max-height:1px;min-height:1px;border:0;margin:6px 6px 0 6px;}}
@@ -120,7 +131,7 @@ QLabel#pageTitle{{font-size:20px;font-weight:800;color:{c['title']};}}
 QLabel#pageHint,QLabel#fieldHint{{color:{c['sub']};}}
 QLabel#fieldHint{{font-size:11px;}}
 QLabel#cardTitle{{font-size:13px;font-weight:800;color:{c['title']};}}
-QFrame#card{{background:{c['card']};border:1px solid {c['border']};border-radius:16px;}}
+QFrame#card{{background:{c['card']};border:1px solid {c['border']};{('border-bottom:2px solid '+c['shadow']+';') if c.get('shadow') else ''}border-radius:{c.get('radius', 16)}px;}}
 QFrame#card QLabel{{background:transparent;}}
 QFrame#thumb{{background:{c['field']};border:1px solid {c['field_border']};border-radius:10px;}}
 QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{{background:{c['field']};color:{c['text']};border:1px solid {c['field_border']};border-radius:10px;padding:7px 9px;min-height:20px;}}
@@ -133,10 +144,10 @@ QCheckBox::indicator:checked{{background:{c['accent']};border:1px solid {c['acce
 QCheckBox::indicator:disabled{{background:{c['button']};border:1px solid {c['field_border']};}}
 QCheckBox:disabled{{color:{c['sub']};}}
 QPushButton:disabled{{color:{c['sub']};}}
-QPushButton{{background:{c['button']};color:{c['text']};border:1px solid {c['field_border']};border-radius:10px;padding:8px 14px;font-weight:700;}}
+QPushButton{{background:{c['button']};color:{c['text']};border:1px solid {c['field_border']};border-radius:{c.get('pill', 10)}px;padding:8px 14px;font-weight:700;}}
 QPushButton:hover{{border:1px solid {c['accent']};}}
 QPushButton:focus{{border:1px solid {c['accent']};}}
-QPushButton#primary{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
+QPushButton#primary{{background:{('qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f4a084,stop:1 #ec7a5c)' if c.get('shadow') else c['accent'])};color:#ffffff;border:1px solid {c['accent']};}}
 QPushButton#chip{{border-radius:15px;padding:6px 16px;font-weight:700;}}
 QPushButton#chip:checked{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
 QToolButton#emojiChip{{font-size:18px;border-radius:17px;border:1px solid {c['field_border']};background:{c['field']};}}
@@ -333,6 +344,7 @@ def theme_preview(theme, w=132, h=78):
     p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
     g=QLinearGradient(0, 0, w, h); g.setColorAt(0, QColor('#9fd2b4')); g.setColorAt(1, QColor('#3f8f6a'))
     if theme in (THEME_DARK, THEME_TRANSPARENT): g.setColorAt(0, QColor('#3a4a46')); g.setColorAt(1, QColor('#101413'))
+    if theme == THEME_PASTEL: g.setColorAt(0, QColor('#fbdcd3')); g.setColorAt(1, QColor('#dce9e3'))
     path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, w, h), 10, 10); p.setClipPath(path); p.fillRect(pix.rect(), g)
     win=QColor(surface)
     if theme in (THEME_LIQUID, THEME_TRANSPARENT): win.setAlpha(190)
@@ -342,6 +354,7 @@ def theme_preview(theme, w=132, h=78):
     tc=QColor(text); tc.setAlpha(110); p.setBrush(tc)
     for i in range(3):
         if theme == THEME_MULTI: p.setBrush(QColor(MULTI_COLORS[i*3]))
+        if theme == THEME_PASTEL: p.setBrush(QColor(('#fbdcd3', '#fdeec8', '#dce8f7')[i]))
         p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
     pc=QColor(panel)
     if theme in (THEME_LIQUID, THEME_TRANSPARENT): pc.setAlpha(200)
@@ -419,7 +432,7 @@ class LoginPreview(QWidget):
             p.drawPixmap(int((self.width()-pm.width())/2), int((self.height()-pm.height())/2), pm)
         else:
             g=QLinearGradient(0, 0, 0, self.height())
-            stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
+            stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a'), 'pastel': ('#fbdcd3','#fbf5ee','#dce9e3')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
             for pos, col in zip((0.0, 0.5, 1.0), stops): g.setColorAt(pos, QColor(col))
             p.fillRect(self.rect(), g)
         p.fillRect(self.rect(), QColor(0,0,0,140) if dark else QColor(255,255,255,38) if glass else QColor(0,0,0,20))
@@ -1122,6 +1135,7 @@ class Settings(QDialog):
         self.show_status(_('Keyboard, mouse and touchpad settings applied.'))
 
     THEME_INFO = {
+        THEME_PASTEL: 'Eduka-Pastel (the default): warm cream, soft mint and coral, big round cards and pill buttons; light and friendly for school.',
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
         THEME_LOW: 'Eduka-Low-Theme (after Yaru-remix): flat and fully opaque. Transparency, the compositor and all effects are switched off — for very low spec computers.',
         THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',
@@ -1569,7 +1583,7 @@ class Settings(QDialog):
         style=self.sddm_style.currentData()
         accent=self.sddm_accent_value
         if style == 'follow':
-            style={THEME_DARK:'dark', THEME_TRANSPARENT:'dark', THEME_LIQUID:'glass'}.get(self.theme.currentText(), 'light')
+            style={THEME_DARK:'dark', THEME_TRANSPARENT:'dark', THEME_LIQUID:'glass', THEME_PASTEL:'pastel'}.get(self.theme.currentText(), 'light')
             accent=SDDM_ACCENTS[style]
         return {'style': style, 'accent': accent, 'title': self.sddm_title.text().strip() or 'Edukasaun',
                 'default_user': self.sddm_user.currentText().strip(), 'show_clock': self.sddm_clock.isChecked(),
@@ -1690,7 +1704,7 @@ class Settings(QDialog):
         self.preview.setIcon(get_icon(icon, 'start-here')); self.preview.setIconSize(size)
         self.preview_strip.setFixedHeight(panel_h)
         radius=max(12, int(panel_h/2)); btn_radius=max(10, int(panel_h/2.4))
-        theme=self.theme.currentText() if hasattr(self, 'theme') else THEME_DEFAULT
+        theme=self.theme.currentText() if hasattr(self, 'theme') else DEFAULT_THEME
         if theme == THEME_DARK:
             strip_bg='qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #343434,stop:1 #212121)'; strip_border='rgba(255,255,255,40)'
             btn_bg='#26a69a'; btn_border='#26a69a'; btn_text='#ffffff'
@@ -1825,6 +1839,10 @@ class Settings(QDialog):
 
     def save_all(self):
         panel, desktop, menu = self.collect()
+        chosen=self.icon_theme.currentData() if hasattr(self, 'icon_theme') else None
+        if chosen and chosen != getattr(self, '_initial_icon_theme', None):
+            # Papirus follows the theme (light / dark); any other choice stays.
+            desktop['icon_theme_follow']=str(chosen) == ('Papirus-Dark' if desktop.get('theme_style') in DARK_THEMES else 'Papirus')
         save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
         self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
         set_menu_daemon_autostart(self.start_login.isChecked())
@@ -1905,7 +1923,7 @@ class Settings(QDialog):
         write_json(panel_config_path(), DEFAULT_PANEL); write_json(desktop_config_path(), DEFAULT_DESKTOP)
         write_json(menu_config_path(), dict(DEFAULT_MENU, sddm_follow=sddm_follow))
         set_menu_daemon_autostart(True)
-        apply_desktop_theme(THEME_DEFAULT)
+        apply_desktop_theme(DEFAULT_THEME)
         ensure_compositor()
         # 'reset' makes Eduka-Desktop also drop its remembered layout,
         # category, search and colors, not only re-read the style.

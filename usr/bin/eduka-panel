@@ -48,6 +48,13 @@ LOW_UI = dict(LIGHT_UI, **{
     'text': '#3d3d3d', 'title': '#181818', 'sub': '#666666', 'btn_bg': '#f2f2f2', 'btn_border': '#d6d6d6', 'btn_hover': '#e9e9e9',
     'accent': '#315bef', 'accent_hover': '#4a6ff2', 'accent_border': '#2a4fd6', 'row_active': '#e3e9fd', 'field': '#ffffff',
     'groove': '#dcdcdc', 'tile': '#f2f2f2', 'tile_off': '#f7f7f7', 'cal': '#ffffff', 'cal_hover': '#eef2fe', 'weekend': '#c7162b', 'scroll': '#aea79f'})
+# Eduka-Pastel: cream surfaces, mint and coral (see eduka_common.PASTEL).
+PASTEL_UI = dict(LIGHT_UI, **{
+    'text': '#3b2a25', 'title': '#2e201c', 'sub': '#7a6a64', 'btn_bg': '#fffdfb', 'btn_border': '#efe4da', 'btn_hover': '#ffffff',
+    'accent': '#ef8063', 'accent_hover': '#f4977d', 'accent_border': '#e36f52', 'switch_off': '#efe4da', 'switch_off_text': '#5a4540',
+    'row_hover': '#fff4ee', 'row_active': '#fbe1d8', 'field': '#fffdfb', 'groove': '#f3e6dc', 'groove_off': '#ebe0d7',
+    'tile': '#fffdfb', 'tile_off': '#f8f1ea', 'tile_off_text': '#b4a49c', 'cal': '#fffdfb', 'cal_hover': '#fbe7df', 'muted': '#c2b3ab',
+    'weekend': '#e36f52', 'scroll': 'rgba(239,128,99,120)'})
 # Eduka-MultiColor: Graphite light greys; the colors come from MULTI_COLORS.
 MULTI_UI = dict(LIGHT_UI, **{
     'text': '#212121', 'title': '#111111', 'sub': '#616161', 'btn_bg': 'rgba(255,255,255,215)', 'btn_border': 'rgba(0,0,0,30)', 'btn_hover': '#ffffff',
@@ -67,6 +74,7 @@ def ui_colors():
     if theme == THEME_LOW: u=LOW_UI
     elif theme == THEME_TRANSPARENT: u=TRANS_UI
     elif theme == THEME_MULTI: u=MULTI_UI
+    elif theme == THEME_PASTEL: u=PASTEL_UI
     else: u=DARK_UI if theme in DARK_THEMES else LIGHT_UI
     if custom_accent():
         # Painted parts (clock, calendar, sliders) follow the accent color too.
@@ -96,6 +104,9 @@ def popup_qss():
     elif theme == THEME_DARK:
         box=f'background:rgba(44,44,44,{a});border:1px solid rgba(255,255,255,40);'
         card=f'background:rgba(56,56,56,{c});border:1px solid rgba(255,255,255,22);'
+    elif theme == THEME_PASTEL:
+        box=f'background:rgba(251,245,238,{max(a, 240)});border:1px solid #efe4da;border-bottom:2px solid #e3d6cb;'
+        card=f'background:rgba(255,253,251,{max(c, 245)});border:1px solid #f0e6dc;border-bottom:2px solid #eadfd4;'
     elif theme == THEME_MULTI:
         box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(244,244,244,{a}));'
              'border:1px solid rgba(0,0,0,30);')
@@ -109,8 +120,9 @@ def popup_qss():
              'border:1px solid rgba(255,255,255,220);')
         card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
     u=ui
-    return ('QFrame#popupBox{'+box+'border-radius:18px;}'
-            'QFrame#acCard{'+card+'border-radius:14px;}'
+    rb, rc=(24, 20) if theme == THEME_PASTEL else (18, 14)
+    return ('QFrame#popupBox{'+box+f'border-radius:{rb}px;}}'
+            'QFrame#acCard{'+card+f'border-radius:{rc}px;}}'
             f'QLabel{{color:{u["text"]};font-size:13px;background:transparent;}}'
             f'QLabel#popTitle{{font-size:15px;font-weight:800;color:{u["title"]};}}'
             f'QLabel#popSub{{font-size:12px;color:{u["sub"]};}}'
@@ -1751,8 +1763,22 @@ def multicolor_ac_qss():
             f'QToolButton#acTile[mc="{i}"][on="true"]{{background:{c};border:1px solid {col.darker(115).name()};color:#ffffff;}}')
     return q
 
+PASTEL_TILES = [('#dce9e3', '#5f9d8d'), ('#fbdcd3', '#ef8063'), ('#fdeec8', '#f0a93a'), ('#dce8f7', '#6f96cf'), ('#ece3f7', '#9b7fd2'), ('#fbe1e8', '#e9779a')]
+
+def pastel_ac_qss():
+    """Eduka-Pastel: every tile is a soft colored card (mint, peach, butter,
+    sky, lilac, rose) like the cards of the pastel dashboard; when it is on
+    it takes the deeper color of its card."""
+    if current_theme() != THEME_PASTEL or multicolor_on(): return ''
+    q='QToolButton#acTile{border-radius:18px;border:0;border-bottom:2px solid rgba(0,0,0,18);}'
+    for i, (soft, deep) in enumerate(PASTEL_TILES*2):
+        q+=(f'QToolButton#acTile[mc="{i}"]{{background:{soft};color:#3b2a25;}}'
+            f'QToolButton#acTile[mc="{i}"]:hover{{background:{QColor(soft).darker(104).name()};}}'
+            f'QToolButton#acTile[mc="{i}"][on="true"]{{background:{deep};color:#ffffff;}}')
+    return q
+
 def ac_qss():
-    return _ac_qss()+multicolor_ac_qss()
+    return _ac_qss()+multicolor_ac_qss()+pastel_ac_qss()
 
 def _ac_qss():
     u=ui_colors()
@@ -3716,6 +3742,19 @@ class EdukaPanel(QWidget):
             QPushButton#taskButton[activeTask="true"]{{background:rgba(217,217,217,36);border:1px solid rgba(255,255,255,30);border-bottom:3px solid rgba(242,242,242,230);color:#ffffff;}}
             QFrame#trayGroup{{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);}}
             QPushButton#batteryButton{{background:rgba(217,217,217,30);color:#f2f2f2;}}''')
+        if theme == THEME_PASTEL and not high_contrast:
+            # Eduka-Pastel: a warm cream bar with a soft shadow line, a coral
+            # pill start button and peach highlights.
+            pa=max(235, bg_alpha)
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:rgba(251,245,238,{pa});border:1px solid #efe4da;border-bottom:2px solid #e3d6cb;border-radius:{radius}px;}}
+            QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f4a084,stop:1 #ec7a5c);border:0;border-bottom:2px solid #d9674b;color:#ffffff;}}
+            QPushButton#startButton:hover{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f6ad94,stop:1 #ef8063);}}
+            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton,QPushButton#taskButton,QLabel#langLabel{{color:#3b2a25;}}
+            QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:#fbe1d8;}}
+            QPushButton#taskButton:hover{{background:#fff4ee;border:1px solid #f6d3c6;border-bottom:3px solid #f4a084;}}
+            QPushButton#taskButton[activeTask="true"]{{background:#fbe1d8;border:1px solid #f6c9b9;border-bottom:3px solid #ef8063;color:#2e201c;}}
+            QPushButton#batteryButton{{color:#3f8f7b;}}
+            QPushButton#desktopButton{{border-left:1px solid #eadfd4;}} QPushButton#desktopButton:hover{{background:#fbe1d8;}}''')
         if multicolor_on(desktop_cfg) and not high_contrast and not low:
             self.bg.setStyleSheet(self.bg.styleSheet()+self.multicolor_qss(theme, dark or trans, radius, bg_alpha))
             for i, w in enumerate([self.start, *self.quick_launchers.values(), self.drives_button, self.touchpad_button, self.net, self.bt, self.printer, self.battery, self.vol, self.eus, self.notif]):

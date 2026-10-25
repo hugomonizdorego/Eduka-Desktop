@@ -21,17 +21,26 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.9.25"
+VERSION = "0.10.0 Beta"
+# Debian package version (a "~" sorts before the final 0.10.0, after 0.9.25).
+DEB_VERSION = "0.10.0~beta1"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
+THEME_PASTEL = "Eduka-Pastel"          # 0.10.0 default: cream, mint and coral, soft and round
 THEME_LIQUID = "Liquid Glass"
 THEME_DARK = "Edukasaun-Dark"
 THEME_LOW = "Eduka-Low-Theme"          # after Yaru-remix: flat, opaque, no effects
 THEME_TRANSPARENT = "Eduka-Transparan" # after Transparent-Shell-Theme: dark glass
 THEME_MULTI = "Eduka-MultiColor"      # after Graphite (light): a color for every menu
-THEMES = [THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT, THEME_MULTI]
+THEMES = [THEME_PASTEL, THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT, THEME_MULTI]
+DEFAULT_THEME = THEME_PASTEL
+# Eduka-Pastel: the soft colors of the cards, badges and category icons.
+PASTEL = {'cream': '#fbf5ee', 'card': '#fffdfb', 'mint': '#dce9e3', 'mint_deep': '#5f9d8d', 'coral': '#ef8063', 'coral_deep': '#e36f52',
+          'peach': '#fbdcd3', 'butter': '#fdeec8', 'sky': '#dce8f7', 'lilac': '#ece3f7', 'text': '#3b2a25', 'sub': '#7a6a64',
+          'border': '#efe4da', 'shadow': '#eadfd4'}
+PASTEL_COLORS = ['#ef8063', '#5f9d8d', '#f6b94a', '#7fa4d8', '#a78bdb', '#e9779a', '#6fb5a3', '#f29e6b', '#8fb0e6', '#c59adf']
 # Colors of Eduka-MultiColor (and of the "Multi-color" switch in Eduka-Settings):
 # every category, Action Center tile and panel button group gets its own.
 MULTI_COLORS = ['#ef5350', '#ff9800', '#f9a825', '#43a047', '#00acc1', '#1e88e5', '#5b6ee1', '#8e24aa', '#d81b60', '#00897b']
@@ -617,6 +626,7 @@ TOOLTIP_QSS_DARK = 'QToolTip{background:#383838;color:#ffffff;border:1px solid r
 # Colors of every Eduka theme for menus, tooltips and dialog boxes, so a
 # message box or a right-click menu looks like the rest of the theme.
 THEME_TOKENS = {
+    THEME_PASTEL: dict(bg='#fbf5ee', card='#fffdfb', text='#3b2a25', sub='#7a6a64', border='#efe4da', field='#fffdfb', hover='#fbe7df'),
     THEME_DEFAULT: dict(bg='#f4f8f6', card='#ffffff', text='#1f2d2a', sub='#5b6e69', border='#d3e0db', field='#ffffff', hover='#e7f3ee'),
     THEME_LOW: dict(bg='#f7f7f7', card='#ffffff', text='#3d3d3d', sub='#666666', border='#d6d6d6', field='#ffffff', hover='#e9e9e9'),
     THEME_LIQUID: dict(bg='#f0f5f9', card='#ffffff', text='#1c2b33', sub='#5a6b75', border='#d3e3ec', field='#ffffff', hover='#e4f1f8'),
@@ -627,9 +637,9 @@ THEME_TOKENS = {
 
 def theme_tokens(theme=None):
     theme=theme or current_theme()
-    t=dict(THEME_TOKENS.get(theme, THEME_TOKENS[THEME_DEFAULT]))
+    t=dict(THEME_TOKENS.get(theme, THEME_TOKENS[DEFAULT_THEME]))
     t['accent']=custom_accent() or THEME_ACCENTS.get(theme, '#00a879')
-    t['radius']=8 if theme == THEME_LOW else 12
+    t['radius']=8 if theme == THEME_LOW else 18 if theme == THEME_PASTEL else 12
     return t
 
 def dialog_qss(scoped=True):
@@ -820,6 +830,11 @@ LIGHT_PALETTE = {
     'window_text_color': '#1f2d2a', 'text_color': '#1f2d2a', 'highlighted_text_color': '#ffffff',
     'link_color': '#00785a', 'link_visited_color': '#5b6e69',
 }
+PASTEL_PALETTE = {
+    'window_color': '#fbf5ee', 'base_color': '#fffdfb', 'highlight_color': '#ef8063',
+    'window_text_color': '#3b2a25', 'text_color': '#3b2a25', 'highlighted_text_color': '#ffffff',
+    'link_color': '#e36f52', 'link_visited_color': '#7a6a64',
+}
 LIQUID_PALETTE = {
     'window_color': '#eef3f7', 'base_color': '#ffffff', 'highlight_color': '#1e9bd7',
     'window_text_color': '#1c2b33', 'text_color': '#1c2b33', 'highlighted_text_color': '#ffffff',
@@ -879,6 +894,7 @@ DESKTOP_DARK_THEME = 'Edukasaun-Dark'
 SYSTEM_THEMES = {
     # 0.9.25: every Eduka theme brings its own GTK theme, Qt colors and
     # window borders, so no window or dialog keeps an old look.
+    THEME_PASTEL: ('Eduka-Pastel', False, PASTEL_PALETTE, 'Eduka-Pastel'),
     THEME_DEFAULT: ('Eduka-Default', False, LIGHT_PALETTE, 'Eduka-Default'),
     THEME_LIQUID: ('Eduka-Liquid', False, LIQUID_PALETTE, 'Eduka-Liquid'),
     THEME_DARK: ('Edukasaun-Dark', True, DARK_PALETTE, 'Edukasaun-Dark'),
@@ -950,6 +966,22 @@ def _xfwm4_set(prop, kind, value):
 def _set_xfwm4_theme(name):
     if shutil.which('xfconf-query'):
         safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-s',name])
+
+def _follow_icon_theme(dark):
+    """One icon style everywhere: with the theme, Papirus (light themes) or
+    Papirus-Dark (dark themes) for LXQt, GTK and Eduka — unless the person
+    chose another icon theme in Eduka-Settings (icon_theme_follow off)."""
+    try:
+        if not read_desktop_config().get('icon_theme_follow', True): return False
+        want='Papirus-Dark' if dark else 'Papirus'
+        if not _theme_exists(want): return False
+        lxqt=_home('.config', 'lxqt', 'lxqt.conf')
+        gtk=[_home('.config', g, 'settings.ini') for g in ('gtk-3.0', 'gtk-4.0')]
+        if _get_ini_value(lxqt, 'General', 'icon_theme') == want and all(_get_ini_value(g, 'Settings', 'gtk-icon-theme-name') == want for g in gtk):
+            return False
+        return set_icon_theme(want)
+    except Exception:
+        return False
 
 GTK4_MARK = '/* Eduka-Desktop theme — written by Eduka-Settings, replaced on every theme change */'
 
@@ -1030,6 +1062,7 @@ def apply_desktop_theme(theme=None):
         if Path('/usr/share/lxqt/themes', lxqt_theme).is_dir() and _get_ini_value(lxqt, 'General', 'theme') != lxqt_theme:
             _set_ini_value(lxqt, 'General', 'theme', lxqt_theme)
         _link_gtk4_theme(gtk_name, prefer_dark)
+        _follow_icon_theme(prefer_dark)
         ob=_openbox_rc(create=True)
         if ob and _openbox_theme(ob) != wm_name: _set_openbox_theme(ob, wm_name)
         if shutil.which('xfwm4') and _xfwm4_theme() not in (None, wm_name):
@@ -1537,7 +1570,7 @@ def set_icon_theme(name):
     icon_theme_setup(force=True); touch_reload()
     return True
 
-THEME_ACCENTS = {THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
+THEME_ACCENTS = {THEME_PASTEL: '#ef8063', THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
 
 # ---------------------------------------------------------------------------
 # Accent color. Eduka-Settings → Appearance → Accent color replaces the green
@@ -1815,7 +1848,7 @@ DEFAULT_PANEL = {
     "locked": True,
     "enable_shadows": False,
     "low_resource_mode": True,
-    "theme_style": THEME_DEFAULT,
+    "theme_style": DEFAULT_THEME,
     "clock_style": "digital",
     "clock_format": "24h",
     "clock_seconds": False,
@@ -1829,7 +1862,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": THEME_DEFAULT, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "effect_speed": 1.0, "effect_size": 1.0, "effect_random": False, "tile_size": 132, "accent_color": "", "compositor": "auto", "multicolor": False}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": DEFAULT_THEME, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "effect_speed": 1.0, "effect_size": 1.0, "effect_random": False, "tile_size": 132, "accent_color": "", "compositor": "auto", "multicolor": False}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),
@@ -1950,19 +1983,19 @@ def panel_config_path(): return PANEL_CONFIG_DIR/'settings.json'
 def menu_config_path(): return MENU_CONFIG_DIR/'settings.json'
 def desktop_config_path(): return DESKTOP_CONFIG_DIR/'settings.json'
 def normalize_theme_style(value):
-    """Map stored or retired theme names to Eduka-Default-Theme, Liquid Glass or Edukasaun-Dark."""
+    """Map stored or retired theme names to one of THEMES (unknown: Eduka-Pastel)."""
     text=str(value or '').strip().casefold()
     for theme in THEMES:
         if text == theme.casefold():
             return theme
-    return THEME_DEFAULT
+    return DEFAULT_THEME
 
 def current_theme():
     """Theme in effect for Eduka components right now."""
     try:
         return effective_theme(read_desktop_config().get('theme_style'))
     except Exception:
-        return THEME_DEFAULT
+        return DEFAULT_THEME
 
 def is_dark_theme():
     return current_theme() in DARK_THEMES

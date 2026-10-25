@@ -8,7 +8,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PKG=$(sed -n 's/^Package: *//p' "$ROOT/DEBIAN/control")
 VER=$(sed -n 's/^Version: *//p' "$ROOT/DEBIAN/control")
-LIBVER=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$ROOT/usr/lib/edukasaun-desktop/eduka_common.py")
+LIBVER=$(sed -n 's/^DEB_VERSION = "\(.*\)"/\1/p' "$ROOT/usr/lib/edukasaun-desktop/eduka_common.py")
 if [ "$VER" != "$LIBVER" ]; then
     echo "Version mismatch: DEBIAN/control=$VER eduka_common.py=$LIBVER" >&2
     exit 1
