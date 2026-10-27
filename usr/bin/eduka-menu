@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 import sys, os, time, json, fcntl, random, math
-from pathlib import Path
+# Screen readers (Orca) see Eduka-Desktop also when started without the
+# environment of the launcher (must be set before Qt starts).
+os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
@@ -127,7 +131,7 @@ class EffectsOverlay(QWidget):
             return
         t=(time.monotonic()-self.start)/self.duration
         if t >= 1.0:
-            self.timer.stop(); self.hide(); kind=self.kind; self.kind=None
+            self.timer.stop(); self.hide(); self.kind=None
             if self.done: self.done()
             return
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); c=self.center
@@ -343,7 +347,7 @@ class AppButton(QToolButton):
         tr,tg,tb=_mix(self._accent, 0.10)
         a=SURFACE['alpha']
         if self._high_contrast:
-            base=f'background:white;border:2px solid rgba(55,75,70,235);'
+            base='background:white;border:2px solid rgba(55,75,70,235);'
         elif UI['low']:
             self.setStyleSheet("""
             QToolButton{background:#ffffff;border:1px solid #dcdcdc;border-radius:8px;padding:8px;color:#3d3d3d;font-weight:700;}
@@ -618,8 +622,21 @@ class EdukaMenu(QWidget):
             MENU_DAEMON_PID.write_text(str(os.getpid()))
             self._beat=0.0; self.beat()
             registry_update('menu', {'daemon_pid': os.getpid(), 'resident': True, 'apps_in_ram': len(self.apps), 'version': VERSION})
-            self.cmd_timer = QTimer(self); self.cmd_timer.timeout.connect(self.check_command); self.cmd_timer.start(35)
+            # A command written before this daemon started (an old toggle of
+            # a previous run) must not open the menu by itself.
+            self._started_at=time.time()
+            try:
+                st=MENU_COMMAND_PATH.stat(); self._last_cmd_stamp=(st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
+            # Commands arrive through a file: the folder watcher reacts at
+            # once; the slow timer is only a fallback (35 ms polling woke the
+            # computer ~30 times a second for nothing).
+            self.cmd_watch=QFileSystemWatcher([str(RUNTIME_DIR)], self)
+            self.cmd_watch.directoryChanged.connect(lambda *_: self.check_command())
+            self.cmd_timer = QTimer(self); self.cmd_timer.timeout.connect(self.check_command); self.cmd_timer.start(250)
             self._compositor_watch = watch_compositor(self, initial=self._composited)
+            self._update_watch = watch_package_update(self, busy=lambda: self.isVisible())
             QTimer.singleShot(0, ensure_compositor)
         else:
             (RUNTIME_DIR/'menu.pid').write_text(str(os.getpid()))
@@ -891,7 +908,7 @@ class EdukaMenu(QWidget):
         """Start the application at once; play the chosen launch effect over
         Eduka-Desktop and close it when the effect has finished."""
         def start():
-            launch_app(app.get('exec',''), app.get('name','')); self._launching=False
+            launch_entry(app); self._launching=False
             registry_update('desktop', {'launching': False})
         kind=launch_kind()
         if kind == 'none' or not self.isVisible():
@@ -1062,7 +1079,7 @@ class EdukaMenu(QWidget):
             btn.setIcon(get_icon(app.get('icon')))
             btn.setAccessibleName(app.get('name','Application')); btn.setFocusPolicy(Qt.StrongFocus); btn.installEventFilter(self)
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
-            btn.clicked.connect(lambda _,a=app: (self.hide_menu(force=True), launch_app(a.get('exec',''), a.get('name',''))))
+            btn.clicked.connect(lambda _,a=app: (self.hide_menu(force=True), launch_entry(a)))
             btn.customContextMenuRequested.connect(lambda pos,a=app,b=btn: self.favorite_context(a,b,pos))
             self.side_layout.addWidget(btn)
         if len(fav_apps) > MAX_FAVORITES:
@@ -1111,7 +1128,7 @@ class EdukaMenu(QWidget):
 
     def favorite_context(self, app, button, pos):
         m=RoundedMenu(self)
-        m.addAction(get_icon('system-run'), 'Open', lambda a=app: (self.hide_menu(force=True), launch_app(a.get('exec',''), a.get('name',''))))
+        m.addAction(get_icon('system-run'), 'Open', lambda a=app: (self.hide_menu(force=True), launch_entry(a)))
         m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda a=app: self.remove_favorite(a))
         if is_app_pinned(app):
             m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda a=app: unpin_app(a))
@@ -1260,6 +1277,8 @@ class EdukaMenu(QWidget):
             cmd_id=data.get('id')
             if cmd_id == self._last_cmd_id: return
             self._last_cmd_id=cmd_id
+            if float(data.get('time', 0) or 0) < getattr(self, '_started_at', 0) - 1.0:
+                return      # older than this daemon
             action=data.get('action','toggle')
             if action in ('show','force-show'): self.show_menu()
             elif action in ('hide','force-hide'): self.hide_menu(force=True)
@@ -1308,7 +1327,7 @@ class EdukaMenu(QWidget):
             return
         app=apps[0]
         self.hide_menu(force=True)
-        QTimer.singleShot(35, lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+        QTimer.singleShot(35, lambda a=app: launch_entry(a))
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
@@ -1344,16 +1363,26 @@ def start_daemon(start_visible=False):
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        send_menu_command('show' if start_visible else 'toggle')
+        # The daemon runs already. "eduka-menu --daemon" only makes sure it
+        # runs (Eduka-Panel calls it at every start): it must not open or
+        # close the menu — that opened Eduka-Desktop by itself after login.
+        if start_visible:
+            send_menu_command('show')
         return 0
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); install_translations(app); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); w=EdukaMenu(daemon=True, start_visible=start_visible)
+    app=QApplication(sys.argv); install_translations(app); app.setStyleSheet(tooltip_qss()); icon_theme_setup()
+    menu=EdukaMenu(daemon=True, start_visible=start_visible)
     ret=app.exec_()
+    del menu
     try: fcntl.flock(lock_file, fcntl.LOCK_UN)
     except Exception: pass
     return ret
 
 if __name__ == '__main__':
+    if autostart_elsewhere():
+        # Started by the session autostart of a plain LXQt session: LXQt's own
+        # menu stays, Eduka-Desktop only runs in Eduka-Desktop sessions.
+        sys.exit(0)
     ensure_dirs()
     if '--daemon' in sys.argv:
         install_crash_log('eduka-menu')

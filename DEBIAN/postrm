@@ -1,35 +1,35 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -e
-# Give the other login sessions (LXQt, Openbox, labwc, ...) back when
-# Eduka-Desktop is removed.
-if [ "$1" = remove ] || [ "$1" = purge ]; then
-    if command -v deb-systemd-helper >/dev/null 2>&1; then
-        deb-systemd-helper purge eduka-live-autologin.service >/dev/null 2>&1 || true
-        deb-systemd-helper purge eduka-parental.service >/dev/null 2>&1 || true
+
+UNITS="eduka-live-autologin.service eduka-parental.service"
+ETC_FILES="/etc/sddm.conf.d/10-edukasaun.conf /etc/xdg/autostart/eduka-panel.desktop /etc/xdg/autostart/eduka-menu-daemon.desktop"
+NOTIFY_MARK='Disabled by Edukasaun Desktop'
+
+# Eduka-Panel hides LXQt's notification daemon in the accounts that used
+# Eduka-Desktop. Give it back to plain LXQt sessions: each local account
+# removes Eduka's own override file (recognised by its comment) itself, so
+# nothing in a home folder is changed by root.
+restore_lxqt_notifications() {
+    command -v runuser >/dev/null 2>&1 || return 0
+    while IFS=: read -r name _ uid _ _ home _; do
+        case "$uid" in ''|*[!0-9]*) continue ;; esac
+        if [ "$uid" -lt 1000 ] || [ "$uid" -ge 60000 ] || [ ! -d "$home" ]; then
+            continue
+        fi
+        # shellcheck disable=SC2016  # the inner script gets its own arguments
+        runuser -u "$name" -- sh -c '
+            f="$1/.config/autostart/lxqt-notifications.desktop"
+            if [ -f "$f" ] && [ ! -L "$f" ] && grep -qs "$2" "$f"; then rm -f "$f"; fi
+        ' sh "$home" "$NOTIFY_MARK" </dev/null >/dev/null 2>&1 || true
+    done < /etc/passwd
+    skel=/etc/skel/.config/autostart/lxqt-notifications.desktop
+    if [ -f "$skel" ] && [ ! -L "$skel" ] && grep -qs "$NOTIFY_MARK" "$skel"; then
+        rm -f "$skel"
     fi
-    rm -f /etc/sddm.conf.d/zz-eduka-live-autologin.conf /etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf
-    # Written by Eduka-Settings → Login Screen; useless without the
-    # theme and the Eduka-Desktop session.
-    rm -f /usr/share/sddm/themes/edukasaun/theme.conf.user /etc/sddm.conf.d/20-eduka-autologin.conf \
-        /etc/sddm.conf.d/zz-edukasaun-theme.conf
-    rmdir --ignore-fail-on-non-empty /usr/share/sddm/themes/edukasaun 2>/dev/null || true
-    rm -rf /usr/lib/edukasaun-desktop/__pycache__
-    rmdir --ignore-fail-on-non-empty /usr/lib/edukasaun-desktop 2>/dev/null || true
-fi
-if [ "$1" = purge ]; then
-    # The chosen login logo is a copy; Default.png is kept (it may be the
-    # administrator's own picture).
-    rm -f /usr/share/Edukasaun/SDDM/Logo.png /etc/live/config.conf.d/90-edukasaun.conf \
-        /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user
-    rm -rf /var/lib/edukasaun-desktop/login
-    rm -f /etc/edukasaun-desktop/parental.json /var/lib/edukasaun-desktop/parental-usage.json
-    rmdir --ignore-fail-on-non-empty /etc/edukasaun-desktop 2>/dev/null || true
-    rmdir --ignore-fail-on-non-empty /var/lib/edukasaun-desktop 2>/dev/null || true
-    if grep -qs 'Disabled by Edukasaun Desktop' /etc/skel/.config/autostart/lxqt-notifications.desktop; then
-        rm -f /etc/skel/.config/autostart/lxqt-notifications.desktop
-    fi
-fi
-if [ "$1" = remove ] || [ "$1" = purge ] || [ "$1" = abort-install ]; then
+}
+
+remove_diversions() {
     for entry in \
         /usr/share/xsessions/lxqt.desktop \
         /usr/share/xsessions/openbox.desktop \
@@ -43,5 +43,55 @@ if [ "$1" = remove ] || [ "$1" = purge ] || [ "$1" = abort-install ]; then
     rmdir --ignore-fail-on-non-empty /usr/share/edukasaun-desktop/hidden-sessions/xsessions \
         /usr/share/edukasaun-desktop/hidden-sessions/wayland-sessions \
         /usr/share/edukasaun-desktop/hidden-sessions 2>/dev/null || true
-fi
+}
+
+case "$1" in
+    remove)
+        if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        restore_lxqt_notifications
+        # Login screen files written by Eduka-Settings and the live session;
+        # useless without the theme and the Eduka-Desktop session.
+        rm -f /etc/sddm.conf.d/zz-eduka-live-autologin.conf /etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf \
+            /usr/share/sddm/themes/edukasaun/theme.conf.user /etc/sddm.conf.d/20-eduka-autologin.conf \
+            /etc/sddm.conf.d/zz-edukasaun-theme.conf
+        rmdir --ignore-fail-on-non-empty /usr/share/sddm/themes/edukasaun 2>/dev/null || true
+        rm -rf /usr/lib/edukasaun-desktop/__pycache__ /usr/bin/__pycache__
+        rmdir --ignore-fail-on-non-empty /usr/lib/edukasaun-desktop 2>/dev/null || true
+        remove_diversions
+        ;;
+    purge)
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            deb-systemd-helper purge $UNITS >/dev/null || true
+        fi
+        # The chosen login logo is a copy; Default.png is kept (it may be the
+        # administrator's own picture).
+        rm -f /usr/share/Edukasaun/SDDM/Logo.png /etc/live/config.conf.d/90-edukasaun.conf \
+            /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user
+        rm -rf /var/lib/edukasaun-desktop/login
+        rm -f /etc/edukasaun-desktop/parental.json /var/lib/edukasaun-desktop/parental-usage.json
+        rmdir --ignore-fail-on-non-empty /etc/edukasaun-desktop 2>/dev/null || true
+        rmdir --ignore-fail-on-non-empty /var/lib/edukasaun-desktop 2>/dev/null || true
+        remove_diversions
+        ;;
+    abort-install|abort-upgrade)
+        # Put back the unchanged /etc files preinst set aside.
+        for f in $ETC_FILES; do
+            if [ -e "$f.eduka-old" ] && [ ! -e "$f" ]; then
+                mv "$f.eduka-old" "$f"
+            fi
+        done
+        if [ "$1" = abort-install ]; then
+            remove_diversions
+        fi
+        ;;
+    upgrade|failed-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
 exit 0

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Keyboard, mouse and touchpad of Eduka-Desktop (taken over from LXQt's
 input settings).
 
@@ -15,7 +17,7 @@ starts and whenever a mouse, touchpad or keyboard is plugged in.
 The same values are written to LXQt's session.conf, so lxqt-session does not
 bring old values back at the next login.
 """
-import os, re, shutil, subprocess
+import re, shutil, subprocess
 from pathlib import Path
 
 from eduka_common import BASE_CONFIG, read_json, write_json, _set_ini_value, _get_ini_value

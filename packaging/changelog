@@ -1,0 +1,142 @@
+edukasaun-desktop-menu (0.10.0~beta3) trixie; urgency=medium
+
+  * Licenses: GPL-3.0-or-later with SPDX lines, a LICENSE file and a
+    machine-readable copyright file listing every third-party part (Orchis,
+    Graphite, Yaru-remix, Noto Emoji, Natural Earth); more credits in About.
+  * Packaging: Debian changelog, manual pages for all commands, conffiles for
+    the files in /etc, dh-style systemd handling; the package scripts no
+    longer kill running programs, start programs as root or write into home
+    folders. lintian: no errors or warnings.
+  * Dependencies for Debian 13 (libqt5svg5, lxqt-session, dbus-bin, X11
+    tools); the unused python3-xdg is dropped.
+  * Autostart entries are LXQt modules (X-LXQt-Module, TryExec,
+    --autostart); outside Eduka-Desktop sessions LXQt keeps its own panel
+    and notifications. Eduka-Panel and Eduka-Desktop restart themselves
+    after a package update.
+  * Automatic login has its own polkit action that always asks for an
+    administrator password; the login screen helper copies pictures safely.
+  * Openbox: the theme goes to the file Openbox really reads; xfwm4: no
+    square shadow around Eduka-Panel.
+  * Liquid Glass: Action Center and popups in the theme blue, readable glass
+    over dark wallpapers; readable "Action Center" label; deeper text
+    shadow on the light login screen styles.
+  * Light themes use Papirus-Light: dark Wi-Fi, sound and battery icons on
+    the light panel (plain Papirus drew them light grey).
+  * Bug fixes: Close on the task bar no longer kills windows, the menu no
+    longer opens by itself, XDG-correct application list started without a
+    shell, task bar names, several wired ports, LUKS/LVM system disks,
+    weather switch, battery detection, eduka-panel-reset keeps a backup.
+  * Translations (Portuguese, Indonesian, Tetun) of the new texts.
+  * Details: /usr/share/edukasaun-desktop/doc/HISTORY.txt
+
+ -- Edukasaun OS <dev@edukasaun.org>  Tue, 27 Oct 2026 02:35:16 +0000
+
+edukasaun-desktop-menu (0.10.0~beta2) trixie; urgency=medium
+
+  * Eduka-Pastel in mint green and sky blue (0.10.0 Beta, package
+    0.10.0~beta2).
+
+ -- Edukasaun OS <dev@edukasaun.org>  Sun, 25 Oct 2026 11:00:00 +0000
+
+edukasaun-desktop-menu (0.10.0~beta1) trixie; urgency=medium
+
+  * Eduka-Pastel default theme, consistent icons, fixes.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Sun, 25 Oct 2026 10:23:35 +0000
+
+edukasaun-desktop-menu (0.9.25) trixie; urgency=medium
+
+  * One look for the whole desktop (last 0.9 patch).
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 21 Oct 2026 15:51:57 +0000
+
+edukasaun-desktop-menu (0.9.24) trixie; urgency=medium
+
+  * Clean panel, panel styles, inline Wi-Fi/Bluetooth/sound/battery
+    popups.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Tue, 06 Oct 2026 04:51:27 +0000
+
+edukasaun-desktop-menu (0.9.23) trixie; urgency=medium
+
+  * Compact app grid, tile effects, readable menus, stable panel.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Mon, 05 Oct 2026 08:36:54 +0000
+
+edukasaun-desktop-menu (0.9.22) trixie; urgency=medium
+
+  * Drives, touchpad, wallpaper, input settings, Eduka-MultiColor.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Mon, 05 Oct 2026 07:06:00 +0000
+
+edukasaun-desktop-menu (0.9.21) trixie; urgency=medium
+
+  * Compositor check and safe picom settings.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Fri, 02 Oct 2026 16:50:35 +0000
+
+edukasaun-desktop-menu (0.9.20) trixie; urgency=medium
+
+  * Accent colors, agenda, weather, time zones, parental control.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Fri, 02 Oct 2026 13:21:27 +0000
+
+edukasaun-desktop-menu (0.9.19) trixie; urgency=medium
+
+  * New login screen, languages with built-in Tetun, rounded corners.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Fri, 02 Oct 2026 11:53:40 +0000
+
+edukasaun-desktop-menu (0.9.18) trixie; urgency=medium
+
+  * Panel positions, effects, LED clock, globe, new themes.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Fri, 02 Oct 2026 08:04:58 +0000
+
+edukasaun-desktop-menu (0.9.17) trixie; urgency=medium
+
+  * Eduka-Settings, smart Action Center, notification server.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Thu, 01 Oct 2026 09:23:13 +0000
+
+edukasaun-desktop-menu (0.9.16) trixie; urgency=medium
+
+  * Settings redesign, Login Screen page, notifications.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Thu, 01 Oct 2026 08:22:52 +0000
+
+edukasaun-desktop-menu (0.9.15) trixie; urgency=medium
+
+  * Action Center sound/brightness, Edukasaun-Dark, SDDM theme.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Thu, 01 Oct 2026 07:03:40 +0000
+
+edukasaun-desktop-menu (0.9.14) trixie; urgency=medium
+
+  * Compositor-safe transparency, Liquid Glass, login fixes.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 30 Sep 2026 09:49:40 +0000
+
+edukasaun-desktop-menu (0.9.13) trixie; urgency=medium
+
+  * Fix LXQt session regression, SDDM default, smarter panel.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 30 Sep 2026 07:22:30 +0000
+
+edukasaun-desktop-menu (0.9.12) trixie; urgency=medium
+
+  * Action Center, rounded menus, sessions.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 30 Sep 2026 06:33:43 +0000
+
+edukasaun-desktop-menu (0.9.11) trixie; urgency=medium
+
+  * Polish Eduka-Desktop, Eduka-Panel and Eduka-Menu-Settings (0.9.11).
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 30 Sep 2026 05:47:37 +0000
+
+edukasaun-desktop-menu (0.9.10) trixie; urgency=medium
+
+  * First version in this repository.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 30 Sep 2026 05:39:41 +0000

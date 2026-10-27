@@ -1,0 +1,3 @@
+# Eduka-Settings is listed with the LXQt settings in the LXQt menu, which
+# sorts them by this category (LXQt's own settings tools use it too).
+edukasaun-desktop-menu: desktop-entry-invalid-category LXQt *

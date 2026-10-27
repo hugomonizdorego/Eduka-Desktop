@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Reliable Qt About dialog for every Edukasaun Desktop component."""
-import sys
+import os, sys
+os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -43,6 +46,7 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
+            _('Update 3: the license and credits of every part (Debian copyright file and manual pages), automatic login always asks for an administrator password, and Liquid Glass stays readable on dark wallpapers.'),
             _('Eduka-Pastel, the default theme, now in soft mint green and sky blue with colorful raised cards — for the desktop, programs, dialog boxes and the login screen.'),
             _('Icons: Papirus follows the theme (light or dark), so every icon has the same style.'),
             _('Every theme now changes the whole desktop: GTK and Qt programs, dialog boxes, menus and the window borders.'),
@@ -65,8 +69,18 @@ class AboutDialog(QDialog):
             ('GeoJS', 'geojs.io', 'https://www.geojs.io', _('Free service'), _('Location for the weather')),
             ('IANA Time Zone Database', 'IANA', 'https://www.iana.org/time-zones', _('Public domain'), _('Time zones and daylight saving time')),
             ('picom', 'Yuxuan Shui (yshui) and contributors', 'https://github.com/yshui/picom', 'MPL-2.0, MIT', _('Compositor: transparency and rounded corners')),
-            ('LXQt', 'LXQt team', 'https://lxqt-project.org', 'LGPL-2.1+', _('Desktop session')),
-            ('Qt and PyQt5', 'The Qt Company, Riverbank Computing', 'https://www.riverbankcomputing.com/software/pyqt/', 'GPL-3.0', _('Toolkit')),
+            ('LXQt', 'LXQt team', 'https://lxqt-project.org', 'LGPL-2.1+, GPL-2.0+', _('Desktop session, file manager, terminal and settings tools')),
+            ('Openbox', _('Openbox developers'), 'http://openbox.org', 'GPL-2.0+', _('Window manager')),
+            ('Xfwm4', _('Xfce developers'), 'https://docs.xfce.org/xfce/xfwm4/start', 'GPL-2.0+', _('Window manager with its own compositor')),
+            ('SDDM', _('SDDM contributors'), 'https://github.com/sddm/sddm', 'GPL-2.0+', _('Login screen')),
+            ('NetworkManager', _('NetworkManager developers'), 'https://networkmanager.dev', 'GPL-2.0+', _('Wired and Wi-Fi networks')),
+            ('BlueZ, Blueman', _('BlueZ and Blueman developers'), 'https://www.bluez.org', 'GPL-2.0+, GPL-3.0+', 'Bluetooth'),
+            ('PulseAudio, PipeWire', _('PulseAudio and PipeWire developers'), 'https://pipewire.org', 'LGPL-2.1+, MIT', _('Sound')),
+            ('UDisks', _('UDisks developers'), 'https://github.com/storaged-project/udisks', 'GPL-2.0+', _('USB sticks and memory cards')),
+            ('Orca', _('GNOME Orca developers'), 'https://orca.gnome.org', 'LGPL-2.1+', _('Screen reader')),
+            ('Qt', 'The Qt Company', 'https://www.qt.io', 'LGPL-3.0', _('Toolkit')),
+            ('PyQt5', 'Riverbank Computing', 'https://www.riverbankcomputing.com/software/pyqt/', 'GPL-3.0', _('Python bindings for Qt')),
+            ('Python', 'Python Software Foundation', 'https://www.python.org', 'PSF-2.0', _('Programming language')),
             ('Debian', 'Debian Project', 'https://www.debian.org', _('Free software'), _('Base system')),
         ]
         rows = [('Eduka-Desktop', _('Start menu and application launcher')), ('Eduka-Panel', _('Panel, taskbar and status controls')),
@@ -86,7 +100,11 @@ class AboutDialog(QDialog):
             "<table cellspacing='2' cellpadding='4' width='100%'>"
             + ''.join(f"<tr><td><a href='{url}'><b>{name}</b></a><br><span style='color:#5b6e69'>{who}</span></td>"
                       f"<td>{use}</td><td style='color:#5b6e69'>{lic}</td></tr>" for name, who, url, lic, use in credits)
-            + "</table>")
+            + "</table>"
+            + f"<h3>{_('License')}</h3><p>"
+            + _('Edukasaun Desktop is free software: you can share and change it under the GNU General Public License, version 3 or (at your option) any later version. It comes without any warranty.')
+            + "</p><p><a href='file:///usr/share/common-licenses/GPL-3'>GNU GPL 3</a> • "
+            f"<a href='file:///usr/share/doc/edukasaun-desktop-menu/copyright'>{_('Licenses of every part')}</a></p>")
         root.addWidget(details, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

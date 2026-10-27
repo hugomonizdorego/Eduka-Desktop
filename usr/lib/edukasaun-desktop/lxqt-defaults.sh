@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 # Shared shell helpers for Eduka-Desktop's LXQt integration.
-# Sourced by /usr/bin/eduka-desktop-session and the package postinst.
+# Sourced by /usr/bin/eduka-desktop-session (at every login, as the user).
 
 # Window managers in order of preference. xfwm4 and kwin_x11 composite by
 # themselves, which Eduka-Panel's and Eduka-Desktop's transparency needs.

@@ -1,3 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 # Eduka-Menu Settings is now Eduka-Settings (0.9.17); kept for old launchers.
 exec eduka-settings "$@"

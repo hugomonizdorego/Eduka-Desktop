@@ -1,9 +1,11 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -e
-# Stop the Parental Control service before its files are removed.
-if [ "$1" = remove ] || [ "$1" = purge ]; then
-    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
-        systemctl stop eduka-parental.service >/dev/null 2>&1 || true
+# Stop the Parental Control service before its files are removed. On an
+# upgrade it keeps running until postinst restarts it with the new files.
+if [ "$1" = remove ] && [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+    if command -v deb-systemd-invoke >/dev/null 2>&1; then
+        deb-systemd-invoke stop eduka-parental.service >/dev/null || true
     fi
 fi
 exit 0

@@ -14,6 +14,19 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-sddm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--look</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.sddm-autologin">
+    <description>Switch automatic login on or off</description>
+    <message>An administrator password is required to change automatic login</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-sddm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--autologin</annotate>
   </action>
   <action id="org.edukasaun.desktop.parental">
     <description>Change Parental Control</description>

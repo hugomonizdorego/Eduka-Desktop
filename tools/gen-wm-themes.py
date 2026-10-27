@@ -8,7 +8,7 @@ title bar, round buttons with clear glyphs and a red close button.
 
     python3 tools/gen-wm-themes.py            # writes usr/share/themes/<name>/{xfwm4,openbox-3}
 """
-import math, os, sys
+import math, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / 'usr' / 'share' / 'themes'

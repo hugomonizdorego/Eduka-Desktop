@@ -10,9 +10,13 @@ sh tools/build-deb.sh
 # -> dist/edukasaun-desktop-menu_<version>_all.deb
 ```
 
-Requires `dpkg-deb` and `python3`. The script fixes file permissions, checks
-Python syntax, computes Installed-Size and md5sums, and refuses to build when
-`DEBIAN/control` and `VERSION` in `eduka_common.py` disagree.
+Requires `dpkg-deb`, `gzip` and `python3`. The script fixes file permissions,
+checks Python syntax, adds the Debian changelog (`packaging/changelog`) and
+the manual pages (`tools/gen-manpages.py`), computes Installed-Size and
+md5sums (without the conffiles), and refuses to build when `DEBIAN/control`,
+`DEB_VERSION` in `eduka_common.py` and the first changelog entry disagree.
+Check the result with `lintian dist/edukasaun-desktop-menu_<version>_all.deb`
+(no errors or warnings; one documented override for the LXQt menu category).
 
 ## Install in the Cubic terminal (chroot)
 
@@ -22,18 +26,21 @@ Python syntax, computes Installed-Size and md5sums, and refuses to build when
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.10.0~beta2_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.10.0~beta3_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.10.0~beta2_all.deb
+   rm ./edukasaun-desktop-menu_0.10.0~beta3_all.deb
    ```
 
-The post-install script does not start any GUI inside the chroot; Eduka-Panel
-and the Eduka-Desktop daemon start from `/etc/xdg/autostart` after login.
+The package scripts never start a program with a window (in the chroot or
+elsewhere); Eduka-Panel and the Eduka-Desktop daemon start from
+`/etc/xdg/autostart` after login. On a running desktop they start again by
+themselves a few seconds after `apt` has finished (from 0.10.0~beta3 on;
+after updating from an older version, log out and in once).
 
 To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
@@ -167,6 +174,57 @@ and other greeters.
 - State: `$XDG_RUNTIME_DIR/eduka-desktop/picom.json` (pid, mode, crashes),
   log: `$XDG_RUNTIME_DIR/eduka-desktop/picom.log`.
 
+## License and credits
+
+Edukasaun Desktop is free software under the **GNU General Public License,
+version 3 or later** (`LICENSE`, an SPDX line in every source file). The
+parts made by others keep their own licenses; all of them are listed in the
+Debian copyright file `usr/share/doc/edukasaun-desktop-menu/copyright`
+(machine-readable, DEP-5):
+
+| Part | Source | License |
+| --- | --- | --- |
+| Eduka-Default, Eduka-Liquid, Eduka-Pastel, Edukasaun-Dark (GTK) | Orchis theme by Vince Liu (vinceliuice) | GPL-3.0 |
+| Eduka-MultiColor (GTK) | Graphite GTK theme by Vince Liu (vinceliuice) | GPL-3.0 |
+| Eduka-Low (GTK) | Yaru-remix by Muqtxdir | GPL-3.0, pictures CC BY-SA 4.0 |
+| Window borders (Openbox, xfwm4) of all themes | `tools/gen-wm-themes.py` | GPL-3.0-or-later |
+| Parental Control emoji pictures | Noto Emoji by Google | Apache-2.0 |
+| World map of the globe | Natural Earth | public domain |
+
+Eduka-Desktop runs on LXQt (LGPL-2.1+), Openbox or xfwm4 (GPL-2.0+) and picom
+(MPL-2.0, MIT) as separate programs; none of their code is copied into this
+package, so their licenses stay as they are. PyQt5 (GPL-3.0) is the reason
+the whole program is GPL-3.0-or-later. The About window
+(`eduka-about`) lists every project with its license.
+
+## LXQt integration and packaging (0.10.0 Beta update 3)
+
+- Autostart: `/etc/xdg/autostart/eduka-panel.desktop` and
+  `eduka-menu-daemon.desktop` are LXQt modules (`X-LXQt-Module=true`,
+  `TryExec=`): lxqt-session restarts them after a crash (5 times a minute at
+  most) and lists them in its session settings. `--autostart` makes them quit
+  outside an Eduka-Desktop session (`EDUKA_DESKTOP_SESSION` unset), so a plain
+  LXQt session keeps lxqt-panel and lxqt-notificationd. `restart_self()` keeps
+  the process (and so the module) when Eduka-Panel or the menu start again
+  after a package update (`watch_package_update()`) or a compositor change.
+- Package scripts (`DEBIAN/`): no `pkill`, no programs started as root, no
+  writes into home folders; units are handled the way dh_installsystemd does
+  (`deb-systemd-helper`, `deb-systemd-invoke`). The three files in `/etc` are
+  conffiles (`DEBIAN/conffiles`); preinst sets unchanged old copies aside so
+  the move to conffiles asks no question. On removal every account drops
+  Eduka's own `lxqt-notifications.desktop` override (as that user).
+- Openbox: `_openbox_rc_files()` changes the file the running Openbox reads
+  (`--config-file`, else `~/.config/openbox/rc.xml`, as LXQt 1.x/2.x start
+  Openbox without one) and an older `lxqt-rc.xml`.
+- xfwm4: `/general/show_dock_shadow` is switched off (xfwm4 draws a square
+  shadow under see-through dock windows); the old value is in the theme backup.
+- Login screen helper: `eduka-sddm-apply --look` (polkit action
+  `org.edukasaun.desktop.sddm-config`, no password for administrators at the
+  computer) and `eduka-sddm-apply --autologin` (`org.edukasaun.desktop.sddm-autologin`,
+  always `auth_admin`), told apart by `org.freedesktop.policykit.exec.argv1`.
+- Manual pages: `tools/gen-manpages.py` (a page for every program in
+  `usr/bin`; the build stops when one is missing).
+
 ## Eduka-Pastel and versions (0.10.0 Beta)
 
 - `THEME_PASTEL` (`Eduka-Pastel`) is `DEFAULT_THEME`: colors in `PASTEL`,
@@ -175,10 +233,11 @@ and other greeters.
   `SETTINGS_PALETTES[THEME_PASTEL]` (settings, with `nav_sel_bg`, `radius`,
   `pill`, `shadow`). GTK theme `usr/share/themes/Eduka-Pastel` (Orchis with
   a changed `_color-palette-default.scss`), SDDM `style=pastel`.
-- Icons: `_follow_icon_theme()` sets Papirus / Papirus-Dark with the theme
-  while `icon_theme_follow` is on.
+- Icons: `_follow_icon_theme()` sets Papirus-Light / Papirus-Dark with the
+  theme while `icon_theme_follow` is on (`follow_icon_theme_name()`; plain
+  Papirus has light grey panel icons, made for dark panels).
 - `VERSION` is the shown version ("0.10.0 Beta"), `DEB_VERSION` the
-  package version (0.10.0~beta2) that `tools/build-deb.sh` compares with
+  package version (0.10.0~beta3) that `tools/build-deb.sh` compares with
   DEBIAN/control. `theme_applied` stores `DEB_VERSION`, so a package update
   that keeps the shown version still re-applies the theme once.
 - Update 2 colors: accent mint `#3fa684`, sky blue `#5b9bd5` (start button),
@@ -325,7 +384,11 @@ Accounts created after installing 0.9.13 or later are not affected.
 
 ## Release checklist
 
-1. Bump `Version:` in `DEBIAN/control` and `VERSION` in
-   `usr/lib/edukasaun-desktop/eduka_common.py`.
-2. Add the changes to `usr/share/edukasaun-desktop/doc/HISTORY.txt`.
-3. `sh tools/build-deb.sh`
+1. Bump `Version:` in `DEBIAN/control` and `DEB_VERSION` in
+   `usr/lib/edukasaun-desktop/eduka_common.py` (`VERSION` is the version shown).
+2. Add an entry at the top of `packaging/changelog` (Debian changelog format)
+   and the changes to `usr/share/edukasaun-desktop/doc/HISTORY.txt`.
+3. New texts: a `tools/i18n/catalog_XXXX.py` registered in
+   `tools/i18n/build-catalogs.py`, then `python3 tools/i18n/build-catalogs.py`.
+4. A new command in `usr/bin` needs a page in `tools/gen-manpages.py`.
+5. `sh tools/build-deb.sh`, then `lintian` on the result.

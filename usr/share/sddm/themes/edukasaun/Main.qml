@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 // Edukasaun OS login screen for SDDM (0.9.19).
 // Plain QtQuick items only, so it runs on the Qt 5 and the Qt 6 greeter.
 //
@@ -48,6 +50,9 @@ Rectangle {
     property color hintColor: contrast ? "#d9ffffff" : (dark ? "#80ffffff" : (pastel ? "#8fa7a1" : "#8aa29b"))
     property color barColor: contrast ? "#000000" : (dark ? "#d9202322" : (glass ? "#80ffffff" : (pastel ? "#e6edf7f2" : "#e6ffffff")))
     property color hoverColor: contrast ? "#333333" : (dark ? "#1affffff" : (pastel ? "#1a3fa684" : "#1a00785a"))
+    // White text straight on the picture (clock, user names): a deeper
+    // shadow on the light styles keeps it readable on a bright background.
+    property color textShadow: (dark || contrast) ? "#40000000" : "#8c000000"
 
     // ------------------------------------------------------------ language
     // Language of this screen: the one picked in the menu, else the system's.
@@ -278,13 +283,13 @@ Rectangle {
             id: clockTime
             anchors.horizontalCenter: parent.horizontalCenter
             color: "white"; font.pixelSize: 72 * root.s; font.weight: Font.Light
-            style: Text.Raised; styleColor: "#40000000"
+            style: Text.Raised; styleColor: root.textShadow
         }
         Text {
             id: clockDate
             anchors.horizontalCenter: parent.horizontalCenter
             color: "white"; font.pixelSize: 18 * root.s; font.weight: Font.DemiBold
-            style: Text.Raised; styleColor: "#40000000"
+            style: Text.Raised; styleColor: root.textShadow
         }
         Timer {
             interval: 1000; running: true; repeat: true; triggeredOnStart: true
@@ -388,7 +393,7 @@ Rectangle {
                         width: parent.width - 8; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                         text: model.realName && model.realName.length ? model.realName : model.name
                         color: "white"; font.pixelSize: (ud.current ? 15 : 13) * root.s; font.bold: ud.current
-                        style: Text.Raised; styleColor: "#40000000"
+                        style: Text.Raised; styleColor: root.textShadow
                     }
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -403,7 +408,7 @@ Rectangle {
                         anchors.horizontalCenter: parent.horizontalCenter
                         y: 18 * root.s
                         width: 72 * root.s; height: width; radius: width / 2
-                        color: otherArea.containsMouse ? "#40ffffff" : "#26ffffff"
+                        color: otherArea.containsMouse ? "#40ffffff" : ((root.dark || root.contrast) ? "#26ffffff" : "#33000000")
                         border.color: root.contrast ? "#ffffff" : "#b3ffffff"; border.width: 1
                         Icon { anchors.centerIn: parent; width: parent.width * 0.4; height: width; name: "plus"; ink: "white" }
                     }
@@ -413,7 +418,7 @@ Rectangle {
                         width: parent.width - 8; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                         text: root.tr("Other user…")
                         color: "white"; font.pixelSize: 13 * root.s
-                        style: Text.Raised; styleColor: "#40000000"
+                        style: Text.Raised; styleColor: root.textShadow
                     }
                     MouseArea {
                         id: otherArea

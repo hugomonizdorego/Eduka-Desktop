@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Apply Edukasaun login screen (SDDM) settings. Runs as root via pkexec.
 
 Reads one JSON object from standard input (written by Eduka-Settings):
@@ -13,8 +15,16 @@ Reads one JSON object from standard input (written by Eduka-Settings):
 
 Every value is validated; images must be real PNG/JPEG/WebP/BMP files that the
 calling user may read, so this helper cannot be used to copy other files.
+
+The first argument picks what is changed, and with it the polkit action:
+  --look       everything but automatic login (org.edukasaun.desktop.sddm-config;
+               administrators at the computer need no password)
+  --autologin  only autologin_user (org.edukasaun.desktop.sddm-autologin; always
+               asks for an administrator password, so nobody can switch on
+               automatic login from an unlocked session)
+Without an argument pkexec asks for the password and both are applied.
 """
-import json, os, pwd, re, shutil, sys, tempfile
+import json, os, pwd, re, shutil, stat, sys, tempfile
 
 THEME_DIR = '/usr/share/sddm/themes/edukasaun'
 USER_CONF = THEME_DIR + '/theme.conf.user'
@@ -27,6 +37,7 @@ THEME_PIN = '/etc/sddm.conf.d/zz-edukasaun-theme.conf'
 METADATA = THEME_DIR + '/metadata.desktop'
 SESSION = 'edukasaun-desktop.desktop'
 STYLES = ('light', 'dark', 'glass', 'pastel')
+MODES = ('--look', '--autologin')
 MAX_IMAGE = 25 * 1024 * 1024
 
 
@@ -42,31 +53,38 @@ def caller_uid():
         return os.getuid()
 
 
-def check_image(path, uid):
+def open_image(path, uid):
+    """Open the picture once and check that very file (owner, mode, size and
+    the picture header come from the opened file, so it cannot be swapped for
+    another file between the check and the copy)."""
     real = os.path.realpath(path)
     try:
-        st = os.stat(real)
+        fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         fail(f'Image not found: {path}')
-    if not os.path.isfile(real) or st.st_size <= 0 or st.st_size > MAX_IMAGE:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_size <= 0 or st.st_size > MAX_IMAGE:
+        os.close(fd)
         fail(f'Not a usable image file: {path}')
     readable_by_caller = (st.st_mode & 0o004) or (st.st_uid == uid and st.st_mode & 0o400)
     if not readable_by_caller:
+        os.close(fd)
         fail(f'The image must be readable by your account: {path}')
-    with open(real, 'rb') as handle:
-        head = handle.read(16)
+    head = os.pread(fd, 16, 0)
     is_image = (head.startswith(b'\x89PNG\r\n\x1a\n') or head[:3] == b'\xff\xd8\xff'
                 or (head[:4] == b'RIFF' and head[8:12] == b'WEBP') or head[:2] == b'BM')
     if not is_image:
+        os.close(fd)
         fail(f'Only PNG, JPEG, WebP or BMP pictures can be used: {path}')
-    return real
+    return fd
 
 
-def install_image(source, target):
+def install_image(source_fd, target):
     os.makedirs(os.path.dirname(target), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target))
-    os.close(fd)
-    shutil.copyfile(source, tmp)
+    with os.fdopen(source_fd, 'rb') as src, os.fdopen(fd, 'wb') as dst:
+        src.seek(0)
+        shutil.copyfileobj(src, dst, 1024 * 1024)
     os.chmod(tmp, 0o644)
     os.replace(tmp, target)
 
@@ -106,17 +124,7 @@ def ensure_qt_version():
     write_text(METADATA, '\n'.join(lines)+'\n')
 
 
-def main():
-    if os.geteuid() != 0:
-        fail('eduka-sddm-apply must run as root (use pkexec).')
-    try:
-        req = json.loads(sys.stdin.read(65536))
-    except Exception:
-        fail('Invalid request.')
-    if not isinstance(req, dict):
-        fail('Invalid request.')
-    uid = caller_uid()
-
+def apply_look(req, uid):
     style = str(req.get('style', 'light'))
     if style not in STYLES:
         fail('Unknown style.')
@@ -130,23 +138,13 @@ def main():
     if user and not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):
         fail('Invalid user name.')
     show_clock = 'true' if req.get('show_clock', True) else 'false'
-    autologin = str(req.get('autologin_user', '')).strip()
-    if autologin:
-        if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', autologin):
-            fail('Invalid automatic login user.')
-        try:
-            entry = pwd.getpwnam(autologin)
-        except KeyError:
-            fail(f'User {autologin} does not exist.')
-        if entry.pw_uid < 1000:
-            fail('Automatic login is only possible for normal user accounts.')
 
     background = str(req.get('background', ''))
     if background == 'reset':
         if os.path.exists(BACKGROUND):
             os.remove(BACKGROUND)
     elif background:
-        install_image(check_image(background, uid), BACKGROUND)
+        install_image(open_image(background, uid), BACKGROUND)
 
     logo = str(req.get('logo', ''))
     logo_path = LOGO if os.path.exists(LOGO) else DEFAULT_LOGO
@@ -155,7 +153,7 @@ def main():
             os.remove(LOGO)
         logo_path = DEFAULT_LOGO
     elif logo:
-        install_image(check_image(logo, uid), LOGO)
+        install_image(open_image(logo, uid), LOGO)
         logo_path = LOGO
 
     write_text(USER_CONF, (
@@ -168,8 +166,22 @@ def main():
         f'showClock={show_clock}\n'
         f'background={BACKGROUND}\n'
         f'logo={logo_path}\n'))
+    ensure_theme_active()
+    ensure_qt_version()
 
+
+def apply_autologin(req):
+    autologin = str(req.get('autologin_user', '')).strip()
     if autologin:
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', autologin):
+            fail('Invalid automatic login user.')
+        try:
+            entry = pwd.getpwnam(autologin)
+        except KeyError:
+            fail(f'User {autologin} does not exist.')
+        shell = os.path.basename(entry.pw_shell or '')
+        if not 1000 <= entry.pw_uid < 60000 or shell in ('nologin', 'false'):
+            fail('Automatic login is only possible for normal user accounts.')
         write_text(AUTOLOGIN, (
             '# Written by Eduka-Settings: log in automatically.\n'
             '[Autologin]\n'
@@ -178,8 +190,24 @@ def main():
             'Relogin=false\n'))
     elif os.path.exists(AUTOLOGIN):
         os.remove(AUTOLOGIN)
-    ensure_theme_active()
-    ensure_qt_version()
+
+
+def main():
+    if os.geteuid() != 0:
+        fail('eduka-sddm-apply must run as root (use pkexec).')
+    mode = sys.argv[1] if len(sys.argv) > 1 else ''
+    if mode and mode not in MODES:
+        fail('Unknown option: use --look or --autologin.')
+    try:
+        req = json.loads(sys.stdin.read(65536))
+    except Exception:
+        fail('Invalid request.')
+    if not isinstance(req, dict):
+        fail('Invalid request.')
+    if mode in ('', '--look'):
+        apply_look(req, caller_uid())
+    if mode in ('', '--autologin'):
+        apply_autologin(req)
     print('Login screen updated.')
 
 

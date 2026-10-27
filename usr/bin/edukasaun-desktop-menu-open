@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 # Edukasaun Desktop visible name, Eduka-Desktop internal singleton startmenu engine.
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 exec eduka-menu --toggle

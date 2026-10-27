@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Wallpaper and desktop icons of Eduka-Desktop (taken over from LXQt's
 desktop preferences, which are drawn by pcmanfm-qt).
 
@@ -17,6 +19,7 @@ the desktop again. Drives are shown as links on the desktop by Eduka-Panel.
 """
 import hashlib, os, random, re, shutil, subprocess, time
 from pathlib import Path
+from urllib.parse import quote
 
 from eduka_common import (CACHE_DIR, read_desktop_config, save_desktop_config, child_env, _get_ini_value, _set_ini_value)
 
@@ -85,7 +88,7 @@ def render(path, mode='zoom', color='#1f6b45', size=None):
     """QImage of the whole screen: the picture placed with the mode on the
     background color. path '' gives the plain color."""
     from PyQt5.QtGui import QImage, QPainter, QColor, QImageReader
-    from PyQt5.QtCore import Qt, QRectF
+    from PyQt5.QtCore import QRectF
     w, h = size or screen_size()
     out = QImage(w, h, QImage.Format_RGB32); out.fill(QColor(color))
     if not path:
@@ -234,6 +237,9 @@ def set_desktop_shortcuts(names, show_drives=None):
 
 DRIVE_LINK_PREFIX = 'eduka-drive-'
 
+def _plain(text):
+    return ''.join(ch for ch in str(text or '') if ch.isprintable()).strip()[:64]
+
 def sync_drive_links(drives, enabled):
     """Links to mounted USB sticks, memory cards and external disks on the
     desktop (written by Eduka-Panel; removed when the drive goes)."""
@@ -252,10 +258,14 @@ def sync_drive_links(drives, enabled):
             except Exception: pass
     for fname, d in wanted.items():
         target = ddir/fname
+        # The label comes from the USB stick itself: no line breaks or control
+        # characters may reach the .desktop file (they could add an Exec= line).
+        name = _plain(d.get('label') or d['name']) or 'USB'
+        icon = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('icon', '') or '')) or 'drive-removable-media'
         text = ('[Desktop Entry]\nType=Link\n'
-                f"Name={d.get('label') or d['name']}\n"
-                f"Icon={d.get('icon', 'drive-removable-media')}\n"
-                f"URL=file://{d['mountpoint']}\nX-Eduka-Drive=true\n")
+                f"Name={name}\n"
+                f"Icon={icon}\n"
+                f"URL=file://{quote(d['mountpoint'])}\nX-Eduka-Drive=true\n")
         try:
             if not target.exists() or target.read_text() != text:
                 target.write_text(text)

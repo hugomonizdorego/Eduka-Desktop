@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 import sys, os, subprocess, re, time, shutil, json, fcntl, math
+# Screen readers (Orca) see Eduka-Panel also when it is started without the
+# launcher's environment (must be set before Qt starts).
+os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 from array import array
 from operator import itemgetter
 from pathlib import Path
@@ -62,6 +67,15 @@ MULTI_UI = dict(LIGHT_UI, **{
     'row_hover': 'rgba(255,255,255,240)', 'row_active': 'rgba(91,110,225,36)', 'field': '#ffffff', 'groove': '#e6e6e6', 'groove_off': '#d6d6d6',
     'tile': '#f5f5f5', 'tile_off': '#f7f7f7', 'tile_off_text': '#9e9e9e', 'cal': '#ffffff', 'cal_hover': '#eceffd', 'muted': '#b0b0b0',
     'weekend': '#e53935', 'scroll': 'rgba(91,110,225,110)'})
+# Liquid Glass: the blue of Eduka-Liquid (Orchis blue), as in Eduka-Settings
+# and Eduka-Desktop; the green of the default look made the Action Center
+# and the popups look like another theme.
+LIQUID_UI = dict(LIGHT_UI, **{
+    'text': '#1c2b33', 'title': '#0f2029', 'sub': '#5a6b75', 'btn_border': 'rgba(20,110,160,45)',
+    'accent': '#1e9bd7', 'accent_hover': '#35aee6', 'accent_border': '#126f9c',
+    'switch_off': '#d8e5ee', 'switch_off_text': '#3d525e', 'row_active': 'rgba(30,155,215,40)',
+    'groove': '#dbe9f1', 'groove_off': '#c9d8e2', 'tile': '#eef5fa', 'tile_off': '#f2f6f9', 'tile_off_text': '#97a8b3',
+    'cal_hover': '#e3f1f9', 'muted': '#a7b7c1', 'scroll': 'rgba(30,155,215,110)'})
 # Eduka-Transparan: Transparent-Shell-Theme palette.
 TRANS_UI = dict(DARK_UI, **{
     'text': 'rgba(242,242,242,235)', 'title': '#f2f2f2', 'sub': 'rgba(242,242,242,160)', 'btn_bg': 'rgba(217,217,217,20)',
@@ -75,6 +89,7 @@ def ui_colors():
     elif theme == THEME_TRANSPARENT: u=TRANS_UI
     elif theme == THEME_MULTI: u=MULTI_UI
     elif theme == THEME_PASTEL: u=PASTEL_UI
+    elif theme == THEME_LIQUID: u=LIQUID_UI
     else: u=DARK_UI if theme in DARK_THEMES else LIGHT_UI
     if custom_accent():
         # Painted parts (clock, calendar, sliders) follow the accent color too.
@@ -114,12 +129,13 @@ def popup_qss():
     elif theme == THEME_LIQUID:
         # Popups need more opacity than the panel to stay readable.
         box=liquid_glass_surface(1.55, 18, 1).replace('border-radius:18px;','')
-        card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
+        card=f'background:rgba(255,255,255,{c});border:1px solid rgba(20,110,160,30);'
     else:
         box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(236,248,242,{a}));'
              'border:1px solid rgba(255,255,255,220);')
         card=f'background:rgba(255,255,255,{c});border:1px solid rgba(0,120,90,30);'
     u=ui
+    rc_=qcolor(u['accent']); ring=f'rgba({rc_.red()},{rc_.green()},{rc_.blue()},60)'
     rb, rc=(24, 20) if theme == THEME_PASTEL else (18, 14)
     return ('QFrame#popupBox{'+box+f'border-radius:{rb}px;}}'
             'QFrame#acCard{'+card+f'border-radius:{rc}px;}}'
@@ -158,7 +174,7 @@ def popup_qss():
             'QSlider:horizontal{min-height:26px;background:transparent;}'
             f'QSlider::groove:horizontal{{height:8px;border-radius:4px;background:{u["groove"]};}}'
             f'QSlider::sub-page:horizontal{{background:{u["accent"]};border-radius:4px;}}'
-            f'QSlider::handle:horizontal{{width:14px;height:14px;margin:-6px 0;border-radius:10px;background:{u["accent"]};border:3px solid rgba(0,168,121,60);}}'
+            f'QSlider::handle:horizontal{{width:14px;height:14px;margin:-6px 0;border-radius:10px;background:{u["accent"]};border:3px solid {ring};}}'
             f'QSlider::handle:horizontal:hover{{background:{u["accent_hover"]};}}'
             f'QSlider::sub-page:horizontal:disabled{{background:{u["groove_off"]};}}'
             f'QSlider::handle:horizontal:disabled{{background:{u["groove_off"]};}}'
@@ -223,13 +239,27 @@ def _run_text(cmd, timeout=1.5):
     except Exception:
         return None
 
+def system_batteries():
+    """Batteries that power this computer (type Battery: BAT0, CMB1, …), not
+    the batteries of a wireless mouse or game pad (scope Device)."""
+    out=[]
+    for b in sorted(Path('/sys/class/power_supply').glob('*')):
+        try:
+            if (b/'type').read_text().strip() != 'Battery': continue
+            scope=(b/'scope').read_text().strip() if (b/'scope').exists() else ''
+            if scope.lower() == 'device': continue
+            out.append(b)
+        except Exception:
+            continue
+    return out
+
 def battery_info():
     """Capacity, status and the minutes left (discharging) or until full
     (charging) from the battery's energy or charge and its power or current."""
     def num(path):
         try: return float(path.read_text().strip())
         except Exception: return None
-    for b in sorted(Path('/sys/class/power_supply').glob('BAT*')):
+    for b in system_batteries():
         try:
             info={'capacity':int((b/'capacity').read_text().strip()),'status':(b/'status').read_text().strip(), 'minutes': None}
         except Exception:
@@ -1973,10 +2003,6 @@ class ActionCenter(PopupFrame):
         """Small screens (1024x600 netbooks) start in compact mode."""
         return QApplication.primaryScreen().availableGeometry().height() < 640
 
-    def room(self):
-        screen=QApplication.primaryScreen().availableGeometry()
-        return self.panel.y()-8-(screen.y()+4)
-
     def set_clock_layout(self, dense):
         """With the month calendar: one row (clock left, greeting and date
         right). Without it: a big clock in the middle."""
@@ -2432,6 +2458,20 @@ SYSTEM_MOUNTS = ('/', '/boot', '/boot/efi', '/home', '/usr', '/var', '/opt', '/s
 def _system_mount(mp):
     return bool(mp) and (mp in SYSTEM_MOUNTS or mp.startswith(('/run/live', '/lib/live', '/cdrom', '/usr/', '/var/', '/boot/')))
 
+def _block_tree(dev):
+    """A block device and everything below it (partitions, LUKS, LVM)."""
+    out=[dev]
+    for child in dev.get('children') or []:
+        out+=_block_tree(child)
+    return out
+
+def _all_mountpoints(dev):
+    """Every mount point of a block device and of everything below it."""
+    out=[dev.get('mountpoint') or '']+[m for m in (dev.get('mountpoints') or []) if m]
+    for child in dev.get('children') or []:
+        out+=_all_mountpoints(child)
+    return out
+
 def removable_drives():
     """[{name, path, label, kind, size, icon, parts: [{path, label, mountpoint, fstype, uuid}]}]"""
     out=_run_text(['lsblk', '-J', '-b', '-o', 'NAME,PATH,LABEL,SIZE,TYPE,TRAN,RM,HOTPLUG,ROTA,MOUNTPOINT,FSTYPE,MODEL,VENDOR,UUID'], timeout=3)
@@ -2445,15 +2485,27 @@ def removable_drives():
         name=str(d.get('name') or ''); tran=str(d.get('tran') or '')
         if not (d.get('hotplug') or d.get('rm') or tran in ('usb', 'mmc') or name.startswith('mmcblk')): continue
         if name.startswith(('loop', 'zram', 'sr', 'ram')): continue
-        parts=[]; system=False
+        # A disk that holds the running system anywhere below it (also inside
+        # LUKS or LVM on a USB disk, or its swap) is never listed: ejecting
+        # it would pull the system away.
+        if any(_system_mount(mp) for mp in _all_mountpoints(d)): continue
+        parts=[]
         for c in [d]+list(d.get('children') or []):
             if c is not d and c.get('type') not in ('part', 'crypt', 'lvm'): continue
-            mp=c.get('mountpoint') or ''
-            if _system_mount(mp): system=True
             if c is d and d.get('children'): continue
-            if c.get('fstype') or mp:
-                parts.append({'path': c.get('path'), 'label': c.get('label') or '', 'mountpoint': mp, 'fstype': c.get('fstype') or '', 'uuid': c.get('uuid') or ''})
-        if system or not parts: continue
+            luks=c.get('fstype') == 'crypto_LUKS'
+            # An opened LUKS (or LVM) volume is mounted one level down: that
+            # device is unmounted, then the LUKS container is locked again.
+            mounted=[x for x in _block_tree(c) if x.get('mountpoint')]
+            for x in mounted:
+                parts.append({'path': x.get('path'), 'label': x.get('label') or c.get('label') or '', 'mountpoint': x.get('mountpoint'),
+                              'fstype': x.get('fstype') or '', 'uuid': x.get('uuid') or c.get('uuid') or '',
+                              'container': c.get('path') if luks and x is not c else '', 'locked': False})
+            if not mounted and c.get('fstype'):
+                parts.append({'path': c.get('path'), 'label': c.get('label') or '', 'mountpoint': '', 'fstype': c.get('fstype') or '',
+                              'uuid': c.get('uuid') or '', 'container': c.get('path') if luks and c.get('children') else '',
+                              'locked': luks and not c.get('children')})
+        if not parts: continue
         model=' '.join(x for x in (str(d.get('vendor') or '').strip(), str(d.get('model') or '').strip()) if x and not x.startswith('0x')).strip()
         size=int(d.get('size') or 0)
         if name.startswith('mmcblk') or tran == 'mmc' or re.search(r'card|sd/mmc|sdxc|sdhc', model, re.I):
@@ -2494,6 +2546,10 @@ class DriveAction(QThread):
                 part=next((p for p in self.drive['parts'] if p['mountpoint']), None)
                 if part:
                     opened=part['mountpoint']
+                elif any(p.get('locked') for p in self.drive['parts']):
+                    # An encrypted drive needs its password: the file manager
+                    # asks for it when the drive is opened there.
+                    opened='computer:///'
                 elif tool:
                     p=self.drive['parts'][0]
                     r=subprocess.run([tool, 'mount', '-b', p['path'], '--no-user-interaction'], capture_output=True, text=True, timeout=30)
@@ -2510,6 +2566,11 @@ class DriveAction(QThread):
                         r=subprocess.run(['gio', 'mount', '-u', p['mountpoint']], capture_output=True, text=True, timeout=60)
                     if r.returncode != 0:
                         ok=False; msg=(r.stderr or r.stdout).strip(); break
+                if ok and tool:
+                    for container in dict.fromkeys(p.get('container') for p in self.drive['parts'] if p.get('container')):
+                        r=subprocess.run([tool, 'lock', '-b', container, '--no-user-interaction'], capture_output=True, text=True, timeout=60)
+                        if r.returncode != 0:
+                            ok=False; msg=(r.stderr or r.stdout).strip(); break
                 if ok and self.action == 'remove' and tool:
                     r=subprocess.run([tool, 'power-off', '-b', self.drive['path'], '--no-user-interaction'], capture_output=True, text=True, timeout=60)
                     if r.returncode != 0: ok=False; msg=(r.stderr or r.stdout).strip()
@@ -2752,7 +2813,7 @@ class NetworkPopup(PopupFrame):
     connecting right here: click a network, type the password (show/hide)
     and press Connect — no extra window."""
     def __init__(self, panel):
-        super().__init__(panel); self.panel=panel; self.proc=None; self.editor=None
+        super().__init__(panel); self.panel=panel; self.proc=None; self.editor=None; self._queue=[]
         self.box.setFixedWidth(360); self.setAccessibleName('Network')
         st=panel.last_status or {}
         self.wired_row, self.wired_switch, self.wired_sub=switch_row('Wired')
@@ -2856,12 +2917,16 @@ class NetworkPopup(PopupFrame):
         QTimer.singleShot(800, self.panel.update_status_icons)
 
     def toggle_wired(self, on):
+        # One nmcli call per cable port, one after the other.
         for w in getattr(self, 'wired', []):
-            self.run(['nmcli','device','connect' if on else 'disconnect', w['device']], _('Wired network on.') if on else _('Wired network off.'))
+            self.run(['nmcli','device','connect' if on else 'disconnect', w['device']], _('Wired network on.') if on else _('Wired network off.'), queue=True)
 
-    def run(self, cmd, success, after=None):
-        """nmcli without blocking; the result is written in the popup."""
-        if self.proc is not None: return
+    def run(self, cmd, success, after=None, queue=False):
+        """nmcli without blocking; the result is written in the popup. While
+        one runs, another click is ignored, unless `queue` keeps it for later."""
+        if self.proc is not None:
+            if queue: self._queue.append((cmd, success, after))
+            return
         self.note(_('Connecting…') if 'connect' in cmd or 'up' in cmd else _('Working…'))
         proc=QProcess(self); proc.setProcessChannelMode(QProcess.MergedChannels); self.proc=proc
         def done(code, _status, p=proc):
@@ -2876,6 +2941,8 @@ class NetworkPopup(PopupFrame):
             if after: after(code == 0)
             QTimer.singleShot(300, self.panel.update_status_icons)
             p.deleteLater()
+            if self._queue:
+                cmd_, success_, after_=self._queue.pop(0); self.run(cmd_, success_, after_)
         proc.finished.connect(done); proc.start(cmd[0], cmd[1:])
 
     def choose(self, net, row):
@@ -2956,7 +3023,7 @@ class SoundPopup(PopupFrame):
                 lay=QHBoxLayout(b); lay.setContentsMargins(10,3,8,3)
                 name=QLabel(app.get('name','')); name.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(name, 1)
                 ic=QLabel(); ic.setPixmap(get_icon(app.get('icon'), 'multimedia-player').pixmap(26,26)); ic.setAttribute(Qt.WA_TransparentForMouseEvents); lay.addWidget(ic)
-                b.setMinimumHeight(36); b.clicked.connect(lambda _=False, a=app: (self.close(), launch_app(a.get('exec',''), a.get('name',''))))
+                b.setMinimumHeight(36); b.clicked.connect(lambda _=False, a=app: (self.close(), launch_entry(a)))
                 pl.addWidget(b)
             self.v.addWidget(self.player_box)
             head.toggled.connect(lambda on: (self.player_box.setVisible(on), self.refit()))
@@ -3016,7 +3083,7 @@ class SoundPopup(PopupFrame):
 
 
 def battery_model():
-    for b in sorted(Path('/sys/class/power_supply').glob('BAT*')):
+    for b in system_batteries():
         parts=[]
         for f in ('manufacturer', 'model_name'):
             try:
@@ -3395,14 +3462,23 @@ class ClockButton(QPushButton):
         box=QRectF(self.rect()).adjusted(1.5, 1.0, -1.5, -1.0); ink=self.palette().color(QPalette.ButtonText); acc=QColor(theme_accent())
         frame=QColor(acc if (self._hot or self.ac_open) else ink); frame.setAlpha(200 if (self._hot or self.ac_open) else 70)
         fill=QColor(acc); fill.setAlpha(46 if self.ac_open else (26 if self._hot else 10))
+        if self.ac_open and not self.vertical:
+            # A calm solid pill under "Action Center": readable on glass over
+            # any wallpaper, also a dark one.
+            solid=QColor('#262626') if ink.lightness() > 128 else QColor('#f4f7f6'); solid.setAlpha(232)
+            p.setPen(Qt.NoPen); p.setBrush(solid); p.drawRoundedRect(box, 11, 11)
         p.setPen(QPen(frame, 1.2)); p.setBrush(fill); p.drawRoundedRect(box, 11, 11)
         if self.alarm:
             p.setPen(Qt.NoPen); p.setBrush(acc); p.drawRoundedRect(box, 11, 11)
         p.setOpacity(0.25+0.75*self.fade)
         if self.ac_open and not self.vertical:
             big, small=self.fonts(); fm_b=QFontMetrics(big); fm_s=QFontMetrics(small); y=(self.height()-fm_b.height()-fm_s.height())/2
-            p.setFont(big); p.setPen(acc.darker(115) if not is_dark_theme() else acc.lighter(130)); p.drawText(QRectF(0, y, self.width(), fm_b.height()), Qt.AlignCenter, _('Action Center'))
-            soft=QColor(ink); soft.setAlpha(160); p.setFont(small); p.setPen(soft); p.drawText(QRectF(0, y+fm_b.height(), self.width(), fm_s.height()), Qt.AlignCenter, _('click to close'))
+            # The label stays readable on every panel: the accent is darkened
+            # (or lightened) against the tinted box until the contrast is enough.
+            base=QColor('#262626') if ink.lightness() > 128 else QColor('#f4f7f6'); a=fill.alphaF()
+            under=QColor(int(base.red()*(1-a)+acc.red()*a), int(base.green()*(1-a)+acc.green()*a), int(base.blue()*(1-a)+acc.blue()*a))
+            p.setFont(big); p.setPen(readable_color(acc, under)); p.drawText(QRectF(0, y, self.width(), fm_b.height()), Qt.AlignCenter, _('Action Center'))
+            soft=QColor(ink); soft.setAlpha(200); p.setFont(small); p.setPen(soft); p.drawText(QRectF(0, y+fm_b.height(), self.width(), fm_s.height()), Qt.AlignCenter, _('click to close'))
             return
         style=self.opts.get('style')
         if self.vertical or style not in ('led', 'analog'):
@@ -3504,7 +3580,8 @@ class EdukaPanel(QWidget):
         self.task_timer=QTimer(self); self.task_timer.timeout.connect(self.update_tasks); self.task_timer.start(900); self.update_tasks()
         self.status_timer=QTimer(self); self.status_timer.timeout.connect(self.update_status_icons); self.status_timer.start(2500); self.update_status_icons()
         # Weather for the clock card: cached, refreshed every 30 minutes when online.
-        self.weather=cached_weather(); self._weather_worker=None
+        self._weather_on=read_panel_config().get('weather', True) is not False
+        self.weather=cached_weather() if self._weather_on else None; self._weather_worker=None
         self.weather_timer=QTimer(self); self.weather_timer.timeout.connect(self.update_weather); self.weather_timer.start(30*60*1000)
         QTimer.singleShot(8000, self.update_weather)
         # Parental Control: warnings and the message screen when time is up.
@@ -3539,7 +3616,9 @@ class EdukaPanel(QWidget):
         QTimer.singleShot(1500, restore_software_brightness)
         # Openbox has no compositor: start picom so transparency works.
         QTimer.singleShot(0, ensure_compositor)
-        self._compositor_watch=watch_compositor(self, before_restart=self.stop_window_spy, initial=self._composited)
+        self._compositor_watch=watch_compositor(self, before_restart=self.before_restart, initial=self._composited)
+        # After a package update Eduka-Panel starts its new version by itself.
+        self._update_watch=watch_package_update(self, before_restart=self.before_restart, busy=self.busy_for_update)
         # Eduka-Panel replaces lxqt-panel, but only in Eduka-Desktop sessions.
         QTimer.singleShot(2500, stop_lxqt_panel_in_eduka_session)
         QTimer.singleShot(9000, stop_lxqt_panel_in_eduka_session)
@@ -3614,7 +3693,8 @@ class EdukaPanel(QWidget):
 
     def setup_watcher(self):
         self.watcher=QFileSystemWatcher(self)
-        watch_paths=[str(panel_config_path()), str(RUNTIME_DIR/'reload')]
+        self._started_at=time.time()
+        watch_paths=[str(panel_config_path()), str(RUNTIME_DIR/'reload'), str(PANEL_COMMAND_PATH)]
         watch_paths += [str(p) for p in lxqt_appearance_files()]
         for pth in watch_paths:
             try:
@@ -3625,7 +3705,18 @@ class EdukaPanel(QWidget):
                     self.watcher.addPath(pth)
             except Exception:
                 pass
-        self.watcher.fileChanged.connect(lambda p: QTimer.singleShot(120,self.reload_from_watcher))
+        self.watcher.fileChanged.connect(lambda p: QTimer.singleShot(120, self.panel_command if p == str(PANEL_COMMAND_PATH) else self.reload_from_watcher))
+
+    def panel_command(self):
+        """Requests from Eduka-Settings (Maintenance → Restart Eduka-Panel)."""
+        if str(PANEL_COMMAND_PATH) not in self.watcher.files() and PANEL_COMMAND_PATH.exists():
+            self.watcher.addPath(str(PANEL_COMMAND_PATH))
+        try:
+            data=json.loads(PANEL_COMMAND_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            return
+        if data.get('action') == 'restart' and float(data.get('time', 0) or 0) > self._started_at:
+            self.restart_panel()
 
     def reload_from_watcher(self):
         # Settings are written with os.replace(): the watched inode is gone,
@@ -3640,6 +3731,10 @@ class EdukaPanel(QWidget):
         for kind, icon in (('files','system-file-manager'),('terminal','utilities-terminal')):
             if kind in self.quick_launchers: self.quick_launchers[kind].setIcon(get_icon(icon))
         self.update_notification_badge(); self.update_clock()
+        weather_on=read_panel_config().get('weather', True) is not False
+        if weather_on != getattr(self, '_weather_on', True):
+            # Switched in Eduka-Settings → Clock: clear it or fetch it now.
+            self._weather_on=weather_on; QTimer.singleShot(500, self.update_weather)
         if self.action_center is not None and self.action_center.isVisible():
             self.action_center.lang=ui_language(); self.action_center.apply_clock_style()
         app=QApplication.instance()
@@ -3836,7 +3931,7 @@ class EdukaPanel(QWidget):
     def popup_position(self, w, h, anchor_global=None, gap=8):
         """Top-left corner for a popup next to the panel (any edge),
         centred on anchor_global when given, kept on screen."""
-        screen=QApplication.primaryScreen().availableGeometry(); full=QApplication.primaryScreen().geometry()
+        full=QApplication.primaryScreen().geometry()
         a=anchor_global or QPoint(self.x()+self.width()-w//2-4, self.y()+self.height()//2)
         if self.edge == 'Bottom':
             x=a.x()-w//2; y=self.y()-h-gap
@@ -4023,7 +4118,7 @@ class EdukaPanel(QWidget):
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.MiddleButton:
             app=getattr(obj, '_eduka_app', None)
             if app:
-                launch_app(app.get('exec',''), app.get('name','')); return True
+                launch_entry(app); return True
         et=event.type()
         if et == QEvent.ToolTip and isinstance(obj, QAbstractButton):
             return True     # the hover card replaces the plain tooltip
@@ -4133,7 +4228,20 @@ class EdukaPanel(QWidget):
         self._show_context(m, button, pos)
 
     def restart_panel(self):
-        safe_popen('pkill -x eduka-panel; sleep 0.2; eduka-panel', shell=True)
+        restart_self(self.before_restart)
+
+    def before_restart(self):
+        self.stop_window_spy()
+        if self._tp_proc is not None:
+            try: self._tp_proc.kill()
+            except Exception: pass
+        self.notifications.stop()
+
+    def busy_for_update(self):
+        """An open popup, the Action Center or the Parental Control screen
+        delays restarting after an update."""
+        return (QApplication.activePopupWidget() is not None or self._parental_lock is not None
+                or (self.action_center is not None and self.action_center.isVisible()))
 
     def panel_context(self, pos):
         """Panel menu: position, taskbar look and settings. Session actions
@@ -4353,7 +4461,13 @@ class EdukaPanel(QWidget):
             lock.releaseKeyboard(); lock.releaseMouse(); lock.hide(); lock.deleteLater()
 
     def update_weather(self):
-        if self._weather_worker is not None or read_panel_config().get('weather', True) is False:
+        if read_panel_config().get('weather', True) is False:
+            # Switched off in Eduka-Settings → Clock: no internet request.
+            if self.weather is not None:
+                self.weather=None
+                if self.action_center is not None: self.action_center.weather_bg.set_weather(None)
+            return
+        if self._weather_worker is not None:
             return
         if (self.last_status or {}).get('net', 'offline') == 'offline' and self.last_status:
             return
@@ -4566,7 +4680,7 @@ class EdukaPanel(QWidget):
         for line in out:
             parts=line.split(None,4)
             if len(parts)<5: continue
-            wid, desktop_id, wmclass, host, title = self.normalize_window_id(parts[0]), parts[1], parts[2], parts[3], parts[4]
+            wid, desktop_id, wmclass, title = self.normalize_window_id(parts[0]), parts[1], parts[2], parts[4]
             if not self._window_is_task(wid, desktop_id, wmclass, title):
                 continue
             app=self.match_app(title, wmclass)
@@ -4601,7 +4715,7 @@ class EdukaPanel(QWidget):
             if key not in self.pinned_buttons:
                 btn=QPushButton(); btn.setObjectName('taskButton'); self._button_seq+=1; btn._eduka_token=self._button_seq; btn.setProperty('mc', str(self._button_seq % len(MULTI_COLORS))); btn.installEventFilter(self); btn.setToolTip('Pinned: '+app.get('name','Application')); btn._eduka_app=app
                 btn.setAccessibleName('Pinned application '+app.get('name','Application'))
-                btn.clicked.connect(lambda _,a=app: launch_app(a.get('exec',''), a.get('name','')))
+                btn.clicked.connect(lambda _,a=app: launch_entry(a))
                 btn.setContextMenuPolicy(Qt.CustomContextMenu)
                 btn.customContextMenuRequested.connect(lambda pos,k=key,b=btn: self.pinned_context(k,b,pos))
                 btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -4685,7 +4799,7 @@ class EdukaPanel(QWidget):
         app=app_by_pin_key(key)
         m=self._context_menu_style(RoundedMenu(self))
         if app:
-            m.addAction(get_icon('system-run'),'Launch', lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+            m.addAction(get_icon('system-run'),'Launch', lambda a=app: launch_entry(a))
             if is_favorite(app):
                 m.addAction(get_icon('list-remove'),'Remove from Favorites', lambda a=app: unfavorite_app(a))
             else:
@@ -4705,25 +4819,16 @@ class EdukaPanel(QWidget):
         QTimer.singleShot(160, self.update_tasks)
 
     def close_window(self, wid):
-        btn = self.buttons.pop(wid, None)
+        """Close like the window's own close button: the window manager asks
+        the program, which may still ask to save the document. (It used to
+        destroy the window with xdotool and end the whole program after 0.9 s:
+        unsaved work was lost and every other window of that program closed.)
+        "Force Close" stays for programs that hang."""
+        btn = self.buttons.get(wid)
         if btn:
-            btn.setEnabled(False); btn.hide(); QTimer.singleShot(1200, btn.deleteLater)
-        # Robust close for LXQt/Openbox: first ask the WM nicely, then xdotool,
-        # then refresh. This makes right-click Close feel like a normal OS taskbar.
+            btn.setEnabled(False); QTimer.singleShot(2500, lambda b=btn: b.setEnabled(True) if not sip_deleted(b) else None)
         safe_popen(['wmctrl','-ic',wid])
-        QTimer.singleShot(180, lambda w=wid: safe_popen(['xdotool','windowclose',w]) if shutil.which('xdotool') else None)
-        def fallback_pid_close(w=wid):
-            if not shutil.which('xprop'):
-                return
-            try:
-                out=subprocess.check_output(['xprop','-id',w,'_NET_WM_PID'], text=True, stderr=subprocess.DEVNULL)
-                m=re.search(r'=\s*(\d+)', out)
-                if m:
-                    safe_popen(['kill','-TERM',m.group(1)])
-            except Exception:
-                pass
-        QTimer.singleShot(900, fallback_pid_close)
-        QTimer.singleShot(1100, self.update_tasks)
+        QTimer.singleShot(600, self.update_tasks)
 
     def force_close_window(self, wid):
         btn = self.buttons.pop(wid, None)
@@ -4754,7 +4859,7 @@ class EdukaPanel(QWidget):
                 open_label='Open New Terminal Window'
             else:
                 open_label='Open New Window'
-            m.addAction(get_icon('window-new'), open_label, lambda a=app: launch_app(a.get('exec',''), a.get('name','')))
+            m.addAction(get_icon('window-new'), open_label, lambda a=app: launch_entry(a))
             m.addSeparator()
         activate_label='Restore / Activate' if '_NET_WM_STATE_HIDDEN' in states else 'Activate'
         m.addAction(get_icon('go-up'),activate_label, lambda w=wid: self.restore_window(w))
@@ -5075,6 +5180,9 @@ def acquire_panel_lock(wait_seconds=3.0):
             time.sleep(0.1)
 
 if __name__ == '__main__':
+    if autostart_elsewhere():
+        restore_lxqt_notifications()
+        sys.exit(0)
     panel_lock=acquire_panel_lock()
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)

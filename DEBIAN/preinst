@@ -1,9 +1,41 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Edukasaun Desktop 0.10.0 Beta (update 3).
+# The programs that run keep running: Eduka-Panel and Eduka-Desktop start
+# again by themselves once dpkg has finished (watch_package_update).
 set -e
-# Edukasaun Desktop 0.10.0 Beta (update 2) clean upgrade: stop old runtime before files are replaced.
-pkill -f "eduka-menu --daemon" 2>/dev/null || true
-pkill -x eduka-panel 2>/dev/null || true
-for d in /run/user/*/eduka-desktop /run/user/*/edukasaun-desktop /tmp/eduka-desktop /tmp/edukasaun-desktop; do
-    [ -e "$d" ] && rm -rf "$d" || true
-done
+
+# Since 0.10.0~beta3 the files in /etc are conffiles. Set aside copies
+# nobody changed, so dpkg installs the new versions without asking; postinst
+# deletes them, postrm puts them back when the upgrade is cancelled.
+set_aside_unchanged() {
+    file=$1; shift
+    [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    sum=$(md5sum "$file" | cut -d' ' -f1)
+    for known in "$@"; do
+        if [ "$sum" = "$known" ]; then
+            mv -f "$file" "$file.eduka-old"
+            return 0
+        fi
+    done
+}
+
+case "$1" in
+    install|upgrade)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt-nl 0.10.0~beta3; then
+            set_aside_unchanged /etc/sddm.conf.d/10-edukasaun.conf \
+                0b0f200644cfc6427375e25d85d2cfba 6a756a2a448340c74e64b34f9924df43
+            set_aside_unchanged /etc/xdg/autostart/eduka-panel.desktop \
+                e22713eca1831def48be2ba6dd2e5538
+            set_aside_unchanged /etc/xdg/autostart/eduka-menu-daemon.desktop \
+                f38cd3fa0578131b2e7289c72b264ddc
+        fi
+        ;;
+    abort-upgrade)
+        ;;
+    *)
+        echo "preinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
 exit 0

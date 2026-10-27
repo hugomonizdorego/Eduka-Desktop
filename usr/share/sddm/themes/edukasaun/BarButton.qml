@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 // Round button of the login screen's bottom bar: an icon and an optional label.
 import QtQuick 2.15
 

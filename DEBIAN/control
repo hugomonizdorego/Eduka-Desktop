@@ -1,17 +1,25 @@
 Package: edukasaun-desktop-menu
-Version: 0.10.0~beta2
+Version: 0.10.0~beta3
 Section: x11
 Priority: optional
 Architecture: all
 Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
-Depends: python3, python3-pyqt5, python3-xdg, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, xdotool, at-spi2-core, orca, speech-dispatcher-espeak-ng
-Recommends: pcmanfm-qt, qterminal, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, lxqt-session, xfwm4 | openbox, picom, bluez, brightnessctl, dbus-bin, pkexec, pulseaudio-utils, qml-module-qtquick-virtualkeyboard, fonts-noto-color-emoji, udisks2, xinput, numlockx, blueman, power-profiles-daemon
-Suggests: sddm | lightdm
-Description: Edukasaun Desktop 0.10.0 Beta (update 2) - Eduka-Pastel in mint green and sky blue, bug fixes
- Edukasaun Desktop, Eduka-Menu, Eduka-Settings and Eduka-Panel.
- Eduka-Panel on any screen edge, a redesigned Eduka-Settings, optional
- effects for Eduka-Desktop on capable computers, digital/analog/LED clock
- with a day-and-night globe, per-application volume in the Action Center,
- Eduka-Panel as the only notification service, visible window buttons and
- two new themes: Eduka-Low-Theme (Yaru-remix) and Eduka-Transparan.
+Depends: python3, python3-pyqt5, libqt5svg5, lxqt-session, dbus-bin, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, x11-xserver-utils, x11-xkb-utils, xdotool, procps, at-spi2-core, orca, speech-dispatcher-espeak-ng
+Recommends: lxqt-config, lxqt-admin, lxqt-policykit, lxqt-qtplugin, pcmanfm-qt, qterminal, network-manager, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, xfwm4 | openbox, picom, bluez, blueman, rfkill, brightnessctl, pkexec, pulseaudio-utils, libglib2.0-bin, xdg-user-dirs, udisks2, xinput, numlockx, power-profiles-daemon, fonts-noto-color-emoji, qml6-module-qtquick-virtualkeyboard | qml-module-qtquick-virtualkeyboard
+Suggests: sddm | lightdm, mesa-utils, cups-client, system-config-printer
+Homepage: https://github.com/hugomonizdorego/Eduka-Desktop
+Description: Edukasaun OS desktop: start menu, panel and settings on LXQt
+ Eduka-Desktop is the desktop of Edukasaun OS (Debian stable with LXQt):
+  * Eduka-Desktop, the start menu with categories, search and favourites;
+  * Eduka-Panel with the task bar, the Action Center (calendar, weather,
+    sound, brightness, Wi-Fi, Bluetooth and drives) and the notifications;
+  * Eduka-Settings for themes, accent colors, the panel, the wallpaper,
+    keyboard, mouse and touchpad, the login screen and Parental Control;
+  * seven desktop themes that also style GTK 2/3/4 and Qt programs and
+    the Openbox and xfwm4 window borders, and an SDDM login screen theme.
+ .
+ It runs inside an LXQt session (startlxqt) with Openbox or xfwm4 and,
+ when the computer can, the picom compositor.
+ .
+ This is version 0.10.0 Beta (update 3).

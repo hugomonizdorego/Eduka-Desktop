@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 import sys, os, subprocess, fcntl, json, configparser, pwd
+os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
@@ -713,7 +716,7 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------ parental control
     def page_parental(self):
-        from eduka_parental import EMOJIS, PRESETS, read_state, minutes_text, emoji_icon
+        from eduka_parental import EMOJIS, PRESETS, emoji_icon
         p=Page('Parental Control', 'Limit how long this computer can be used. When the time is up your message appears over the whole screen, keyboard and mouse stop working and the computer shuts down.')
         self.pc_status=QLabel(''); self.pc_status.setObjectName('capability'); self.pc_status.setWordWrap(True); p.v.addWidget(self.pc_status)
         self.pc_enabled=QCheckBox('Use a time limit on this computer'); p.v.addWidget(self.pc_enabled)
@@ -1270,6 +1273,8 @@ class Settings(QDialog):
         self.clock_format=QComboBox(); self.clock_format.addItem('24 hours (14:30)', '24h'); self.clock_format.addItem('12 hours (2:30 PM)', '12h'); f.addRow('Time format:', self.clock_format)
         self.clock_seconds=QCheckBox('Show seconds'); f.addRow('', self.clock_seconds)
         self.clock_blink=QCheckBox('Blinking colon ( : )'); f.addRow('', self.clock_blink)
+        self.weather_on=QCheckBox('Weather on the clock card (uses the internet)'); f.addRow('', self.weather_on)
+        f.addRow('', hint_label('The town is found from the internet address with GeoJS and the forecast comes from Open-Meteo (CC BY 4.0). When it is off, Eduka makes no weather requests.'))
         swatches=QHBoxLayout(); swatches.setSpacing(8); self.led_swatches={}; lgroup=QButtonGroup(self)
         for value, name in [('', 'Theme color')]+LED_COLORS:
             b=QToolButton(); b.setObjectName('ledSwatch'); b.setCheckable(True); b.setFixedSize(26,26); b.setToolTip(name)
@@ -1300,8 +1305,7 @@ class Settings(QDialog):
         style=self.clock_style.currentData()
         color=self.led_color() or ('#00e676' if style == 'led' else '')
         self.clock_preview.setText(f'Preview: {text}')
-        self.clock_preview.setStyleSheet(f'font-family:monospace;font-size:22px;font-weight:800;' + (f'color:{color};' if color else ''))
-        pass
+        self.clock_preview.setStyleSheet('font-family:monospace;font-size:22px;font-weight:800;' + (f'color:{color};' if color else ''))
 
     # ------------------------------------------------------------------ effects
     def page_effects(self):
@@ -1497,7 +1501,7 @@ class Settings(QDialog):
         lines.append(f"Greeter: {os.path.basename(greeter) + (' (Qt 6)' if greeter.endswith('qt6') else ' (Qt 5)') if greeter else 'SDDM is not installed'}")
         auto=sddm_conf_value('Autologin', 'User')
         lines.append(f'Automatic login: {auto}' if auto else 'Automatic login: off (live session: always on)')
-        lines.append('Changes are saved automatically.' if self.realtime else 'Saving asks for an administrator password.')
+        lines.append('Changes are saved automatically; automatic login asks for the administrator password.' if self.realtime else 'Saving asks for an administrator password.')
         self.sddm_state.setText('\n'.join(_(l) for l in lines))
         self.sddm_fix.setVisible(not ok and greeter is not None)
         self.sddm_apply.setVisible(not self.realtime)
@@ -1596,22 +1600,44 @@ class Settings(QDialog):
             if not show:
                 return False    # automatic sync: nothing to do outside Edukasaun OS
             self.show_status('The login screen can only be changed on Edukasaun OS (pkexec missing).', error=True); return False
-        request=json.dumps(self.sddm_request())
-        try:
-            out=subprocess.run(['pkexec', SDDM_HELPER], input=request, capture_output=True, text=True, timeout=180)
-        except Exception as exc:
-            self.show_status(f'Login screen not changed: {exc}', error=True); return False
-        if out.returncode != 0:
-            reason=(out.stderr or out.stdout).strip().splitlines()
-            if out.returncode in (126, 127):
-                reason=['administrator password was not given']
-            self.show_status('Login screen not changed: '+(reason[-1] if reason else 'unknown error'), error=True); return False
+        request=self.sddm_request()
+        autologin=request.pop('autologin_user', '')
+        ok, reason=self.run_sddm_helper('--look', request)
+        if not ok:
+            self.show_status('Login screen not changed: '+reason, error=True); return False
         self._sddm_dirty=False; self._sddm_background=''; self._sddm_logo=''
+        # Automatic login is a polkit action of its own that always asks for
+        # an administrator password.
+        if autologin != self.autologin_user():
+            ok, reason=self.run_sddm_helper('--autologin', {'autologin_user': autologin})
+            if not ok:
+                self._loading=True
+                current=self.autologin_user()
+                self.sddm_autologin.setChecked(bool(current))
+                if current: self.sddm_autologin_user.setCurrentText(current)
+                self._loading=False
+                self.update_sddm_state()
+                self.show_status('Automatic login not changed: '+reason, error=True)
+                self.set_saved_text('Automatic login not changed: '+reason, error=True)
+                return False
         if not quiet:
             self.load_sddm_values()
         self.update_sddm_state()
         if show: self.show_status('Login screen updated.'); self.set_saved_text('✓ Saved.')
         return True
+
+    def run_sddm_helper(self, mode, request):
+        """Run eduka-sddm-apply through pkexec; returns (ok, reason)."""
+        try:
+            out=subprocess.run(['pkexec', SDDM_HELPER, mode], input=json.dumps(request), capture_output=True, text=True, timeout=180)
+        except Exception as exc:
+            return False, str(exc)
+        if out.returncode == 0:
+            return True, ''
+        if out.returncode in (126, 127):
+            return False, 'administrator password was not given'
+        reason=(out.stderr or out.stdout).strip().splitlines()
+        return False, reason[-1] if reason else 'unknown error'
 
     def preview_sddm(self):
         greeter=shutil.which('sddm-greeter-qt6') or shutil.which('sddm-greeter')
@@ -1668,8 +1694,8 @@ class Settings(QDialog):
         self.show_status('Eduka-Desktop reloaded.')
 
     def restart_panel(self):
-        safe_popen('pkill -x eduka-panel; sleep 0.3; env QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 eduka-panel', shell=True)
-        self.show_status('Eduka-Panel is restarting.')
+        ok=request_panel_restart()
+        self.show_status('Eduka-Panel is restarting.' if ok else 'Eduka-Panel could not be restarted.', error=not ok)
 
     def repair_lxqt(self):
         if QMessageBox.question(self, 'Repair LXQt settings',
@@ -1782,6 +1808,7 @@ class Settings(QDialog):
         self.clock_style.setCurrentIndex(max(0, self.clock_style.findData(panel.get('clock_style','digital'))))
         self.clock_format.setCurrentIndex(max(0, self.clock_format.findData(panel.get('clock_format','24h'))))
         self.clock_seconds.setChecked(bool(panel.get('clock_seconds', False))); self.clock_blink.setChecked(bool(panel.get('clock_blink', False)))
+        self.weather_on.setChecked(panel.get('weather', True) is not False)
         (self.led_swatches.get(str(panel.get('clock_color','') or '').lower()) or self.led_swatches['']).setChecked(True)
         self.pos_cards[panel_position(panel)].setChecked(True)
         self.shape_cards[panel_style(panel)].setChecked(True)
@@ -1832,7 +1859,7 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
         desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
@@ -1842,7 +1869,7 @@ class Settings(QDialog):
         chosen=self.icon_theme.currentData() if hasattr(self, 'icon_theme') else None
         if chosen and chosen != getattr(self, '_initial_icon_theme', None):
             # Papirus follows the theme (light / dark); any other choice stays.
-            desktop['icon_theme_follow']=str(chosen) == ('Papirus-Dark' if desktop.get('theme_style') in DARK_THEMES else 'Papirus')
+            desktop['icon_theme_follow']=str(chosen) == follow_icon_theme_name(desktop.get('theme_style') in DARK_THEMES)
         save_panel_config(panel); save_desktop_config(desktop); save_menu_config(menu)
         self.panel, self.desktop, self.menu = read_panel_config(), read_desktop_config(), read_menu_config()
         set_menu_daemon_autostart(self.start_login.isChecked())

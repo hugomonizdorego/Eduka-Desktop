@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 # Live session (kernel option boot=live): go straight into Eduka-Desktop
 # without asking for a user name or password. On an installed system any
 # leftover live autologin file is removed, so the login screen asks again.

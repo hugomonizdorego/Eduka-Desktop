@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import os, sys, json, glob, configparser, subprocess, shlex, time, re, html, shutil
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+import os, sys, json, glob, configparser, subprocess, shlex, time, re, shutil, stat, tempfile, fcntl
 from pathlib import Path
 from PyQt5.QtGui import QIcon, QPainterPath, QRegion
 from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
@@ -23,7 +25,7 @@ def exit_now(code=0):
 
 VERSION = "0.10.0 Beta"
 # Debian package version (a "~" sorts before the final 0.10.0, after 0.9.25).
-DEB_VERSION = "0.10.0~beta2"
+DEB_VERSION = "0.10.0~beta3"
 SETTINGS_REVISION = "0.9.6-transparency"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
@@ -82,8 +84,30 @@ LEGACY_BASE_CONFIG = Path.home()/".config"/"edukasaun-desktop"
 PANEL_CONFIG_DIR = BASE_CONFIG/"panel"
 MENU_CONFIG_DIR = BASE_CONFIG/"menu"
 DESKTOP_CONFIG_DIR = BASE_CONFIG/"desktop"
-RUNTIME_DIR = Path(os.environ.get('XDG_RUNTIME_DIR','/tmp'))/"eduka-desktop"
-LEGACY_RUNTIME_DIR = Path(os.environ.get('XDG_RUNTIME_DIR','/tmp'))/"edukasaun-desktop"
+
+def _runtime_base():
+    """$XDG_RUNTIME_DIR (private to the user, made by logind at login).
+    Without it a private folder of this user is used, never a folder that
+    other accounts could prepare (a shared /tmp/eduka-desktop allowed one
+    account to take over the lock and state files of another)."""
+    base=os.environ.get('XDG_RUNTIME_DIR')
+    if base and os.path.isdir(base):
+        return Path(base)
+    private=Path(tempfile.gettempdir())/f'eduka-runtime-{os.getuid()}'
+    try:
+        private.mkdir(mode=0o700, exist_ok=True)
+        st=os.lstat(private)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            raise OSError('not our own folder')
+        if st.st_mode & 0o077:
+            os.chmod(private, 0o700)
+        return private
+    except OSError:
+        return Path.home()/'.cache'/'eduka-desktop'/'runtime'
+
+RUNTIME_BASE = _runtime_base()
+RUNTIME_DIR = RUNTIME_BASE/"eduka-desktop"
+LEGACY_RUNTIME_DIR = RUNTIME_BASE/"edukasaun-desktop"
 CACHE_DIR = Path.home()/'.cache'/'eduka-desktop'
 LEGACY_CACHE_DIR = Path.home()/'.cache'/'edukasaun-desktop'
 APP_REGISTRY_PATH = CACHE_DIR/'app-registry.json'
@@ -562,6 +586,67 @@ def wait_for_compositor(timeout=2.5):
             return True
     return False
 
+def restart_self(before=None):
+    """Start this Eduka program again inside the same process: the PID stays,
+    so lxqt-session keeps it as its module and `pkill -x eduka-panel` still
+    finds it (starting it through the Python binary showed up as "python3")."""
+    if before:
+        try: before()
+        except Exception: pass
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    script=os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ''
+    if script and os.path.isfile(script) and os.access(script, os.X_OK):
+        os.execv(script, [script]+sys.argv[1:])
+    os.execv(sys.executable, [sys.executable]+sys.argv)
+
+def _package_stamp():
+    """Identity of the eduka_common.py this process loaded; it changes when
+    the package is updated."""
+    try:
+        st=os.stat(__file__)
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+PACKAGE_TOOLS = ('dpkg', 'apt', 'apt-get', 'aptitude', 'unattended-upgr', 'synaptic')
+
+def package_manager_running():
+    """True while dpkg or apt runs (an update is being installed)."""
+    for d in Path('/proc').iterdir():
+        if not d.name.isdigit(): continue
+        try:
+            if (d/'comm').read_text().strip() in PACKAGE_TOOLS: return True
+        except Exception:
+            continue
+    return False
+
+def watch_package_update(parent, before_restart=None, busy=None, interval=15000):
+    """After an update of Eduka-Desktop (its files were replaced and dpkg has
+    finished) this program starts again by itself, so the new version runs
+    without logging out. `busy()` True postpones it (menu or popup open).
+    The package scripts no longer kill the running programs."""
+    from PyQt5.QtCore import QTimer
+    state={'stamp': _package_stamp(), 'quiet': 0}
+    def check():
+        now=_package_stamp()
+        if now is None or now == state['stamp']:
+            return
+        if package_manager_running() or (busy is not None and busy()):
+            state['quiet']=0; return
+        state['quiet']+=1
+        if state['quiet'] < 2:
+            return            # one more quiet round: dpkg may run again
+        try:
+            compile(Path(__file__).read_text(encoding='utf-8'), __file__, 'exec')
+        except Exception:
+            return            # half written: try again later
+        restart_self(before_restart)
+    timer=QTimer(parent); timer.timeout.connect(check); timer.start(interval)
+    return timer
+
 def watch_compositor(parent, before_restart=None, interval=4000, initial=None):
     """Restart this Eduka program when a compositor starts or stops.
 
@@ -577,11 +662,8 @@ def watch_compositor(parent, before_restart=None, interval=4000, initial=None):
         now=compositor_running(force=True)
         if now == state['value']:
             return
-        if before_restart:
-            try: before_restart()
-            except Exception: pass
         try:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            restart_self(before_restart)
         except Exception:
             state['value']=now
     timer=QTimer(parent); timer.timeout.connect(check); timer.start(interval)
@@ -595,12 +677,53 @@ def effective_theme(value):
         return GLASS_FALLBACK[theme]
     return theme
 
+_WALL = {'conf': None, 'lum': None}
+
+def wallpaper_luminance():
+    """Mean brightness of the desktop wallpaper (0 black … 1 white), or None
+    when it is not known. Read again only when PCManFM-Qt's settings change;
+    the picture is decoded at 64 pixels wide, which is fast also for photos."""
+    conf=Path.home()/'.config'/'pcmanfm-qt'/'lxqt'/'settings.conf'
+    try:
+        st=conf.stat(); key=(st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    if key == _WALL['conf']:
+        return _WALL['lum']
+    lum=None
+    try:
+        from PyQt5.QtGui import QColor, QImageReader
+        from PyQt5.QtCore import QSize
+        path=_get_ini_value(conf, 'Desktop', 'Wallpaper', '') or ''
+        mode=(_get_ini_value(conf, 'Desktop', 'WallpaperMode', '') or '').strip().lower()
+        if mode == 'none' or not os.path.isfile(path):
+            color=(_get_ini_value(conf, 'Desktop', 'BgColor', '') or '').strip()
+            if re.fullmatch(r'#[0-9a-fA-F]{6}', color): lum=_luminance(QColor(color))
+        else:
+            reader=QImageReader(path); size=reader.size()
+            if size.isValid() and size.width() > 0:
+                reader.setScaledSize(QSize(64, max(1, round(64*size.height()/size.width()))))
+            img=reader.read()
+            if not img.isNull() and img.width()*img.height():
+                lum=sum(_luminance(QColor(img.pixel(x, y))) for y in range(img.height()) for x in range(img.width()))/(img.width()*img.height())
+    except Exception:
+        lum=None
+    _WALL.update(conf=key, lum=lum)
+    return lum
+
+def glass_boost():
+    """The light Liquid Glass gets less see-through over a dark wallpaper, so
+    the dark text on it stays readable (about 4.5:1 also over black)."""
+    lum=wallpaper_luminance()
+    if lum is None: return 1.0
+    return 1.45 if lum < 0.10 else (1.25 if lum < 0.22 else 1.0)
+
 def liquid_glass_surface(alpha_scale=1.0, radius=18, rim=1):
     """Liquid Glass surface (0.9.16): soft milky glass, a gentle highlight
     along the top edge, an even body and a slightly brighter foot, with a
     thin light rim. After github.com/ryohsuke1231/liquid-glass, drawn with
     Qt stylesheets (blur comes from picom when enabled)."""
-    k=max(0.4, min(1.6, float(alpha_scale)))
+    k=max(0.4, min(1.6, float(alpha_scale)*glass_boost()))
     a=lambda v: max(0, min(255, int(v*k)))
     return (f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,'
             f'stop:0 rgba(255,255,255,{a(150)}),stop:0.04 rgba(255,255,255,{a(118)}),'
@@ -698,12 +821,14 @@ _ARROW_PATHS = {'up': 'M2.5 7.8 6 4.2 9.5 7.8', 'down': 'M2.5 4.2 6 7.8 9.5 4.2'
 def arrow_icon_path(direction, color='#2d4a43'):
     folder=CACHE_DIR/'ui'
     path=folder/f"arrow-{direction}-{color.strip('#')}.svg"
-    if not path.exists():
-        try:
+    svg=_ARROW_SVG.format(d=_ARROW_PATHS[direction], c=color)
+    try:
+        # Rewritten when a newer version draws the arrow differently.
+        if not path.exists() or path.read_text(encoding='utf-8') != svg:
             folder.mkdir(parents=True, exist_ok=True)
-            path.write_text(_ARROW_SVG.format(d=_ARROW_PATHS[direction], c=color), encoding='utf-8')
-        except Exception:
-            pass
+            path.write_text(svg, encoding='utf-8')
+    except Exception:
+        pass
     return str(path)
 
 def arrow_qss(dark=None):
@@ -750,8 +875,24 @@ def list_icon_themes():
             names[d.name]=(label.group(1).strip() if label else d.name)
     return sorted(names.items(), key=lambda item: item[1].casefold())
 
+def _real_file(path):
+    """The file a settings path points to: a symbolic link (dotfiles kept in
+    another folder) stays a link, its target file is changed."""
+    path=Path(path)
+    try:
+        if path.is_symlink():
+            return Path(os.path.realpath(path))
+    except OSError:
+        pass
+    return path
+
+def _write_atomic_text(path, text):
+    path=Path(path)
+    tmp=path.with_suffix(path.suffix+'.eduka-tmp')
+    tmp.write_text(text, encoding='utf-8'); os.replace(tmp, path)
+
 def _set_ini_value(path, section, key, value):
-    path=Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    path=_real_file(path); path.parent.mkdir(parents=True, exist_ok=True)
     lines=path.read_text(encoding='utf-8', errors='ignore').splitlines() if path.exists() else []
     out=[]; in_section=False; done=False; seen_section=False
     for line in lines:
@@ -772,8 +913,7 @@ def _set_ini_value(path, section, key, value):
                 out.append('')
             out.append(f'[{section}]')
         out.append(f'{key}={value}')
-    tmp=path.with_suffix(path.suffix+'.eduka-tmp')
-    tmp.write_text('\n'.join(out)+'\n', encoding='utf-8'); os.replace(tmp, path)
+    _write_atomic_text(path, '\n'.join(out)+'\n')
 
 def _get_ini_value(path, section, key, default=None):
     try:
@@ -792,18 +932,20 @@ def _get_ini_value(path, section, key, default=None):
     return default
 
 def _remove_ini_value(path, section, key):
-    path=Path(path)
+    path=_real_file(path)
     if not path.exists():
         return
-    out=[]; in_section=False
+    out=[]; in_section=False; removed=False
     for line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
         stripped=line.strip()
         if stripped.startswith('[') and stripped.endswith(']'):
             in_section = stripped == f'[{section}]'
         elif in_section and re.match(r'\s*%s\s*=' % re.escape(key), line):
+            removed=True
             continue
         out.append(line)
-    path.write_text('\n'.join(out)+'\n', encoding='utf-8')
+    if removed:
+        _write_atomic_text(path, '\n'.join(out)+'\n')
 
 DARK_PALETTE = {
     # LXQt's Qt platform plugin reads these from lxqt.conf [Palette].
@@ -906,22 +1048,41 @@ SYSTEM_THEMES = {
 def _home(*parts):
     return Path.home().joinpath(*parts)
 
-def _openbox_rc(create=False):
-    for name in ('lxqt-rc.xml', 'rc.xml'):
-        path=_home('.config','openbox',name)
-        if path.exists():
-            return path
-    if create and shutil.which('openbox'):
-        # LXQt starts Openbox with ~/.config/openbox/lxqt-rc.xml; without a
-        # copy of its own the window borders could not follow the theme.
-        for src in ('/etc/xdg/openbox/lxqt-rc.xml', '/usr/share/lxqt/openbox/lxqt-rc.xml', '/etc/xdg/openbox/rc.xml'):
-            if os.path.exists(src):
-                try:
-                    dst=_home('.config','openbox','lxqt-rc.xml'); dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst); return dst
-                except Exception:
-                    break
+def _running_openbox_config():
+    """--config-file of the Openbox this account runs, if it got one."""
+    uid=os.getuid()
+    for d in Path('/proc').iterdir():
+        if not d.name.isdigit(): continue
+        try:
+            if (d/'comm').read_text().strip() != 'openbox' or d.stat().st_uid != uid: continue
+            args=[a.decode('utf-8', 'ignore') for a in (d/'cmdline').read_bytes().split(b'\0')]
+        except Exception:
+            continue
+        for i, a in enumerate(args):
+            if a == '--config-file' and i+1 < len(args): return Path(os.path.expanduser(args[i+1]))
+            if a.startswith('--config-file='): return Path(os.path.expanduser(a.split('=', 1)[1]))
+        return None
     return None
+
+def _openbox_rc_files(create=False):
+    """The Openbox files that name the window border theme: the one the
+    running Openbox reads (LXQt 1.x and 2.x start it without --config-file,
+    so ~/.config/openbox/rc.xml) and an lxqt-rc.xml of older LXQt versions
+    or earlier Eduka versions."""
+    folder=_home('.config','openbox')
+    main=_running_openbox_config() or folder/'rc.xml'
+    if not main.exists() and create and shutil.which('openbox'):
+        # Without a file of its own Openbox uses the system one, which the
+        # border theme cannot change: start from it (or from lxqt-rc.xml,
+        # which keeps the person's own key bindings).
+        for src in (folder/'lxqt-rc.xml', Path('/etc/xdg/openbox/rc.xml'), Path('/usr/share/lxqt/openbox/rc.xml')):
+            if src.is_file():
+                try:
+                    main.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(src, main)
+                except Exception:
+                    pass
+                break
+    return list(dict.fromkeys(f for f in (main, folder/'lxqt-rc.xml') if f.is_file()))
 
 def _openbox_theme(path):
     try:
@@ -930,16 +1091,18 @@ def _openbox_theme(path):
     except Exception:
         return None
 
-def _set_openbox_theme(path, name):
-    try:
-        text=path.read_text(encoding='utf-8', errors='ignore')
-        new=re.sub(r'(<theme>.*?<name>)[^<]*(</name>)', lambda m: m.group(1)+name+m.group(2), text, count=1, flags=re.S)
-        if new != text:
-            path.write_text(new, encoding='utf-8')
-        if shutil.which('openbox'):
-            safe_popen(['openbox','--reconfigure'])
-    except Exception:
-        pass
+def _set_openbox_theme(paths, name):
+    changed=False
+    for path in paths:
+        try:
+            text=path.read_text(encoding='utf-8', errors='ignore')
+            new=re.sub(r'(<theme>.*?<name>)[^<]*(</name>)', lambda m: m.group(1)+name+m.group(2), text, count=1, flags=re.S)
+            if new != text:
+                path.write_text(new, encoding='utf-8'); changed=True
+        except Exception:
+            pass
+    if changed and shutil.which('openbox'):
+        safe_popen(['openbox','--reconfigure'])
 
 def _xfwm4_theme():
     if shutil.which('xfconf-query') is None:
@@ -965,15 +1128,25 @@ def _xfwm4_set(prop, kind, value):
 
 def _set_xfwm4_theme(name):
     if shutil.which('xfconf-query'):
-        safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-s',name])
+        # -n -t string: also creates the property when xfwm4 never stored one.
+        safe_popen(['xfconf-query','-c','xfwm4','-p','/general/theme','-n','-t','string','-s',name])
+
+def follow_icon_theme_name(dark):
+    """The Papirus variant that goes with a light or a dark theme. Papirus-
+    Light has dark status icons (Wi-Fi, sound, battery) for a light panel;
+    plain Papirus draws them light grey, for dark panels, which made them
+    almost invisible on the light Eduka-Panel."""
+    if dark:
+        return 'Papirus-Dark'
+    return 'Papirus-Light' if _theme_exists('Papirus-Light') else 'Papirus'
 
 def _follow_icon_theme(dark):
-    """One icon style everywhere: with the theme, Papirus (light themes) or
-    Papirus-Dark (dark themes) for LXQt, GTK and Eduka — unless the person
+    """One icon style everywhere: with the theme, Papirus-Light (light themes)
+    or Papirus-Dark (dark themes) for LXQt, GTK and Eduka — unless the person
     chose another icon theme in Eduka-Settings (icon_theme_follow off)."""
     try:
         if not read_desktop_config().get('icon_theme_follow', True): return False
-        want='Papirus-Dark' if dark else 'Papirus'
+        want=follow_icon_theme_name(dark)
         if not _theme_exists(want): return False
         lxqt=_home('.config', 'lxqt', 'lxqt.conf')
         gtk=[_home('.config', g, 'settings.ini') for g in ('gtk-3.0', 'gtk-4.0')]
@@ -982,6 +1155,25 @@ def _follow_icon_theme(dark):
         return set_icon_theme(want)
     except Exception:
         return False
+
+_GSETTINGS_DONE = {}
+
+def _sync_gsettings(gtk_name, dark=False):
+    """The GNOME interface keys (dconf), like LXQt Appearance writes them:
+    GTK 4 / libadwaita, Electron and Flatpak programs (xdg-desktop-portal)
+    read the theme, dark mode, icons and cursor from there."""
+    if not shutil.which('gsettings'):
+        return
+    want={'gtk-theme': gtk_name, 'color-scheme': 'prefer-dark' if dark else 'default'}
+    icons=_get_ini_value(_home('.config', 'lxqt', 'lxqt.conf'), 'General', 'icon_theme')
+    if icons: want['icon-theme']=icons.strip('"')
+    cursor=current_cursor_theme()
+    if cursor: want['cursor-theme']=cursor
+    for key, value in want.items():
+        if not value or _GSETTINGS_DONE.get(key) == value:
+            continue
+        _GSETTINGS_DONE[key]=value
+        safe_popen(['gsettings', 'set', 'org.gnome.desktop.interface', key, value])
 
 GTK4_MARK = '/* Eduka-Desktop theme — written by Eduka-Settings, replaced on every theme change */'
 
@@ -1002,8 +1194,11 @@ def _link_gtk4_theme(name, dark=False):
         if src is None:
             if css.exists(): css.unlink()
             return False
+        text=f'{GTK4_MARK}\n@import url("file://{src}");\n'
+        if css.exists() and css.read_text(encoding='utf-8', errors='ignore') == text:
+            return False
         css.parent.mkdir(parents=True, exist_ok=True)
-        css.write_text(f'{GTK4_MARK}\n@import url("file://{src}");\n', encoding='utf-8')
+        css.write_text(text, encoding='utf-8')
         return True
     except Exception:
         return False
@@ -1023,7 +1218,7 @@ def apply_desktop_theme(theme=None):
     if theme in SYSTEM_THEMES:
         gtk_name, prefer_dark, palette, wm_name = SYSTEM_THEMES[theme]
         if not THEME_BACKUP.exists():
-            ob=_openbox_rc()
+            ob=(_openbox_rc_files() or [None])[0]
             backup={
                 'gtk3_theme': _get_ini_value(gtk3, 'Settings', 'gtk-theme-name'),
                 'gtk3_dark': _get_ini_value(gtk3, 'Settings', 'gtk-application-prefer-dark-theme'),
@@ -1034,6 +1229,7 @@ def apply_desktop_theme(theme=None):
                 'openbox': _openbox_theme(ob) if ob else None,
                 'xfwm4': _xfwm4_theme(),
                 'xfwm4_compositing': _xfwm4_get('/general/use_compositing'),
+                'xfwm4_dock_shadow': _xfwm4_get('/general/show_dock_shadow'),
             }
             write_json(THEME_BACKUP, backup)
         # Only changed values are written: Eduka-Panel watches these files.
@@ -1063,12 +1259,22 @@ def apply_desktop_theme(theme=None):
             _set_ini_value(lxqt, 'General', 'theme', lxqt_theme)
         _link_gtk4_theme(gtk_name, prefer_dark)
         _follow_icon_theme(prefer_dark)
-        ob=_openbox_rc(create=True)
-        if ob and _openbox_theme(ob) != wm_name: _set_openbox_theme(ob, wm_name)
-        if shutil.which('xfwm4') and _xfwm4_theme() not in (None, wm_name):
-            _set_xfwm4_theme(wm_name)
-            # The low theme also switches xfwm4's compositor off.
-            _xfwm4_set('/general/use_compositing', 'bool', 'false' if theme == THEME_LOW else 'true')
+        _sync_gsettings(gtk_name, prefer_dark)
+        ob=[f for f in _openbox_rc_files(create=True) if _openbox_theme(f) != wm_name]
+        if ob: _set_openbox_theme(ob, wm_name)
+        if shutil.which('xfwm4'):
+            xf=_xfwm4_theme()
+            xfwm4_used=xf is not None or _process_running('xfwm4')
+            # Also when xfwm4 never stored a theme (it then uses "Default").
+            if xf != wm_name and xfwm4_used:
+                _set_xfwm4_theme(wm_name)
+                # The low theme also switches xfwm4's compositor off.
+                _xfwm4_set('/general/use_compositing', 'bool', 'false' if theme == THEME_LOW else 'true')
+            # xfwm4 draws a square shadow under dock windows, also see-through
+            # ones: dark corners around the rounded Eduka-Panel. Eduka-Panel is
+            # the only dock of an Eduka-Desktop session.
+            if xfwm4_used and _xfwm4_get('/general/show_dock_shadow') != 'false':
+                _xfwm4_set('/general/show_dock_shadow', 'bool', 'false')
         return True
     if not THEME_BACKUP.exists():
         return False
@@ -1090,10 +1296,10 @@ def apply_desktop_theme(theme=None):
         old=(backup.get('palette') or {}).get(key)
         if old: _set_ini_value(lxqt, 'Palette', key, old)
         else: _remove_ini_value(lxqt, 'Palette', key)
-    ob=_openbox_rc()
-    if ob and backup.get('openbox'): _set_openbox_theme(ob, backup['openbox'])
+    if backup.get('openbox'): _set_openbox_theme(_openbox_rc_files(), backup['openbox'])
     if backup.get('xfwm4'): _set_xfwm4_theme(backup['xfwm4'])
     if backup.get('xfwm4_compositing'): _xfwm4_set('/general/use_compositing', 'bool', backup['xfwm4_compositing'])
+    if backup.get('xfwm4_dock_shadow'): _xfwm4_set('/general/show_dock_shadow', 'bool', backup['xfwm4_dock_shadow'])
     try: THEME_BACKUP.unlink()
     except Exception: pass
     try: repair_qt_palette()
@@ -1138,18 +1344,25 @@ def tetun_pack_installed():
     """The Tetun language pack (eduka-language-pack-tet) gives other
     programs Tetun texts too (gettext and Qt translations under
     /usr/share/locale/tet)."""
-    try:
-        status=Path('/var/lib/dpkg/status').read_text(encoding='utf-8', errors='ignore')
-        m=re.search(r'^Package: '+re.escape(TETUN_PACK)+r'\n(?:[^\n]+\n)*?Status: ([^\n]+)', status, re.M)
-        if m and 'installed' in m.group(1) and 'not-installed' not in m.group(1):
-            return True
-    except Exception:
-        pass
+    if 'tet' in _PACK_CACHE:
+        return _PACK_CACHE['tet']
+    found=False
     d=Path('/usr/share/locale/tet/LC_MESSAGES')
     try:
-        return d.is_dir() and any(d.iterdir())
+        found=d.is_dir() and any(d.iterdir())
     except Exception:
-        return False
+        found=False
+    if not found and shutil.which('dpkg-query'):
+        # Ask dpkg (its database is not read directly).
+        try:
+            out=subprocess.run(['dpkg-query', '-W', '-f=${db:Status-Abbrev}', TETUN_PACK], capture_output=True, text=True, timeout=5).stdout
+            found=out.startswith('ii')
+        except Exception:
+            found=False
+    _PACK_CACHE['tet']=found
+    return found
+
+_PACK_CACHE = {}
 
 SESSION_LANGUAGE_KEYS = ('LANGUAGE',)
 
@@ -1584,9 +1797,10 @@ ACCENT_CHOICES = [
     ('#ea580c', 'Orange'), ('#d97706', 'Amber'), ('#65a30d', 'Lime'), ('#92400e', 'Brown'),
     ('#475569', 'Slate'),
 ]
-_ACCENT_PRIMARY = ('#00a879', '#26a69a', '#1e9bd7', '#315bef')
-_ACCENT_LIGHT = ('#00b683', '#4db6ac', '#14bd8e', '#3fbfa0', '#35aee6', '#4a6ff2')
-_ACCENT_DARK = ('#00946b', '#00966c', '#00916a', '#008f68', '#00785a', '#00805f', '#126f9c', '#2a4fd6')
+# Eduka-Pastel's mint (#3fa684 and its shades) follows the chosen accent too.
+_ACCENT_PRIMARY = ('#00a879', '#26a69a', '#1e9bd7', '#315bef', '#3fa684')
+_ACCENT_LIGHT = ('#00b683', '#4db6ac', '#14bd8e', '#3fbfa0', '#35aee6', '#4a6ff2', '#5bbf9c', '#6fcaa8')
+_ACCENT_DARK = ('#00946b', '#00966c', '#00916a', '#008f68', '#00785a', '#00805f', '#126f9c', '#2a4fd6', '#2f8f6f', '#3f9a7e', '#2a7d61')
 _ACCENT_STATE = {'stamp': None, 'accent': '', 'rx': None, 'map': {}}
 
 def custom_accent():
@@ -1632,13 +1846,36 @@ def accentize(text):
         m['0,168,121']=f'{c.red()},{c.green()},{c.blue()}'
         m['0, 168, 121']=f'{c.red()}, {c.green()}, {c.blue()}'
         m['0,120,90']=f'{d.red()},{d.green()},{d.blue()}'
-        for rgb in ('30,155,215', '38,166,154', '49,91,239'):
+        for rgb in ('30,155,215', '38,166,154', '49,91,239', '63,166,132'):
             m[rgb]=m['0,168,121']
         m['77,182,172']=','.join(str(x) for x in (lambda q: (q.red(), q.green(), q.blue()))(QColor(light)))
         _ACCENT_STATE['map']=m
         _ACCENT_STATE['rx']=re.compile('|'.join(re.escape(k) for k in sorted(m, key=len, reverse=True)), re.I)
     m=_ACCENT_STATE['map']
     return _ACCENT_STATE['rx'].sub(lambda mo: m.get(mo.group(0).lower(), mo.group(0)), text)
+
+def _luminance(c):
+    def ch(v):
+        v=v/255.0
+        return v/12.92 if v <= 0.03928 else ((v+0.055)/1.055)**2.4
+    return 0.2126*ch(c.red())+0.7152*ch(c.green())+0.0722*ch(c.blue())
+
+def contrast_ratio(a, b):
+    """WCAG contrast ratio of two QColors (1 … 21)."""
+    la, lb=_luminance(a), _luminance(b)
+    return (max(la, lb)+0.05)/(min(la, lb)+0.05)
+
+def readable_color(color, background, minimum=4.5):
+    """`color` mixed towards black (light background) or white (dark
+    background) until text in it has the contrast `minimum` (WCAG AA: 4.5)."""
+    from PyQt5.QtGui import QColor
+    c=QColor(color); bg=QColor(background)
+    target=QColor('#ffffff') if _luminance(bg) < 0.3 else QColor('#000000')
+    for _ in range(20):
+        if contrast_ratio(c, bg) >= minimum:
+            break
+        c=QColor(int(c.red()*0.88+target.red()*0.12), int(c.green()*0.88+target.green()*0.12), int(c.blue()*0.88+target.blue()*0.12))
+    return c
 
 def accent_rgb():
     from PyQt5.QtGui import QColor
@@ -1723,7 +1960,7 @@ def round_combo(combo, radius=10):
             return combo
         box.setWindowFlags(box.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         box.setAttribute(Qt.WA_TranslucentBackground, True)
-        box.setStyleSheet(f'background:transparent;border:0;')
+        box.setStyleSheet('background:transparent;border:0;')
         dark=is_dark_theme()
         view.setStyleSheet(f'QAbstractItemView{{border-radius:{radius}px;padding:4px;outline:0;'
                            f'background:{"#2f2f2f" if dark else "#ffffff"};color:{"#ffffff" if dark else "#1f2d2a"};'
@@ -1854,6 +2091,7 @@ DEFAULT_PANEL = {
     "clock_seconds": False,
     "clock_blink": False,
     "clock_color": "",
+    "weather": True,
     "notify_seconds": 7,
     "notify_history": True,
     "reserve_workarea": True,
@@ -1925,13 +2163,24 @@ CATEGORY_EXEC_OVERRIDES = {
     'brasero': 'Sound & Video', 'k3b': 'Sound & Video',
 }
 
-DESKTOP_DIRS = [
-    '/usr/share/applications', '/usr/local/share/applications',
-    str(Path.home()/'.local/share/applications'),
-    '/var/lib/snapd/desktop/applications',
-    '/var/lib/flatpak/exports/share/applications',
-    str(Path.home()/'.local/share/flatpak/exports/share/applications'),
-]
+def _application_dirs():
+    """applications/ folders in XDG order: the user's own first, so a
+    changed or hidden copy in ~/.local/share/applications wins (like the
+    LXQt menu), then $XDG_DATA_DIRS, Flatpak and Snap."""
+    home=os.environ.get('XDG_DATA_HOME') or str(Path.home()/'.local/share')
+    dirs=[home]
+    dirs+=[d for d in (os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share').split(':') if d]
+    dirs+=[str(Path.home()/'.local/share/flatpak/exports/share'), '/var/lib/flatpak/exports/share',
+           '/usr/local/share', '/usr/share', '/var/lib/snapd/desktop']
+    out=[]
+    for d in dirs:
+        path=os.path.join(d, 'applications')
+        if path not in out: out.append(path)
+    return out
+
+DESKTOP_DIRS = _application_dirs()
+# Bumped when the application list changes its form: old caches are rebuilt.
+APP_REGISTRY_FORMAT = 4
 HIDE_IDS = {
     'edukasaun-desktop.desktop','eduka-menu-settings.desktop','eduka-settings.desktop',
     'eduka-menu.desktop','eduka-panel.desktop','eduka-about.desktop',
@@ -2039,6 +2288,21 @@ def save_desktop_config(c):
     current=read_desktop_config(); current.update(c); current['theme_style']=normalize_theme_style(current.get('theme_style')); write_json(desktop_config_path(), current); touch_reload()
 def touch_reload(): ensure_dirs(); (RUNTIME_DIR/'reload').write_text(str(time.time()))
 
+def peek_desktop_config():
+    """The desktop settings without creating any file (start-up checks)."""
+    try:
+        data=json.loads(desktop_config_path().read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def autostart_elsewhere():
+    """True when the session autostart started an Eduka program outside an
+    Eduka-Desktop session (a plain LXQt session): LXQt's own panel, menu and
+    notifications stay there. "run_in_lxqt_sessions": true in the desktop
+    settings keeps the old behaviour."""
+    return '--autostart' in sys.argv and not in_eduka_session() and not peek_desktop_config().get('run_in_lxqt_sessions', False)
+
 def in_eduka_session():
     """True inside an Eduka-Desktop login session (set by eduka-desktop-session)."""
     return bool(os.environ.get('EDUKA_DESKTOP_SESSION'))
@@ -2058,8 +2322,25 @@ def stop_lxqt_module_in_eduka_session(module, process):
         return safe_popen(['qdbus','org.lxqt.session','/LXQtSession','org.lxqt.session.stopModule',module])
     return False
 
+LXQT_NOTIFY_MARK = 'Disabled by Edukasaun Desktop'
 LXQT_NOTIFY_OVERRIDE = '[Desktop Entry]\nType=Application\nName=LXQt Notification Daemon\nExec=lxqt-notificationd\n' \
-    'Hidden=true\nComment=Disabled by Edukasaun Desktop: Eduka-Panel shows notifications.\n'
+    f'Hidden=true\nComment={LXQT_NOTIFY_MARK}: Eduka-Panel shows notifications.\n'
+
+def lxqt_notify_override_path():
+    return Path.home()/'.config/autostart/lxqt-notifications.desktop'
+
+def restore_lxqt_notifications():
+    """Outside Eduka-Desktop (a plain LXQt session) LXQt's own notification
+    daemon is used again: the override Eduka-Panel wrote is removed (only
+    Eduka's own file, recognised by its comment)."""
+    path=lxqt_notify_override_path()
+    try:
+        if path.is_file() and not path.is_symlink() and LXQT_NOTIFY_MARK in path.read_text(encoding='utf-8', errors='ignore'):
+            path.unlink()
+            return True
+    except Exception:
+        pass
+    return False
 
 def stop_lxqt_notifications_in_eduka_session():
     """Eduka-Panel shows all notifications itself in Eduka-Desktop sessions:
@@ -2068,7 +2349,7 @@ def stop_lxqt_notifications_in_eduka_session():
     if not in_eduka_session():
         return False
     try:
-        override=Path.home()/'.config/autostart/lxqt-notifications.desktop'
+        override=lxqt_notify_override_path()
         if not override.exists():
             override.parent.mkdir(parents=True, exist_ok=True); override.write_text(LXQT_NOTIFY_OVERRIDE, encoding='utf-8')
     except Exception:
@@ -2192,8 +2473,8 @@ def set_menu_daemon_autostart(enabled):
             entry.write_text(
                 '[Desktop Entry]\n'
                 'Type=Application\n'
-                'Name=Eduka Menu Fast Daemon\n'
-                'Exec=eduka-menu --daemon\n'
+                'Name=Eduka-Desktop (start menu)\n'
+                'Exec=eduka-menu --daemon --autostart\n'
                 'Hidden=true\n',
                 encoding='utf-8'
             )
@@ -2227,6 +2508,34 @@ def registry_update(section, values):
     try: write_json(STATE_REGISTRY_PATH, data)
     except Exception: pass
     return data
+
+PANEL_COMMAND_PATH = RUNTIME_DIR/'panel-command'
+
+def panel_running():
+    """True while an Eduka-Panel of this session holds its lock."""
+    try:
+        with open(RUNTIME_DIR/'panel.lock', 'a') as handle:   # 'a' keeps the file as it is
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    return False
+
+def request_panel_restart():
+    """Restart Eduka-Panel from Eduka-Settings: the running panel starts
+    itself again (same process, so lxqt-session keeps it); without a panel
+    a new one is started."""
+    ensure_dirs()
+    if panel_running():
+        try:
+            PANEL_COMMAND_PATH.write_text(json.dumps({'action': 'restart', 'time': time.time()}))
+            return True
+        except OSError:
+            return False
+    return safe_popen(['eduka-panel'])
 
 def send_menu_command(action='toggle'):
     ensure_dirs()
@@ -2434,7 +2743,17 @@ def _icon_index(roots):
     if _ICON_INDEX['roots'] != key:
         files={}
         for i, root in enumerate(roots):
-            for dirpath, _dirs, names in os.walk(str(root), followlinks=True):
+            seen_dirs=set()
+            for dirpath, dirs, names in os.walk(str(root), followlinks=True):
+                # Linked folders (Papirus "@2x") are followed once: a link
+                # back to a parent folder must not loop forever.
+                try:
+                    st=os.stat(dirpath); ident=(st.st_dev, st.st_ino)
+                except OSError:
+                    dirs[:]=[]; continue
+                if ident in seen_dirs:
+                    dirs[:]=[]; continue
+                seen_dirs.add(ident)
                 for fname in names:
                     stem, ext=os.path.splitext(fname)
                     if ext in ('.svg', '.png', '.xpm'):
@@ -2535,76 +2854,171 @@ def menu_button_icon_size(icon, height, keep_aspect=True):
             pass
     return QSize(width, height)
 
+_FIELD_CODES = 'fFuUickdDnNvm'
+
 def clean_exec(cmd):
+    """The Exec line without its field codes: %f, %U, … are dropped (also the
+    quoted "%f" some entries use, which would pass an empty argument) and %%
+    becomes %."""
     if not cmd: return ''
-    for p in ['%f','%F','%u','%U','%i','%c','%k','%d','%D','%n','%N','%v','%m']:
-        cmd=cmd.replace(p,'')
+    cmd=re.sub(r'(["\'])%[' + _FIELD_CODES + r']\1', '', cmd)
+    cmd=re.sub(r'%(.)', lambda m: '%' if m.group(1) == '%' else ('' if m.group(1) in _FIELD_CODES else m.group(0)), cmd)
     return cmd.strip()
 
-def safe_popen(cmd, shell=False):
+def safe_popen(cmd):
+    """Start a helper program in the background (never through a shell)."""
     try:
-        if shell:
-            subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
-        else:
-            if isinstance(cmd, str): cmd=shlex.split(cmd)
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
+        if isinstance(cmd, str): cmd=shlex.split(cmd)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=child_env())
         return True
     except Exception:
         return False
 
-def launch_app(cmd, app_name=''):
-    cmd=clean_exec(cmd)
+def terminal_command(args):
+    """Run a Terminal=true application (htop, vim, …) inside a terminal
+    window; without one it would run invisibly."""
+    for term in ('x-terminal-emulator', 'qterminal', 'xterm'):
+        path=shutil.which(term)
+        if not path:
+            continue
+        if 'qterminal' in os.path.basename(os.path.realpath(path)):
+            return [path, '-e', shlex.join(args)]   # qterminal takes one command line
+        return [path, '-e', *args]
+    return list(args)
+
+# Scratch 3 and TurboWarp (Electron) need these to show their stage with
+# WebGL on old or blocklisted graphics chips.
+WEBGL_FALLBACK_APPS = {'scratch-desktop', 'scratch3', 'turbowarp', 'turbowarp-desktop',
+                       'org.turbowarp.turbowarp', 'edu.mit.scratch'}
+
+def _webgl_fallback_app(args):
+    names={os.path.basename(a).casefold() for a in args[:1]}
+    if args and os.path.basename(args[0]) == 'flatpak':
+        names|={a.casefold() for a in args[1:] if '.' in a and not a.startswith('-')}
+    return bool(names & WEBGL_FALLBACK_APPS)
+
+def launch_app(cmd, app_name='', terminal=False, workdir='', clean=True):
+    """Start an application from its Exec line, without a shell (as the
+    desktop entry specification says). `clean=False`: the field codes were
+    removed already (the application list stores cleaned Exec lines)."""
+    cmd=clean_exec(cmd) if clean else (cmd or '').strip()
     if not cmd: return False
-    env=child_env()
-    # Safer defaults for old CPUs, VMs and 512MB targets. This helps WebGL/Electron
-    # apps such as TurboWarp use software rendering when hardware acceleration is missing.
-    env.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
-    env.setdefault('WEBKIT_DISABLE_DMABUF_RENDERER', '1')
-    lower=(cmd+' '+app_name).lower()
-    if 'turbowarp' in lower or 'scratch' in lower:
-        env.setdefault('MESA_GL_VERSION_OVERRIDE', '3.3')
-        if '--ignore-gpu-blocklist' not in cmd:
-            cmd += ' --ignore-gpu-blocklist --enable-unsafe-swiftshader'
     try:
         args=shlex.split(cmd)
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    except ValueError:
+        return False
+    if not args: return False
+    # Broken entries seen in the wild: "VAR=value program" and "~/bin/program".
+    if '=' in args[0] and not args[0].startswith('/'):
+        args=['env']+args
+    elif args[0].startswith('~'):
+        args[0]=os.path.expanduser(args[0])
+    env=child_env()
+    # Software OpenGL only where hardware OpenGL is missing (virtual machines,
+    # llvmpipe): forcing it on every computer made games, videos and browsers slow.
+    if virtual_machine() or not opengl_is_good():
+        env.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
+    env.setdefault('WEBKIT_DISABLE_DMABUF_RENDERER', '1')
+    if _webgl_fallback_app(args):
+        env.setdefault('MESA_GL_VERSION_OVERRIDE', '3.3')
+        if '--ignore-gpu-blocklist' not in args:
+            args += ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader']
+    cwd=workdir if workdir and os.path.isdir(os.path.expanduser(workdir)) else None
+    if cwd: cwd=os.path.expanduser(cwd)
+    if terminal: args=terminal_command(args)
+    try:
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env, cwd=cwd)
         return True
     except Exception:
-        try:
-            subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-            return True
-        except Exception:
-            return False
+        return False
 
-def parse_desktop_file(path):
+def launch_entry(app):
+    """Start an application of the application list (Terminal= and Path=
+    of its .desktop file are used)."""
+    app=app or {}
+    return launch_app(app.get('exec', ''), app.get('name', ''), bool(app.get('terminal')), app.get('workdir', ''), clean=False)
+
+def current_desktops():
+    """Desktop names for OnlyShowIn / NotShowIn (Eduka runs on LXQt)."""
+    names={x.strip().casefold() for x in (os.environ.get('XDG_CURRENT_DESKTOP') or '').split(':') if x.strip()}
+    return names | {'lxqt'}
+
+def locale_keys():
+    """['pt_BR', 'pt'], ['id_ID', 'id'], ['tet', 'pt_PT', 'pt'] …: the order in
+    which translated names (Name[pt_BR]) of applications are used."""
+    lang=ui_language()
+    if lang == 'tet':
+        return ['tet', 'pt_PT', 'pt']    # Tetun, else Portuguese (as in Timor-Leste)
+    if not lang or lang.startswith(('en', 'C')):
+        return []
+    keys=[lang]
+    base=lang.split('_')[0]
+    if base != lang: keys.append(base)
+    return keys
+
+def _localized(de, key, keys):
+    for k in keys:
+        value=de.get(f'{key}[{k}]')
+        if value and value.strip():
+            return value.strip()
+    return (de.get(key) or '').strip()
+
+def _true(value):
+    return str(value or '').strip().lower() == 'true'
+
+def _try_exec_ok(value):
+    value=str(value or '').strip()
+    if not value:
+        return True
+    if os.path.isabs(value):
+        return os.access(value, os.X_OK)
+    return shutil.which(value) is not None
+
+def desktop_entry_state(path, keys=None, desktops=None):
+    """(app or None, shown): shown is False for an entry that hides
+    the application (NoDisplay, Hidden, OnlyShowIn/NotShowIn, TryExec)."""
     cp=configparser.ConfigParser(interpolation=None, strict=False)
     try: cp.read(path, encoding='utf-8')
     except Exception:
         try: cp.read(path)
-        except Exception: return None
-    if 'Desktop Entry' not in cp: return None
+        except Exception: return None, False
+    if 'Desktop Entry' not in cp: return None, False
     de=cp['Desktop Entry']
-    if de.get('Type','Application') != 'Application': return None
-    if de.get('NoDisplay','false').lower() == 'true' or de.get('Hidden','false').lower() == 'true': return None
+    if de.get('Type','Application') != 'Application': return None, False
+    if _true(de.get('NoDisplay')) or _true(de.get('Hidden')): return None, False
+    desktops=current_desktops() if desktops is None else desktops
+    only=[x.strip().casefold() for x in (de.get('OnlyShowIn') or '').split(';') if x.strip()]
+    if only and not desktops.intersection(only): return None, False
+    never=[x.strip().casefold() for x in (de.get('NotShowIn') or '').split(';') if x.strip()]
+    if never and desktops.intersection(never): return None, False
+    if not _try_exec_ok(de.get('TryExec')): return None, False
+    keys=locale_keys() if keys is None else keys
     desktop_id=os.path.basename(path)
-    name=de.get('Name','').strip()
-    exec_cmd=de.get('Exec','').strip()
-    if is_internal_desktop_entry(desktop_id, name, exec_cmd): return None
-    if not name or not exec_cmd: return None
+    raw_name=(de.get('Name') or '').strip()
+    exec_cmd=(de.get('Exec') or '').strip()
+    if is_internal_desktop_entry(desktop_id, raw_name, exec_cmd): return None, False
+    if not raw_name or not exec_cmd: return None, False
     return {
-        'name': name,
-        'generic': de.get('GenericName',''),
+        'name': _localized(de, 'Name', keys),
+        'name_en': raw_name,
+        'generic': _localized(de, 'GenericName', keys),
+        'comment': _localized(de, 'Comment', keys),
         'icon': de.get('Icon','application-x-executable'),
         'exec': clean_exec(exec_cmd),
+        'terminal': _true(de.get('Terminal')),
+        'workdir': (de.get('Path') or '').strip(),
         'categories': de.get('Categories',''),
         'path': path,
         'desktop_id': desktop_id,
         'startup_wm_class': de.get('StartupWMClass',''),
-        'keywords': de.get('Keywords','')
-    }
+        'keywords': ';'.join(x for x in (_localized(de, 'Keywords', keys), de.get('Keywords','')) if x)
+    }, True
+
+def parse_desktop_file(path):
+    return desktop_entry_state(path)[0]
 
 def _desktop_registry_signature():
-    sig=[]
+    sig=[('format', APP_REGISTRY_FORMAT, DEB_VERSION), ('lang', ','.join(locale_keys())), ('desktops', ','.join(sorted(current_desktops())))]
     for d in DESKTOP_DIRS:
         d=os.path.expanduser(d)
         try:
@@ -2682,12 +3096,18 @@ def load_apps(force=False):
                 return apps
         except Exception:
             pass
-    seen={}; apps=[]
+    seen={}; apps=[]; ids=set()
+    keys=locale_keys(); desktops=current_desktops()
     for d in DESKTOP_DIRS:
         d=os.path.expanduser(d)
         if not os.path.isdir(d): continue
-        for path in glob.glob(d+'/*.desktop'):
-            app=parse_desktop_file(path)
+        for path in sorted(glob.glob(d+'/*.desktop')):
+            desktop_id=os.path.basename(path)
+            # The first file with a desktop ID wins, also when it hides the
+            # application (a user copy with NoDisplay=true or Hidden=true).
+            if desktop_id in ids: continue
+            ids.add(desktop_id)
+            app, _shown=desktop_entry_state(path, keys, desktops)
             if not app: continue
             exe=(app['exec'].split() or [''])[0]
             key=(app['name'].casefold(), os.path.basename(exe).casefold(), app['desktop_id'].casefold())
@@ -2707,7 +3127,8 @@ def rebuild_app_registry():
     return load_apps(force=True)
 
 def app_override_category(app):
-    name=(app.get('name','') or '').strip().casefold()
+    # The English name decides (names may be translated now).
+    name=(app.get('name_en','') or app.get('name','') or '').strip().casefold()
     exe=os.path.basename((app.get('exec','').split() or [''])[0]).casefold()
     did=(app.get('desktop_id','') or '').replace('.desktop','').casefold()
     for key, cat in CATEGORY_NAME_OVERRIDES.items():
@@ -2727,7 +3148,7 @@ def app_matches_category(app, category):
     if override:
         return category == override
     cats=(app.get('categories','') or '').lower()
-    name=(app.get('name','') or '').lower()
+    name=((app.get('name_en','') or '')+' '+(app.get('name','') or '')).lower()
     did=(app.get('desktop_id','') or '').lower()
     exe=os.path.basename((app.get('exec','').split() or [''])[0]).lower()
     blob=' '.join([cats,name,did,exe])
@@ -2864,7 +3285,7 @@ def is_desktop_shell_app(app):
 def filter_apps(apps, category='All', query=''):
     q=(query or '').strip().casefold(); res=[]
     for app in apps:
-        text=' '.join([app.get('name',''), app.get('generic',''), app.get('keywords',''), app.get('categories','')]).casefold()
+        text=' '.join([app.get('name',''), app.get('name_en',''), app.get('generic',''), app.get('comment',''), app.get('keywords',''), app.get('categories','')]).casefold()
         if q and q not in text: continue
         if app_matches_category(app, category): res.append(app)
     return sorted(res, key=lambda a: a['name'].casefold())
@@ -2913,22 +3334,46 @@ def find_app_for_window(title, wm_class=''):
                 return app
 
     best=None; best_score=0
+    t_words=set(t.split()); c_words=set(c.split()); t_pad=f' {t} '; c_pad=f' {c} '
     for app in apps:
-        exe=os.path.basename((app.get('exec','').split() or [''])[0]).casefold()
-        tokens=[app.get('name',''), app.get('startup_wm_class',''), app.get('desktop_id','').replace('.desktop',''), exe]
+        tokens=[app.get('name',''), app.get('name_en',''), app.get('startup_wm_class',''), app.get('desktop_id','').replace('.desktop',''), _exec_identity(app.get('exec',''))]
         norm_tokens=[_norm_window_text(x) for x in tokens if x]
         score=0
         for tok in norm_tokens:
             if not tok: continue
-            if c and (tok == c or tok in c or c in tok): score=max(score, 100)
-            elif t and (tok == t or tok in t or t in tok): score=max(score, 80)
+            tok_pad=f' {tok} '
+            # Whole words only: "Reset settings" is not "…-Setting", a
+            # window of class "python3" is not every Python program.
+            if c and (tok == c or tok_pad in c_pad or c_pad in tok_pad): score=max(score, 100)
+            elif t and (tok == t or tok_pad in t_pad): score=max(score, 80)
             else:
-                # partial words are useful for titles like "file.txt - FeatherPad".
+                # The name in a title like "file.txt - FeatherPad".
                 for part in tok.split():
-                    if len(part) >= 4 and part not in GENERIC_WINDOW_WORDS and (part in t or part in c): score=max(score, 40)
+                    if len(part) >= 4 and part not in GENERIC_WINDOW_WORDS and (part in t_words or part in c_words): score=max(score, 40)
         if score > best_score:
             best_score=score; best=app
     return best
+
+# Programs that only start the real application: the next argument names it.
+_EXEC_WRAPPERS = {'env', 'sh', 'bash', 'dash', 'python', 'python3', 'perl', 'ruby', 'node', 'java', 'mono',
+                  'wine', 'sudo', 'pkexec', 'flatpak', 'snap', 'nice', 'ionice', 'exec', 'run',
+                  'gtk-launch', 'dbus-launch', 'xdg-open', 'torsocks'}
+
+def _exec_identity(cmd):
+    """The program an Exec line really starts: "python3 -m thonny" → thonny,
+    "flatpak run org.gnome.gedit" → org.gnome.gedit."""
+    try:
+        args=shlex.split(cmd or '')
+    except ValueError:
+        args=(cmd or '').split()
+    for a in args:
+        if a.startswith('-') or ('=' in a and not a.startswith('/')):
+            continue
+        base=os.path.basename(a).casefold()
+        if base in _EXEC_WRAPPERS:
+            continue
+        return re.sub(r'\.(py|sh|pl|rb|js|jar|exe)$', '', base)
+    return ''
 
 def distro_info():
     """Return the public Edukasaun identity shown in System Information.
@@ -2997,11 +3442,8 @@ SESSION_COMMANDS = {
 }
 
 def session_action(action):
-    """Run the first available command for a session action.
-
-    launch_app() falls back to a shell and therefore reports success even when
-    the program is missing, so the executable is checked before it is used.
-    """
+    """Run the first available command for a session action (a missing
+    program is skipped, so the next one is tried)."""
     for cmd in SESSION_COMMANDS.get(action, []):
         if not shutil.which(cmd[0]) or not all(cmd):
             continue
@@ -3118,9 +3560,10 @@ def _get_json(url, timeout=6):
         return json.loads(r.read(200000).decode('utf-8', 'replace'))
 
 def weather_location():
-    """(lat, lon, city) of this computer."""
-    for url, keys in (('https://get.geojs.io/v1/ip/geo.json', ('latitude', 'longitude', 'city')),
-                      ('https://ipapi.co/json/', ('latitude', 'longitude', 'city'))):
+    """(lat, lon, city) of this computer: GeoJS (open source, no account),
+    otherwise the city of the time zone. Only one outside service is asked
+    (the weather can be switched off in Eduka-Settings → Clock)."""
+    for url, keys in (('https://get.geojs.io/v1/ip/geo.json', ('latitude', 'longitude', 'city')),):
         try:
             d=_get_json(url)
             lat=float(d[keys[0]]); lon=float(d[keys[1]])

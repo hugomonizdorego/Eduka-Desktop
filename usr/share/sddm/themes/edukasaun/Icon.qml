@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 // Small line icons for the Edukasaun login screen, drawn so they look the
 // same on every computer (no icon theme or symbol font is needed).
 import QtQuick 2.15

@@ -1,0 +1,3 @@
+/etc/sddm.conf.d/10-edukasaun.conf
+/etc/xdg/autostart/eduka-menu-daemon.desktop
+/etc/xdg/autostart/eduka-panel.desktop

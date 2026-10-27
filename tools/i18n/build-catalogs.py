@@ -21,6 +21,7 @@ from catalog_0924 import NEW_0924
 from catalog_0925 import NEW_0925
 from catalog_0100 import NEW_0100
 from catalog_0101 import NEW_0101
+from catalog_0102 import NEW_0102
 from fix_tetun import TETUN_FIX, TETUN_WORDS
 
 OUT = HERE.parents[1]/'usr'/'share'/'edukasaun-desktop'/'i18n'
@@ -48,6 +49,7 @@ PT_BR_AFTER = [
     ('Novo tela', 'Nova tela'), ('novo tela', 'nova tela'), ('tela inteiro', 'tela inteira'),
     ('tela de entrada atualizado', 'tela de entrada atualizada'), ('Tela de entrada atualizado', 'Tela de entrada atualizada'),
     ('só pode ser alterado', 'só pode ser alterada'), ('Redefinir predefinições', 'Restaurar padrões'),
+    ('Tela de entrada não alterado', 'Tela de entrada não alterada'),
 ]
 # 'ligado' is 'connected' only for networks; elsewhere it means 'on'.
 PT_BR_NET = [('desligado', 'desconectado'), ('Desligado', 'Desconectado'), ('ligado', 'conectado'),
@@ -80,7 +82,7 @@ def check(lang, key, value):
 def main():
     cats = {'pt': {}, 'id': {}, 'tet': {}, 'pt_BR': {}}
     seen = set()
-    for row in FULL + NEW + NEW_0921 + NEW_0922 + NEW_0923 + NEW_0924 + NEW_0925 + NEW_0100 + NEW_0101:
+    for row in FULL + NEW + NEW_0921 + NEW_0922 + NEW_0923 + NEW_0924 + NEW_0925 + NEW_0100 + NEW_0101 + NEW_0102:
         en, pt, idn, tet = row
         tet = TETUN_FIX.get(en, tet)
         for a, b in TETUN_WORDS:

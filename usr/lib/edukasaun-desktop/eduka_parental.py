@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Parental Control: the message screen shown when the time is up.
 
 The time is counted by eduka-parental.service (root); Eduka-Panel reads its
@@ -6,10 +8,10 @@ the computer is not used any more; the service shuts the computer down a
 little later. A parent can press Ctrl+Alt+P and type an administrator
 password to add 30 minutes.
 """
-import json, os, time, subprocess, shutil
+import json, os, time, shutil
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PyQt5.QtCore import Qt, QTimer, QProcess
-from PyQt5.QtGui import QPainter, QLinearGradient, QColor, QKeySequence, QPixmap, QIcon
+from PyQt5.QtGui import QPainter, QLinearGradient, QColor, QPixmap, QIcon
 from eduka_common import _, theme_accent
 
 STATE = '/run/edukasaun-parental/state.json'
@@ -152,6 +154,9 @@ class ParentalLockScreen(QWidget):
         self.proc.finished.connect(self.parent_done)
         self.proc.start('pkexec', [HELPER])
         self.proc.write(json.dumps({'action': 'extend', 'minutes': 30}).encode()); self.proc.closeWriteChannel()
+        # The message screen lies above every window: step back so the
+        # password window can be seen (the shutdown countdown keeps running).
+        self.lower()
 
     def parent_done(self, code, _status=None):
         self.proc = None

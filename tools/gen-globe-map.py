@@ -6,9 +6,9 @@ https://www.naturalearthdata.com), tools/data/ne_110m_land.geojson.
 Output: usr/share/edukasaun-desktop/assets/world-map.png, an
 equirectangular 1024x512 picture (longitude -180..180, latitude 90..-90).
 """
-import json, sys
+import json
 from pathlib import Path
-from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtCore import QPointF
 from PyQt5.QtGui import QImage, QPainter, QColor, QPolygonF, QLinearGradient, QPen, QBrush
 from PyQt5.QtWidgets import QApplication
 
