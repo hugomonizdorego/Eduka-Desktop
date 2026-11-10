@@ -1,3 +1,34 @@
+Edukasaun Desktop Suite 0.11 RC (release candidate 1, package 0.11.0~rc1)
+- 0.11 RC is the release candidate of the final stable version: from now on mainly bug fixes.
+- Login (bug fixes, checked with a real LXQt login with xfwm4 and with Openbox + picom):
+  - lxqt-panel no longer appears for a few seconds at login: Eduka-Desktop sessions switch it off before LXQt starts, the way LXQt itself does it (~/.config/autostart/lxqt-panel.desktop with Hidden=true, written by eduka-session-prepare). Eduka-Panel is the only panel. LXQt still gives the session, the file manager and desktop icons (pcmanfm-qt), the terminal, the password windows (policykit), the runner and its settings tools.
+  - LXQt's notification daemon is switched off the same way, so Eduka-Panel shows the notifications from the first second.
+  - picom's own autostart entry (/etc/xdg/autostart/picom.desktop, started in every desktop) is switched off as well: it started picom with the shadows and fading of picom.conf before Eduka-Panel, and the compositor settings of Eduka-Settings were not used. Eduka-Panel and Eduka-Desktop no longer start picom twice at the same moment.
+  - The Super (Windows) key opens Eduka-Desktop (an LXQt shortcut, lxqt-globalkeys); LXQt's other shortcuts stay.
+  - A new account gets an Edukasaun wallpaper from /usr/share/background/Edukasaun at its first login instead of LXQt's picture (default.jpg or default.png there is taken first; a wallpaper chosen by the user or the administrator stays).
+  - Removing the package deletes these files again in every account.
+- Official Edukasaun OS logo:
+  - Start button: the official logo (with a thin white ring on the colored button) and the text MENU. The old default name "Edukasaun" and the old picture change once after the update; a name or picture you chose stays.
+  - The top of Eduka-Desktop shows the Edukasaun OS wordmark (white letters on the dark themes) instead of "Good evening, ..." and "Eduka-Desktop • Edukasaun OS ..."; a click opens www.edukasaunos.tl.
+  - Login screen (bottom bar and the built-in logo), icons (eduka-desktop and edukasaun-os in the hicolor theme) and About (wordmark and website).
+  - System Information: Base OS "Based on Debian Stable"; the code name is gone.
+- Eduka-Settings:
+  - Pages about the same thing share one entry with tabs, 11 entries instead of 17: Appearance (Theme, Effects), Wallpaper & Icons (Wallpaper, Desktop Icons), Eduka-Panel (Panel, Clock, Notifications), Mouse & Touch (Mouse, Touchpad, Touch Screen) and Login & Fingerprint (Login Screen, Fingerprint). eduka-settings --page clock and the other old names still open their tab.
+  - Touch Screen (new): touch screen on or off, the monitor it belongs to (also with two monitors, a projector or a turned screen; xinput map-to-output), a direction correction for screens that are built in turned (libinput calibration matrix), smooth finger scrolling in Eduka-Desktop, Eduka-Panel and Eduka-Settings, "Bigger buttons for fingers" and the Onboard on-screen keyboard (at login or now).
+  - Fingerprint (new), the GNU/Linux way: fprintd keeps the fingers of each account (add, test, remove). "Accept a finger at the login screen, the screen lock, sudo and administrator password windows" switches Debian's PAM profile of libpam-fprintd with pam-auth-update (new polkit action, administrator password). The password always works as well.
+  - Row titles are translated now (they stayed English in Portuguese, Indonesian and Tetun).
+  - The window opens in the middle of the screen with its title bar on the screen (with Openbox the title bar was above the top edge, also in About).
+- Eduka-Desktop (start menu):
+  - Edukasaun is the one menu for learning, science and games: Education, Science and Game applications are shown only there.
+  - Clearer text for an empty category. Name rules for categories match whole words ("Calculator" is no longer in Office, "GitHub Desktop" no longer in Preferences).
+  - Opens with a short, soft fade (not with Eduka-Low-Theme).
+- Themes: Edukasaun-Dark gives Eduka-Desktop a calm, nearly solid surface (desktop icons no longer show through); a popup closed during its fade no longer causes an error.
+- Wallpapers: the folder is /usr/share/background/Edukasaun. /usr/share/backgrounds/Edukasaun and the old /usr/share/Edukasaun/Backgrounds are still read; a chosen picture keeps working after it moved to the new folder.
+- X11 and Wayland: keyboard, mouse and touch settings (setxkbmap, xinput) only run in X11 sessions; the Wayland test session (eduka-desktop-session --wayland) gets a Wayland compositor for LXQt (labwc first); Firefox uses XInput 2 (smooth scrolling and touch screens); the touch screen is mapped again after a screen change.
+- Packaging: recommends lxqt-globalkeys, fprintd, libpam-fprintd and onboard; new helpers eduka-session-prepare and eduka-fingerprint-apply; lintian reports no errors or warnings.
+- Documents: the note about the Timor Aid dictionary is removed.
+- Translations for Portuguese, Indonesian and Tetun of the new texts.
+
 Edukasaun Desktop Suite 0.10.0 Beta (update 3, package 0.10.0~beta3)
 - The version stays 0.10.0 Beta; only the Debian package version goes up (0.10.0~beta3).
 - Licenses and credits: Edukasaun Desktop is free software under the GNU GPL version 3 or later (LICENSE file, SPDX line in every source file). The Debian copyright file /usr/share/doc/edukasaun-desktop-menu/copyright lists every part with its license: Orchis and Graphite (GPL-3), Yaru-remix (GPL-3 and CC BY-SA 4.0), Noto Emoji (Apache-2.0), Natural Earth (public domain). About Edukasaun Desktop shows the license and thanks Openbox, xfwm4, SDDM, NetworkManager, BlueZ/Blueman, PulseAudio/PipeWire, UDisks, Orca, Qt, PyQt5 and Python as well; the LXQt license is given correctly (LGPL-2.1+, GPL-2.0+).
@@ -35,7 +66,6 @@ Edukasaun Desktop Suite 0.10.0 Beta (update 3, package 0.10.0~beta3)
   - Parental Control: the password window shows above the lock screen.
   - eduka-panel-reset keeps a copy of the old settings and the agenda, favorites and pinned applications.
 - Translations for Portuguese, Indonesian and Tetun of the new texts.
-- The Tetun check against the Timor Aid dictionary follows when www.timoraid.org can be reached.
 - Development continues (slow ring) toward the final version 1.1.12 (November 2026).
 
 Edukasaun Desktop Suite 0.10.0 Beta (update 2, package 0.10.0~beta2)

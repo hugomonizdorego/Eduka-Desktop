@@ -5,14 +5,17 @@
 import os, sys
 os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFrame, QHBoxLayout,
-    QLabel, QTextBrowser, QVBoxLayout,
+    QLabel, QPushButton, QTextBrowser, QVBoxLayout,
 )
 
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
-from eduka_common import START_ICON, VERSION, get_icon, icon_theme_setup, install_translations, theme_accent, theme_tokens, dialog_qss, _
+from eduka_common import (START_ICON, VERSION, BRAND_WORDMARK, BRAND_WORDMARK_LIGHT, EDUKASAUN_WEBSITE, DARK_THEMES,
+                          current_theme, get_icon, icon_theme_setup, install_translations, open_website, place_window,
+                          theme_accent, theme_tokens, dialog_qss, _)
 
 
 class AboutDialog(QDialog):
@@ -32,11 +35,20 @@ class AboutDialog(QDialog):
         header = QFrame()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(4, 2, 4, 2)
-        logo = QLabel()
-        logo.setPixmap(get_icon(START_ICON, 'start-here').pixmap(58, 58))
-        header_layout.addWidget(logo)
+        # Official Edukasaun OS wordmark; a click opens www.edukasaunos.tl.
+        wordmark = BRAND_WORDMARK_LIGHT if current_theme() in DARK_THEMES else BRAND_WORDMARK
+        logo = QPushButton()
+        logo.setObjectName('brandLogo'); logo.setFlat(True); logo.setCursor(Qt.PointingHandCursor)
+        if os.path.isfile(wordmark):
+            logo.setIcon(QIcon(wordmark)); logo.setIconSize(QSize(int(round(52 * 1940 / 553)), 52))
+        else:
+            logo.setIcon(get_icon(START_ICON, 'start-here')); logo.setIconSize(QSize(52, 52))
+        logo.setToolTip('www.edukasaunos.tl'); logo.setAccessibleName('Edukasaun OS')
+        logo.setAccessibleDescription(_('Opens the Edukasaun OS website, www.edukasaunos.tl, in the web browser'))
+        logo.clicked.connect(lambda: open_website(EDUKASAUN_WEBSITE))
+        header_layout.addWidget(logo, 0, Qt.AlignVCenter)
         title = QLabel(
-            f"<b style='font-size:22px'>Edukasaun Desktop</b><br>"
+            f"<b style='font-size:20px'>Edukasaun Desktop</b><br>"
             f"<span style='font-size:15px;color:{theme_accent()}'>{_('Suite Version')} {VERSION}</span>"
         )
         header_layout.addWidget(title, 1)
@@ -46,13 +58,13 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('Update 3: the license and credits of every part (Debian copyright file and manual pages), automatic login always asks for an administrator password, and Liquid Glass stays readable on dark wallpapers.'),
-            _('Eduka-Pastel, the default theme, now in soft mint green and sky blue with colorful raised cards — for the desktop, programs, dialog boxes and the login screen.'),
-            _('Icons: Papirus follows the theme (light or dark), so every icon has the same style.'),
-            _('Every theme now changes the whole desktop: GTK and Qt programs, dialog boxes, menus and the window borders.'),
-            _('Eduka-Panel: Long, Floating, Short and Dock styles; Wi-Fi, Bluetooth, sound and battery work right in the panel.'),
-            _('Eduka-Settings sets the wallpaper, desktop icons, keyboard, mouse and touchpad; changes work at once.'),
-            _('Parental Control: times from 5 minutes, set to the hour, minute and second.'),
+            _('Release candidate: the last step before the final stable version. Many bugs fixed, also at login.'),
+            _('The official Edukasaun OS logo: on the MENU button of Eduka-Panel, at the top of Eduka-Desktop (a click opens www.edukasaunos.tl), on the login screen and here.'),
+            _('Eduka-Panel replaces lxqt-panel completely: LXQt\'s panel no longer appears at login and the Super key opens the menu.'),
+            _('Eduka-Settings: similar pages share one entry with tabs; new pages for the touch screen and fingerprint login.'),
+            _('Edukasaun is the one menu for learning, science and games.'),
+            _('Wallpapers come from /usr/share/background/Edukasaun.'),
+            _('Better X11 and Wayland support, smoother opening of the menu and finger scrolling on touch screens.'),
         ]
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [
@@ -89,7 +101,8 @@ class AboutDialog(QDialog):
             f"<h3>{_('About Edukasaun Desktop Suite')}</h3>"
             f"<p><b>{_('Visible system name')}:</b> Edukasaun Desktop<br>"
             f"<b>{_('Internal launcher engine')}:</b> Eduka-Desktop<br>"
-            f"<b>{_('Release target')}:</b> {_('Final Version')} 1.1.12 — {_('November 2026')}</p>"
+            f"<b>{_('Release')}:</b> {_('Release candidate (RC) of the final stable version')}<br>"
+            f"<b>{_('Website')}:</b> <a href='{EDUKASAUN_WEBSITE}'>www.edukasaunos.tl</a></p>"
             "<table cellspacing='4' cellpadding='5' width='100%'>"
             + ''.join(f"<tr><td><b>{n}</b></td><td>{VERSION}</td><td>{d}</td></tr>" for n, d in rows)
             + f"</table><h3>{_('Version')} {VERSION}</h3><ul>"
@@ -117,6 +130,8 @@ class AboutDialog(QDialog):
         QTextBrowser{{background:{t['card']};color:{t['text']};border:1px solid {t['border']};border-radius:14px;padding:12px;}}
         QPushButton{{background:{t['accent']};color:white;border:0;border-radius:10px;padding:8px 22px;font-weight:800;}}
         QPushButton:hover{{background:{t['accent']};border:1px solid {t['text']};}}
+        QPushButton#brandLogo,QPushButton#brandLogo:hover{{background:transparent;border:1px solid transparent;border-radius:14px;padding:2px 6px;}}
+        QPushButton#brandLogo:hover{{background:rgba(30,136,229,22);}}
         """)
 
 
@@ -126,6 +141,7 @@ def main():
     app.setApplicationName('Eduka-About')
     icon_theme_setup(force=True)
     dialog = AboutDialog()
+    place_window(dialog)
     return dialog.exec_()
 
 

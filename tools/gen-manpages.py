@@ -22,8 +22,9 @@ PAGES = {
          'the clock and the status icons for sound, network, Bluetooth, battery and drives. A click on the clock '
          'opens the Action Center with the calendar, the agenda, the weather and quick settings.',
          'Inside an Eduka-Desktop session it is also the notification service (org.freedesktop.Notifications) '
-         'and replaces lxqt-panel and lxqt-notificationd, which it stops through lxqt-session. Only one '
-         'Eduka-Panel runs per session. After a package update it starts again by itself.'],
+         'and replaces lxqt-panel and lxqt-notificationd: eduka-desktop-session switches both off before LXQt '
+         'starts (if one runs anyway, Eduka-Panel stops it through lxqt-session). Only one Eduka-Panel runs per '
+         'session. After a package update it starts again by itself.'],
         [('--autostart', 'Started by the session autostart (/etc/xdg/autostart). Outside an Eduka-Desktop session '
           '(a plain LXQt session) the program quits at once, so LXQt keeps its own panel and notifications, '
           'unless "run_in_lxqt_sessions" is true in the Eduka-Desktop settings.')],
@@ -53,12 +54,14 @@ PAGES = {
         ['[**--page** *PAGE*]'],
         ['**eduka-settings** changes the look and behaviour of Eduka-Desktop: theme, accent color, icons and '
          'cursor, wallpaper, desktop icons, effects, the menu and the panel, clock and weather, notifications, '
-         'keyboard, mouse and touchpad, language, accessibility, Parental Control, the login screen and '
-         'maintenance tasks. Changes to Parental Control and the login screen ask for an administrator '
+         'keyboard, mouse, touchpad and touch screen, fingerprints, language, accessibility, Parental Control, '
+         'the login screen and maintenance tasks. Pages about the same thing share one entry with tabs. '
+         'Changes to Parental Control, the login screen and fingerprint login ask for an administrator '
          'password (pkexec).',
          'When Eduka-Settings is already open, its window is raised and shows the requested page.'],
-        [('--page PAGE', 'Open one page: appearance, wallpaper, desktopicons, effects, desktop, panel, clock, '
-          'notifications, keyboard, mouse, touchpad, general, accessibility, parental, login or maintenance.')],
+        [('--page PAGE', 'Open one page or tab: appearance, effects, wallpaper, desktopicons, desktop, panel, '
+          'clock, notifications, keyboard, mouse, touchpad, touchscreen, general, accessibility, parental, login, '
+          'fingerprint or maintenance.')],
         [('~/.config/eduka-desktop/', 'settings of this account'),
          ('/etc/edukasaun-desktop/parental.json', 'Parental Control settings (system-wide)'),
          ('/usr/share/sddm/themes/edukasaun/theme.conf.user', 'login screen settings')],
@@ -121,11 +124,15 @@ PAGES = {
         ['[**--wayland**]'],
         ['**eduka-desktop-session** is started by the display manager for the Eduka-Desktop session '
          '(/usr/share/xsessions/edukasaun-desktop.desktop). It applies the language chosen on the login screen, '
-         'makes sure LXQt knows a window manager and starts LXQt with **startlxqt**; LXQt then starts '
-         'Eduka-Panel and Eduka-Desktop from /etc/xdg/autostart.'],
+         'prepares the LXQt settings of the account (lxqt-panel and lxqt-notificationd stay off, because '
+         'Eduka-Panel replaces them; the Super key opens Eduka-Desktop), makes sure LXQt knows a window manager '
+         'and starts LXQt with **startlxqt**; LXQt then starts Eduka-Panel and Eduka-Desktop from '
+         '/etc/xdg/autostart.'],
         [('--wayland', 'Start LXQt on Wayland (startlxqtwayland). For tests only; not offered on the login screen.')],
         [('/var/lib/edukasaun-desktop/login/language', 'language chosen on the login screen'),
-         ('~/.config/lxqt/session.conf', 'LXQt session settings (window manager)')],
+         ('~/.config/lxqt/session.conf', 'LXQt session settings (window manager; compositor for --wayland)'),
+         ('~/.config/autostart/lxqt-panel.desktop', 'switches lxqt-panel off (Hidden=true, written by Eduka)'),
+         ('~/.config/lxqt/globalkeyshortcuts.conf', 'LXQt shortcuts; Eduka adds Super_L for the start menu')],
         ['startlxqt', 'lxqt-session', 'eduka-panel']),
     'eduka-lxqt-repair': (
         'start again with the LXQt defaults',

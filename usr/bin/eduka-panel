@@ -220,6 +220,7 @@ class PopupFrame(QFrame):
     def showEvent(self, e):
         super().showEvent(e)
         translate_tree(self)
+        enable_touch_scrolling(self)
         # A short fade makes popups feel smooth; without a compositor Qt
         # simply shows the popup at full opacity.
         self._fade=fade_in(self, 130)
@@ -3621,6 +3622,8 @@ class EdukaPanel(QWidget):
         self._update_watch=watch_package_update(self, before_restart=self.before_restart, busy=self.busy_for_update)
         # Eduka-Panel replaces lxqt-panel, but only in Eduka-Desktop sessions.
         QTimer.singleShot(2500, stop_lxqt_panel_in_eduka_session)
+        # First login of an account: the Edukasaun wallpaper (once).
+        QTimer.singleShot(3500, self.first_login_wallpaper)
         QTimer.singleShot(9000, stop_lxqt_panel_in_eduka_session)
         QTimer.singleShot(2500, stop_lxqt_notifications_in_eduka_session)
         QTimer.singleShot(500, lambda: safe_popen(['eduka-app-cache','--warm']))
@@ -3690,6 +3693,10 @@ class EdukaPanel(QWidget):
         self.load_config()
         # picom 12.0 stopped drawing correctly after a monitor change (#1338).
         restart_picom_after_screen_change()
+        # A turned screen, a new monitor or a projector: map the touch screen
+        # to its monitor again (the keyboard layout is not touched).
+        if session_type() == 'x11' and shutil.which('xinput'):
+            self.check_input_devices(force=True)
 
     def setup_watcher(self):
         self.watcher=QFileSystemWatcher(self)
@@ -3872,8 +3879,10 @@ class EdukaPanel(QWidget):
         self.apply_blur_hint(liquid and not high_contrast)
         menu_icon=cfg.get('menu_icon',START_ICON)
         icon_h=max(16, min(int(cfg.get('menu_icon_size',26)), h-8))
-        self.start.setIcon(get_icon(menu_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
-        self.start.setText((' '+cfg.get('menu_label','Edukasaun')) if cfg.get('show_menu_text',True) and not self.vertical and getattr(self, 'shape', '') != 'dock' else '')
+        # The official logo gets a thin white ring on the colored start button.
+        shown_icon=START_BUTTON_ICON if str(menu_icon) == START_ICON and os.path.isfile(START_BUTTON_ICON) else menu_icon
+        self.start.setIcon(get_icon(shown_icon,'start-here')); self.start.setIconSize(menu_button_icon_size(menu_icon, icon_h, bool(cfg.get('menu_icon_keep_aspect', True))))
+        self.start.setText((' '+(str(cfg.get('menu_label') or '').strip() or DEFAULT_MENU_LABEL)) if cfg.get('show_menu_text',True) and not self.vertical and getattr(self, 'shape', '') != 'dock' else '')
         if self.vertical:
             self.start.setFixedSize(self.thickness-10, self.thickness-10)
         elif getattr(self, 'shape', '') == 'dock':
@@ -4396,6 +4405,15 @@ class EdukaPanel(QWidget):
         self.show_popup_above(p, self.touchpad_button)
 
     # ------------------------------------------------------------ wallpaper slideshow
+    def first_login_wallpaper(self):
+        if not in_eduka_session():
+            return
+        try:
+            import eduka_wallpaper as ew
+            ew.first_login_wallpaper()
+        except Exception:
+            pass
+
     def setup_slideshow(self):
         try:
             import eduka_wallpaper as ew

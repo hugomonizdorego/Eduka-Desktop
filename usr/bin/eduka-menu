@@ -614,6 +614,7 @@ class EdukaMenu(QWidget):
         self.apps = read_app_registry_fast()
         self.build()
         translate_tree(self)
+        enable_touch_scrolling(self)
         self.position()
         self.select_category(self.current_category)
         self.refresh_apps()
@@ -657,10 +658,31 @@ class EdukaMenu(QWidget):
         p.drawEllipse(QRectF(5, 5, 16, 16)); p.drawLine(QPointF(19, 19), QPointF(27, 27)); p.end()
         return QIcon(pix)
 
-    def update_greeting(self):
-        # Selamat pagi / siang / sore / malam in the chosen language.
-        part=greeting_text(QTime.currentTime().hour()); name=user_display_name()
-        self.greeting.setText(f'{part}, {name}' if name else part)
+    BRAND_HEIGHT = 40
+
+    def update_brand(self):
+        """The Edukasaun OS wordmark: blue letters on the light themes, white
+        letters on Edukasaun-Dark and Eduka-Transparan."""
+        if not hasattr(self, 'brand'):
+            return
+        light=bool(UI.get('dark') or UI.get('trans'))
+        path=BRAND_WORDMARK_LIGHT if light else BRAND_WORDMARK
+        if getattr(self, '_brand_path', None) == path:
+            return
+        self._brand_path=path
+        h=self.BRAND_HEIGHT
+        if os.path.isfile(path):
+            self.brand.setText('')
+            self.brand.setIcon(QIcon(path)); self.brand.setIconSize(QSize(int(round(h*1940/553)), h))
+        else:
+            # Without the picture (a broken installation) the name is written.
+            self.brand.setIcon(get_icon(START_ICON, 'start-here')); self.brand.setIconSize(QSize(h-6, h-6))
+            self.brand.setText(' Edukasaun OS')
+
+    def open_website(self, checked=False):
+        """The wordmark opens www.edukasaunos.tl in the web browser."""
+        self.hide_menu(force=True)
+        open_website(EDUKASAUN_WEBSITE)
 
     def category_entries(self):
         # Favorites are shown only in the right-side Favorites panel, not as a duplicated category.
@@ -672,13 +694,15 @@ class EdukaMenu(QWidget):
         self.apply_visual_settings(initial=True)
         main=QVBoxLayout(self.bg); main.setContentsMargins(18,14,18,14); main.setSpacing(12)
         hdr=QHBoxLayout(); hdr.setSpacing(12)
-        logo=QLabel(); logo.setPixmap(get_icon('/usr/share/Edukasaun/Logo/Edukasaun Logo.png', START_ICON).pixmap(42,42)); hdr.addWidget(logo)
-        brand=QVBoxLayout(); brand.setSpacing(0)
-        # Friendly greeting; refreshed every time Eduka-Desktop opens.
-        self.greeting=QLabel(''); self.greeting.setObjectName('brandTitle')
-        brand_sub=QLabel(f'Eduka-Desktop • Edukasaun OS {VERSION}'); brand_sub.setObjectName('brandSub')
-        brand.addWidget(self.greeting); brand.addWidget(brand_sub); hdr.addLayout(brand)
-        self.update_greeting()
+        # Official Edukasaun OS wordmark (0.11); a click opens the website.
+        self.brand=QPushButton(); self.brand.setObjectName('brandLogo'); self.brand.setFlat(True)
+        self.brand.setCursor(Qt.PointingHandCursor); self.brand.setFocusPolicy(Qt.StrongFocus)
+        self.brand.setToolTip('www.edukasaunos.tl')
+        self.brand.setAccessibleName('Edukasaun OS')
+        self.brand.setAccessibleDescription('Opens the Edukasaun OS website, www.edukasaunos.tl, in the web browser')
+        self.brand.clicked.connect(self.open_website)
+        hdr.addWidget(self.brand, 0, Qt.AlignVCenter)
+        self.update_brand()
         self.search=QLineEdit(); self.search.setPlaceholderText('Search applications…')
         self.search.addAction(self.search_icon(), QLineEdit.LeadingPosition)
         self.search.setClearButtonEnabled(True); self.search.setObjectName('searchBox')
@@ -732,8 +756,9 @@ class EdukaMenu(QWidget):
             QScrollArea,QScrollArea>QWidget>QWidget{background:transparent;border:0;} QToolButton,QPushButton{border-bottom:1px solid rgba(160,190,180,80);}
             QListWidget#categoryList{border:1px solid rgba(205,228,220,210);background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(247,253,250,215),stop:1 rgba(225,242,235,190));border-radius:16px;outline:0;padding:6px;color:#1f2d2a;}
             QLabel#sectionTitle{color:#1f2d2a;font-size:14px;font-weight:800;}
-            QLabel#brandTitle{color:#1f2d2a;font-size:15px;font-weight:900;}
-            QLabel#brandSub{color:#60736e;}
+            QPushButton#brandLogo,QPushButton#brandLogo:hover,QPushButton#brandLogo:pressed{background:transparent;border:1px solid transparent;border-radius:14px;padding:2px 6px;}
+            QPushButton#brandLogo:hover{background:rgba(30,136,229,22);}
+            QPushButton#brandLogo:focus{border:1px solid rgba(30,136,229,150);}
             QLabel#mutedText,QLabel#emptyText{color:#60736e;}
             QLabel#emptyText{font-size:16px;padding:40px;}
             QLabel#mutedSmall{color:#60736e;font-size:11px;}
@@ -742,7 +767,6 @@ class EdukaMenu(QWidget):
             QLabel#infoValue{color:#1f2d2a;font-weight:650;}
             QFrame#sysInfoCard{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,225),stop:1 rgba(236,248,242,205));border:1px solid rgba(200,226,216,220);border-radius:14px;}
             QLabel{color:#1f2d2a;}
-            QLabel#brandTitle{font-size:17px;}
             QLineEdit#searchBox{border-radius:17px;padding:8px 12px;}
             QPushButton#segLeft,QPushButton#segRight{padding:8px 14px;border:1px solid rgba(0,120,90,40);}
             QPushButton#segLeft{border-top-right-radius:0;border-bottom-right-radius:0;border-top-left-radius:14px;border-bottom-left-radius:14px;}
@@ -771,6 +795,7 @@ class EdukaMenu(QWidget):
         trans=theme == THEME_TRANSPARENT and composited and not accessibility
         UI['dark']=dark; UI['low']=low; UI['trans']=trans; UI['multi']=multicolor_on(dcfg) and not low
         pastel=theme == THEME_PASTEL and not accessibility; UI['pastel']=pastel
+        self.update_brand()
         # Pastel category and tile colors (the badges of the pastel dashboard).
         if sorted(PALETTE['colors']) != sorted(base_colors()):
             reshuffle_palette()
@@ -786,7 +811,9 @@ class EdukaMenu(QWidget):
         elif trans:
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(26,26,26,{max(150, min(242, int(bg_alpha*1.15)))});border:1px solid rgba(255,255,255,18);border-radius:{radius}px;}} QLabel{{color:rgba(242,242,242,235);}}')
         elif dark:
-            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{bg_alpha});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
+            # Edukasaun-Dark is a calm, nearly solid surface (0.11): desktop
+            # icons no longer show through; Eduka-Transparan is the glass theme.
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(44,44,44,{max(bg_alpha, 232)});border:1px solid rgba(255,255,255,40);border-radius:{radius}px;}} QLabel{{color:rgba(255,255,255,222);}}')
         elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
         elif pastel:
@@ -829,8 +856,9 @@ class EdukaMenu(QWidget):
                 'QScrollBar:vertical{background:rgba(255,255,255,20);}'
                 'QScrollBar::handle:vertical{background:rgba(77,182,172,150);}'
                 'QLabel{color:rgba(255,255,255,222);}'
-                'QLabel#sectionTitle,QLabel#brandTitle,QLabel#infoTitle,QLabel#infoValue{color:#ffffff;}'
-                'QLabel#brandSub,QLabel#mutedText,QLabel#mutedSmall,QLabel#emptyText,QLabel#infoKey{color:rgba(255,255,255,153);}'
+                'QLabel#sectionTitle,QLabel#infoTitle,QLabel#infoValue{color:#ffffff;}'
+                'QLabel#mutedText,QLabel#mutedSmall,QLabel#emptyText,QLabel#infoKey{color:rgba(255,255,255,153);}'
+                'QPushButton#brandLogo:hover{background:rgba(255,255,255,26);}'
                 'QFrame#sysInfoCard{background:rgba(66,66,66,200);border:1px solid rgba(255,255,255,30);}'
                 'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:#26A69A;color:white;border:1px solid #26A69A;}'
                 'QPushButton#closeButton{background:rgba(239,154,154,30);color:#EF9A9A;}'
@@ -846,7 +874,7 @@ class EdukaMenu(QWidget):
                 'QListWidget#categoryList{background:#f2f2f2;border:1px solid #dcdcdc;border-radius:8px;}'
                 'QFrame#sysInfoCard{background:#f7f7f7;border:1px solid #e0e0e0;border-radius:6px;}'
                 'QScrollBar::handle:vertical{background:#aea79f;}'
-                'QLabel#brandTitle,QLabel#sectionTitle,QLabel#infoTitle{color:#181818;}'
+                'QLabel#sectionTitle,QLabel#infoTitle{color:#181818;}'
             ) if low else ''
             trans_qss = (
                 'QLineEdit{background:rgba(217,217,217,22);border:1px solid rgba(255,255,255,26);color:#f2f2f2;border-radius:15px;}'
@@ -878,8 +906,8 @@ class EdukaMenu(QWidget):
                 'QFrame#sysInfoCard{background:#edf7f2;border:1px solid #dcebe5;border-radius:16px;}'
                 'QScrollBar:vertical{background:transparent;}'
                 'QScrollBar::handle:vertical{background:rgba(63,166,132,110);border-radius:4px;}'
-                'QLabel#brandTitle,QLabel#sectionTitle,QLabel#infoTitle{color:#1b332e;}'
-                'QLabel#brandSub,QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#5d7671;}'
+                'QLabel#sectionTitle,QLabel#infoTitle{color:#1b332e;}'
+                'QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#5d7671;}'
             ) if pastel else ''
             self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + pastel_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
@@ -1095,9 +1123,9 @@ class EdukaMenu(QWidget):
         di=distro_info()
         info=QFrame(); info.setObjectName('sysInfoCard')
         grid=QGridLayout(info); grid.setContentsMargins(10,8,10,8); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(7)
-        rows=[('OS:', di['os']), ('Version:', di['version']), ('Codename:', di['codename']), ('Base OS:', di['base']), ('Desktop:', di['desktop'])]
+        rows=[('OS:', di['os']), ('Version:', di['version']), ('Base OS:', di['base']), ('Desktop:', di['desktop'])]
         for r,(k,v) in enumerate(rows):
-            lk=QLabel(k); lk.setObjectName('infoKey'); lk.setWordWrap(True); lk.setMaximumWidth(92)
+            lk=QLabel(k); lk.setObjectName('infoKey'); lk.setWordWrap(True); lk.setMaximumWidth(76)
             lv=QLabel(str(v)); lv.setWordWrap(True); lv.setObjectName('infoValue')
             grid.addWidget(lk,r,0,Qt.AlignTop); grid.addWidget(lv,r,1)
         grid.setColumnStretch(1, 1)
@@ -1157,7 +1185,16 @@ class EdukaMenu(QWidget):
         orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
         registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
         if not apps:
-            empty=QLabel('No applications found' if not self._loading_apps else 'Loading applications...')
+            if self._loading_apps:
+                text='Loading applications...'
+            elif query:
+                text='No applications found'
+            elif category == 'Edukasaun':
+                text='No learning, science or game applications are installed yet.'
+            else:
+                text='No applications in this category yet.'
+            # Word wrap with room for four lines (a narrow 1024x600 screen).
+            empty=QLabel(text); empty.setWordWrap(True); empty.setMinimumHeight(170)
             empty.setAlignment(Qt.AlignCenter); empty.setObjectName('emptyText')
             self.stack_layout.addWidget(empty); self.refresh_side(); return
         if self.layout_mode=='Grid':
@@ -1222,7 +1259,12 @@ class EdukaMenu(QWidget):
         icon_theme_setup()
         self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
         self._show_guard_until = time.time() + 0.35
-        self.update_greeting(); self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow(); QTimer.singleShot(0, self.fit_categories)
+        self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow(); QTimer.singleShot(0, self.fit_categories)
+        # A short, soft fade-in (0.11), like the popups of Eduka-Panel: the
+        # compositor changes only the window opacity (cheap). Eduka-Low-Theme
+        # opens at once.
+        if getattr(self, '_composited', False) and not UI.get('low'):
+            fade_in(self, 120)
         QTimer.singleShot(30, self.raise_)
         # Typing right after opening the menu searches, like other start menus.
         QTimer.singleShot(40, lambda: self.search.setFocus(Qt.PopupFocusReason))

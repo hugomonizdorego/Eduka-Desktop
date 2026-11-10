@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
-// Edukasaun OS login screen for SDDM (0.9.19).
+// Edukasaun OS login screen for SDDM (0.9.19; official logo since 0.11).
 // Plain QtQuick items only, so it runs on the Qt 5 and the Qt 6 greeter.
 //
 // Settings (theme.conf, overridden by theme.conf.user written by
@@ -583,9 +583,20 @@ Rectangle {
                 spacing: 6 * root.s
 
                 Rectangle {
-                    width: brand.implicitWidth + 28 * root.s; height: 36 * root.s; radius: height / 2
+                    // The official Edukasaun OS symbol (0.11) and the title.
+                    width: brandRow.implicitWidth + 18 * root.s; height: 36 * root.s; radius: height / 2
                     color: root.accent
-                    Text { id: brand; anchors.centerIn: parent; text: config.title ? config.title : "Edukasaun"; color: root.contrast ? "#000000" : "white"; font.pixelSize: 14 * root.s; font.bold: true }
+                    Row {
+                        id: brandRow
+                        anchors.centerIn: parent
+                        spacing: 6 * root.s
+                        Image {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 30 * root.s; height: width
+                            source: "logo.png"; smooth: true; fillMode: Image.PreserveAspectFit
+                        }
+                        Text { id: brand; anchors.verticalCenter: parent.verticalCenter; text: config.title ? config.title : "Edukasaun"; color: root.contrast ? "#000000" : "white"; font.pixelSize: 14 * root.s; font.bold: true }
+                    }
                 }
                 BarButton {
                     theme: root

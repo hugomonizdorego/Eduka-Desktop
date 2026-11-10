@@ -2,6 +2,7 @@
 
 Edukasaun Desktop Suite: Eduka-Desktop (start menu), Eduka-Panel and
 Eduka-Settings (formerly Eduka-Menu Settings) for Edukasaun OS (Debian 13 Trixie, LXQt).
+Current version: **0.11 RC** (release candidate, package 0.11.0~rc1).
 
 ## Build the .deb
 
@@ -26,14 +27,14 @@ Check the result with `lintian dist/edukasaun-desktop-menu_<version>_all.deb`
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.10.0~beta3_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.11.0~rc1_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.10.0~beta3_all.deb
+   rm ./edukasaun-desktop-menu_0.11.0~rc1_all.deb
    ```
 
 The package scripts never start a program with a window (in the chroot or
@@ -44,6 +45,9 @@ after updating from an older version, log out and in once).
 
 To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
+
+Recommended packages, settings and configuration for the ISO are listed in
+`README_0.11-rc.txt` (release notes of 0.11 RC).
 
 ## Login sessions
 
@@ -67,7 +71,9 @@ and other greeters.
 - SDDM theme `edukasaun` (`/usr/share/sddm/themes/edukasaun`), selected by
   `/etc/sddm.conf.d/10-edukasaun.conf`.
 - Background: put any picture at **`/usr/share/Edukasaun/SDDM/Default.png`**.
-  Logo: `/usr/share/Edukasaun/Logo/Edukasaun Logo.png`. Both paths are set in
+  Logo: `/usr/share/Edukasaun/Logo/Edukasaun Logo.png` (without it the
+  official Edukasaun OS logo `logo.png` of the theme is shown; it is also in
+  the bottom bar). Both paths are set in
   `/usr/share/sddm/themes/edukasaun/theme.conf`.
 - **Eduka-Settings → Login Screen** changes the style (follow the desktop
   theme, light, dark, glass), accent color, title, clock, background, logo,
@@ -126,6 +132,9 @@ and other greeters.
   Openbox, Eduka-Panel starts `picom` (xrender, no shadows). Without any
   compositor Eduka uses an opaque look instead of black areas, and Liquid
   Glass falls back to Eduka-Default-Theme.
+- picom's own autostart entry (`/etc/xdg/autostart/picom.desktop`, without
+  `OnlyShowIn`) is switched off in Eduka-Desktop sessions, so only the picom
+  Eduka starts runs (0.11).
 
 ## Themes
 
@@ -197,14 +206,50 @@ package, so their licenses stay as they are. PyQt5 (GPL-3.0) is the reason
 the whole program is GPL-3.0-or-later. The About window
 (`eduka-about`) lists every project with its license.
 
+## 0.11 RC: official logo, LXQt modules, touch screen and fingerprint
+
+- `eduka-desktop-session` runs `/usr/lib/edukasaun-desktop/eduka-session-prepare`
+  as the user before `startlxqt`: `~/.config/autostart/lxqt-panel.desktop`,
+  `lxqt-notifications.desktop` and `picom.desktop` with `Hidden=true` and the
+  comment mark "Disabled by Edukasaun Desktop" (files without the mark are
+  the user's and stay), and `Super_L → eduka-menu --toggle` in
+  `~/.config/lxqt/globalkeyshortcuts.conf` (a missing file starts from LXQt's
+  defaults). postrm removes the marked files in every account.
+- Logo: `START_ICON` = `assets/StartMenu.svg` (the official symbol),
+  `START_BUTTON_ICON` = the same with a white ring for the start button,
+  `BRAND_WORDMARK` / `BRAND_WORDMARK_LIGHT` (symbol + traced "Edukasaun OS"
+  letters) at the top of Eduka-Desktop and in About; `EDUKASAUN_WEBSITE`,
+  `open_website()` (xdg-open). `read_panel_config()` moves the old default
+  label and picture to `DEFAULT_MENU_LABEL` ("MENU") once (`BRAND_REVISION`).
+  hicolor icons `edukasaun-os` and `eduka-desktop`.
+- Eduka-Settings: `groups` in `build()` lists entries with one or more tabs
+  (`QTabWidget#pageTabs`); `page_nav` maps every page key (also the old ones)
+  to the entry and tab, `open_page()` accepts both and a few aliases.
+  `place_window()` centers windows and keeps the title bar on the screen.
+- Touch screens: `eduka_input.touch_modes()` (direct touch = touch screen),
+  `apply_touchscreen()` (`Device Enabled`, `libinput Calibration Matrix`,
+  `xinput map-to-output`), `ts_*` and `osk_autostart` in `input.json`;
+  `enable_touch_scrolling()` (QScroller, kinetic) for Eduka windows.
+- Fingerprint: `eduka_fingerprint.py` (fprintd command line tools as the
+  user) and `eduka-fingerprint-apply --enable|--disable` (pam-auth-update of
+  Debian's `fprintd` PAM profile, polkit action `org.edukasaun.desktop.fingerprint`).
+- Categories: `app_in_edukasaun()` puts Education, Science and Game
+  applications only into Edukasaun; overrides match whole words (`_has_word()`).
+- Wallpapers: `WALLPAPER_DIR` = `/usr/share/background/Edukasaun`, plus
+  `/usr/share/backgrounds/Edukasaun` and the old folder; `first_login_wallpaper()`.
+- Wayland: `eduka_input.x11_input()` guards setxkbmap/xinput;
+  `eduka_ensure_wayland_compositor` (lxqt-defaults.sh) for `--wayland`.
+- `VERSION` "0.11 RC", `DEB_VERSION` 0.11.0~rc1.
+
 ## LXQt integration and packaging (0.10.0 Beta update 3)
 
 - Autostart: `/etc/xdg/autostart/eduka-panel.desktop` and
   `eduka-menu-daemon.desktop` are LXQt modules (`X-LXQt-Module=true`,
   `TryExec=`): lxqt-session restarts them after a crash (5 times a minute at
   most) and lists them in its session settings. `--autostart` makes them quit
-  outside an Eduka-Desktop session (`EDUKA_DESKTOP_SESSION` unset), so a plain
-  LXQt session keeps lxqt-panel and lxqt-notificationd. `restart_self()` keeps
+  outside an Eduka-Desktop session (`EDUKA_DESKTOP_SESSION` unset). Since 0.11
+  `eduka-session-prepare` switches lxqt-panel, lxqt-notificationd and picom's
+  autostart off for the account (see the 0.11 RC section). `restart_self()` keeps
   the process (and so the module) when Eduka-Panel or the menu start again
   after a package update (`watch_package_update()`) or a compositor change.
 - Package scripts (`DEBIAN/`): no `pkill`, no programs started as root, no

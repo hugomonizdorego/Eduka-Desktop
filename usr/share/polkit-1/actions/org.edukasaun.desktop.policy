@@ -39,4 +39,15 @@
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-parental-apply</annotate>
   </action>
+  <action id="org.edukasaun.desktop.fingerprint">
+    <description>Switch fingerprint login on or off</description>
+    <message>An administrator password is required to change how this computer accepts fingerprints</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-fingerprint-apply</annotate>
+  </action>
 </policyconfig>

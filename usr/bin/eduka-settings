@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
-import sys, os, subprocess, fcntl, json, configparser, pwd
+import sys, os, re, subprocess, fcntl, json, configparser, pwd
 os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 from pathlib import Path
 from PyQt5.QtWidgets import *
@@ -128,6 +128,12 @@ QToolButton#themeCard:checked,QToolButton#posCard:checked{{border:2px solid {c['
 QToolButton#ledSwatch{{border-radius:13px;border:2px solid {c['field_border']};}}
 QToolButton#ledSwatch:checked{{border:3px solid {c['title']};}}
 QLabel#capability{{background:{c['chip']};color:{c['chip_text']};border-radius:10px;padding:8px 10px;font-weight:600;}}
+QTabWidget#pageTabs::pane{{border:0;background:transparent;}}
+QTabBar#pageTabBar{{background:transparent;}}
+QTabBar#pageTabBar::tab{{background:{c['button']};color:{c['text']};border:1px solid {c['field_border']};border-radius:{c.get('pill', 11)}px;padding:7px 16px;margin:16px 6px 2px 0;font-weight:700;}}
+QTabBar#pageTabBar::tab:first{{margin-left:26px;}}
+QTabBar#pageTabBar::tab:hover{{border:1px solid {c['accent']};}}
+QTabBar#pageTabBar::tab:selected{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
 QScrollArea#pageScroll{{background:transparent;border:0;}}
 QScrollArea#pageScroll>QWidget>QWidget{{background:transparent;}}
 QLabel#pageTitle{{font-size:20px;font-weight:800;color:{c['title']};}}
@@ -312,6 +318,91 @@ class WallpaperDelegate(QStyledItemDelegate):
         return QSize(172, 126)
 
 
+def fingerprint_icon(size=48, color=None):
+    """Fingerprint picture: from the icon theme, else drawn (ridges)."""
+    for name in ('fingerprint', 'auth-fingerprint', 'fingerprint-gui', 'gnome-fingerprint'):
+        if QIcon.hasThemeIcon(name):
+            return QIcon.fromTheme(name)
+    pix=QPixmap(size, size); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    disc=QColor(color or theme_accent())
+    p.setPen(QPen(QColor(255, 255, 255, 200), max(1.0, size/32))); p.setBrush(disc)
+    p.drawEllipse(QRectF(size*0.04, size*0.04, size*0.92, size*0.92))
+    p.setPen(QPen(QColor('#ffffff'), max(1.2, size/18), Qt.SolidLine, Qt.RoundCap)); p.setBrush(Qt.NoBrush)
+    c=QPointF(size/2, size*0.6)
+    for i, (start, span) in enumerate(((25, 130), (15, 150), (5, 170), (-5, 190))):
+        r=size*(0.07+i*0.085)
+        p.drawArc(QRectF(c.x()-r, c.y()-r, 2*r, 2*r), int(start*16), int(span*16))
+    p.drawLine(QPointF(c.x(), c.y()), QPointF(c.x(), c.y()+size*0.14))
+    p.end()
+    return QIcon(pix)
+
+
+class FingerprintDialog(QDialog):
+    """Saves (mode 'enroll') or tests (mode 'verify') a finger with
+    fprintd-enroll / fprintd-verify and tells what to do after every scan."""
+    def __init__(self, parent, mode, finger, fp):
+        super().__init__(parent)
+        self.fp=fp; self.mode=mode; self.finger=finger; self.scans=0; self.result=''; self.errors=[]
+        name=_(fp.FINGER_NAMES.get(finger, finger))
+        self.setWindowTitle(_('Add a fingerprint') if mode == 'enroll' else _('Test a fingerprint'))
+        self.setModal(True); self.setMinimumWidth(420)
+        v=QVBoxLayout(self); v.setContentsMargins(22, 20, 22, 16); v.setSpacing(12)
+        top=QHBoxLayout(); top.setSpacing(14)
+        self.icon=QLabel(); self.icon.setPixmap(fingerprint_icon(64).pixmap(56, 56)); top.addWidget(self.icon, 0, Qt.AlignTop)
+        texts=QVBoxLayout(); texts.setSpacing(4)
+        title=QLabel(name); title.setObjectName('cardTitle'); texts.addWidget(title)
+        first=(_('Place your finger on the reader, lift it, and place it again until this window says it is done.')
+               if mode == 'enroll' else _('Place your finger on the reader.'))
+        self.message=QLabel(first); self.message.setWordWrap(True); texts.addWidget(self.message)
+        self.count=QLabel(''); self.count.setObjectName('fieldHint'); texts.addWidget(self.count)
+        top.addLayout(texts, 1); v.addLayout(top)
+        self.button=QPushButton(_('Cancel')); self.button.clicked.connect(self.reject)
+        row=QHBoxLayout(); row.addStretch(1); row.addWidget(self.button); v.addLayout(row)
+        self.proc=QProcess(self); self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self.read)
+        self.proc.finished.connect(self.finished_)
+        self.proc.errorOccurred.connect(lambda _e: self.finished_(-1, None))
+        tool='fprintd-enroll' if mode == 'enroll' else 'fprintd-verify'
+        self.proc.start(tool, ['-f', finger])
+
+    def read(self):
+        for line in bytes(self.proc.readAllStandardOutput()).decode('utf-8', 'ignore').splitlines():
+            status=self.fp.enroll_status(line) if self.mode == 'enroll' else self.fp.verify_status(line)
+            if status:
+                self.result=status
+                messages=self.fp.ENROLL_MESSAGES if self.mode == 'enroll' else self.fp.VERIFY_MESSAGES
+                self.message.setText(_(messages.get(status, status)))
+                if status == 'enroll-stage-passed':
+                    self.scans+=1; self.count.setText(_('Scans done: {n}').replace('{n}', str(self.scans)))
+            elif re.search(r'failed|error|not authori[sz]ed|no devices', line, re.I):
+                self.errors.append(line.strip())
+
+    def finished_(self, code, _status=None):
+        if getattr(self, '_ended', False):
+            return
+        self._ended=True
+        ok=self.result in ('enroll-completed', 'verify-match')
+        if not ok and self.errors and self.result not in self.fp.ENROLL_FAILED:
+            err=self.errors[-1]
+            if re.search(r'not authori[sz]ed|PermissionDenied', err, re.I):
+                self.message.setText(_('Not allowed: the password was not confirmed.'))
+            elif re.search(r'no devices', err, re.I):
+                self.message.setText(_('No fingerprint reader was found.'))
+            else:
+                self.message.setText(err)
+        elif not ok and not self.result:
+            self.message.setText(_('The fingerprint reader did not answer. Please try again.'))
+        self.button.setText(_('Close'))
+
+    def reject(self):
+        if self.proc.state() != QProcess.NotRunning:
+            self.proc.terminate()
+            if not self.proc.waitForFinished(1500):
+                self.proc.kill(); self.proc.waitForFinished(500)
+        super().reject()
+
+
 class Page(QWidget):
     """A settings page: title, hint and one or more rounded cards.
     `self.v` is the layout of the first card."""
@@ -494,6 +585,8 @@ class Settings(QDialog):
             for i in range(combo.count()):
                 if combo.itemData(i) is not None: combo.setItemText(i, _(combo.itemText(i)))
         translate_tree(self)
+        enable_touch_scrolling(self)
+        place_window(self)
 
     # ------------------------------------------------------------------ layout
     def build(self):
@@ -514,38 +607,66 @@ class Settings(QDialog):
 
         content=QVBoxLayout(); content.setContentsMargins(0,0,0,0); content.setSpacing(0)
         self.stack=QStackedWidget()
+        # 0.11: pages about the same thing share one entry, with tabs
+        # (17 entries became 11). The old page names still open their tab.
         groups=[
-            ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',self.page_appearance),
-                             ('wallpaper','Wallpaper','preferences-desktop-wallpaper',self.page_wallpaper),
-                             ('desktopicons','Desktop Icons','user-desktop',self.page_desktop_icons),
-                             ('effects','Effects','applications-graphics',self.page_effects)]),
-            ('DESKTOP', [('desktop','Eduka-Desktop','start-here',self.page_behavior),
-                         ('panel','Eduka-Panel','preferences-desktop',self.page_icon_name),
-                         ('clock','Clock','preferences-system-time',self.page_clock),
-                         ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
-            ('DEVICES', [('keyboard','Keyboard','input-keyboard',self.page_keyboard),
-                         ('mouse','Mouse','input-mouse',self.page_mouse),
-                         ('touchpad','Touchpad','input-touchpad',self.page_touchpad)]),
-            ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',self.page_general),
-                        ('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility),
-                        ('parental','Parental Control','preferences-system-parental-controls',self.page_parental),
-                        ('login','Login Screen','system-users',self.page_login),
-                        ('maintenance','Maintenance','applications-system',self.page_advanced)]),
+            ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',
+                              [('appearance','Theme','preferences-desktop-theme',self.page_appearance),
+                               ('effects','Effects','applications-graphics',self.page_effects)]),
+                             ('wallpaper','Wallpaper & Icons','preferences-desktop-wallpaper',
+                              [('wallpaper','Wallpaper','preferences-desktop-wallpaper',self.page_wallpaper),
+                               ('desktopicons','Desktop Icons','user-desktop',self.page_desktop_icons)])]),
+            ('DESKTOP', [('desktop','Eduka-Desktop','start-here',
+                          [('desktop','Eduka-Desktop','start-here',self.page_behavior)]),
+                         ('panel','Eduka-Panel','preferences-desktop',
+                          [('panel','Panel','preferences-desktop',self.page_icon_name),
+                           ('clock','Clock','preferences-system-time',self.page_clock),
+                           ('notifications','Notifications','preferences-system-notifications',self.page_notifications)])]),
+            ('DEVICES', [('keyboard','Keyboard','input-keyboard',
+                          [('keyboard','Keyboard','input-keyboard',self.page_keyboard)]),
+                         ('mouse','Mouse & Touch','input-mouse',
+                          [('mouse','Mouse','input-mouse',self.page_mouse),
+                           ('touchpad','Touchpad','input-touchpad',self.page_touchpad),
+                           ('touchscreen','Touch Screen','input-tablet',self.page_touchscreen)])]),
+            ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',
+                         [('general','Language & Startup','preferences-desktop-locale',self.page_general)]),
+                        ('accessibility','Accessibility','preferences-desktop-accessibility',
+                         [('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility)]),
+                        ('parental','Parental Control','preferences-system-parental-controls',
+                         [('parental','Parental Control','preferences-system-parental-controls',self.page_parental)]),
+                        ('login','Login & Fingerprint','system-users',
+                         [('login','Login Screen','system-users',self.page_login),
+                          ('fingerprint','Fingerprint','fingerprint',self.page_fingerprint)]),
+                        ('maintenance','Maintenance','applications-system',
+                         [('maintenance','Maintenance','applications-system',self.page_advanced)])]),
         ]
-        self.pages=[]; self.page_keys=[]; self.nav_rows={}
+        self.pages=[]; self.page_keys=[]; self.nav_rows={}; self.page_nav={}; self.nav_entries=[]; self.tab_entries=[]
         for gi, (group, entries) in enumerate(groups):
             # Group heading and a line separate the sections.
             self.nav.add_group(group, first=gi == 0)
-            for key, name, icon, builder in entries:
-                page=builder()
-                # Pages scroll on small (1024x600 / 1366x768) school screens.
-                scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
-                nav_icon=get_icon(icon,'preferences-system')
-                if key == 'touchpad':
-                    nav_icon=self._ei.touchpad_icon(48, accent=theme_accent())
-                self.nav_rows[key]=self.nav.add_item(nav_icon, name)
-                self.pages.append((name, icon, page)); self.page_keys.append(key); self.stack.addWidget(scroll)
+            for nav_key, nav_name, nav_icon, subs in entries:
+                row=self.nav.add_item(get_icon(nav_icon,'preferences-system'), nav_name)
+                self.nav_rows[nav_key]=row; self.nav_entries.append((nav_key, nav_icon))
+                tabs=None
+                if len(subs) > 1:
+                    tabs=QTabWidget(); tabs.setObjectName('pageTabs'); tabs.setDocumentMode(True)
+                    bar=tabs.tabBar(); bar.setObjectName('pageTabBar'); bar.setDrawBase(False); bar.setExpanding(False)
+                    bar.setIconSize(QSize(18, 18)); bar.setAccessibleName(nav_name)
+                for ti, (key, name, icon, builder) in enumerate(subs):
+                    page=builder()
+                    # Pages scroll on small (1024x600 / 1366x768) school screens.
+                    scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
+                    self.pages.append((name, icon, page)); self.page_keys.append(key)
+                    if tabs is not None:
+                        tabs.addTab(scroll, self.sub_icon(key, icon), _(name))
+                        self.tab_entries.append((tabs, ti, key, icon)); self.page_nav[key]=(row, tabs, ti)
+                    else:
+                        self.page_nav[key]=(row, None, 0)
+                self.stack.addWidget(tabs if tabs is not None else scroll)
+                if tabs is not None:
+                    tabs.currentChanged.connect(lambda _i, t=tabs: self.page_shown())
         self.nav.finish()
+        self.nav.currentRowChanged.connect(lambda _r: QTimer.singleShot(0, self.page_shown))
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['appearance'])
         content.addWidget(self.stack, 1)
 
@@ -564,7 +685,30 @@ class Settings(QDialog):
         # slider or typing does not restart the panel many times).
         QTimer.singleShot(0, self.enable_live_apply)
 
-    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad')
+    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad',
+                 'touchscreen', 'fingerprint')
+
+    def sub_icon(self, key, icon):
+        if key == 'touchpad' and hasattr(self, '_ei'):
+            return self._ei.touchpad_icon(48, accent=theme_accent())
+        if key == 'fingerprint':
+            return fingerprint_icon()
+        if key == 'touchscreen':
+            return get_icon('preferences-desktop-touchscreen', ['input-touchscreen', 'input-tablet', 'input-mouse'])
+        return get_icon(icon, 'preferences-system')
+
+    def current_page_key(self):
+        """Key of the page (or tab) that is shown now."""
+        row=next((r for r, b in enumerate(self.nav.buttons) if b.isChecked()), -1)
+        for key, (r, tabs, idx) in self.page_nav.items():
+            if r == row and (tabs is None or tabs.currentIndex() == idx):
+                return key
+        return ''
+
+    def page_shown(self):
+        # The fingerprint reader is asked only when its page is opened.
+        if self.current_page_key() == 'fingerprint' and not getattr(self, '_fp_loaded', False):
+            self._fp_loaded=True; self.fp_refresh()
 
     def enable_live_apply(self):
         """Connects the controls of the pages to a debounced Apply. The login
@@ -854,7 +998,7 @@ class Settings(QDialog):
     def page_wallpaper(self):
         import eduka_wallpaper as ew
         self._ew=ew; cfg=ew.wallpaper_config(); self._wall=cfg
-        p=Page('Wallpaper', 'Pictures from /usr/share/Edukasaun/Backgrounds and your own. Point at a picture to see it bigger; changes show on the desktop at once.')
+        p=Page('Wallpaper', 'Pictures from /usr/share/background/Edukasaun and your own. Point at a picture to see it bigger; changes show on the desktop at once.')
         top=QHBoxLayout(); top.setSpacing(14)
         self.wall_preview=QLabel(); self.wall_preview.setFixedSize(256, 144); self.wall_preview.setObjectName('wallPreview'); self.wall_preview.setAlignment(Qt.AlignCenter)
         top.addWidget(self.wall_preview)
@@ -897,11 +1041,12 @@ class Settings(QDialog):
     def fill_wall_grid(self):
         cfg=self._wall; paths=self._ew.list_wallpapers(cfg['extra'] + [i for i in cfg['images'] if i not in cfg['extra']])
         self.wall_grid.blockSignals(True); self.wall_grid.set_images(paths)
+        chosen={os.path.realpath(i) for i in cfg['images']}
         for i in range(self.wall_grid.count()):
-            it=self.wall_grid.item(i); it.setSelected(it.data(Qt.UserRole) in cfg['images'])
+            it=self.wall_grid.item(i); it.setSelected(os.path.realpath(it.data(Qt.UserRole)) in chosen)
         self.wall_grid.blockSignals(False)
         if not paths:
-            self.wall_hint.setText(_('No pictures in /usr/share/Edukasaun/Backgrounds yet — press "Add pictures…". The background color is used meanwhile.'))
+            self.wall_hint.setText(_('No pictures in /usr/share/background/Edukasaun yet — press "Add pictures…". The background color is used meanwhile.'))
         else:
             self.wall_hint.setText(_('{n} pictures. Click one to use it; with the slideshow on, choose several.').replace('{n}', str(len(paths))))
         self.update_wall_preview()
@@ -991,6 +1136,12 @@ class Settings(QDialog):
             self._ei=eduka_input; self.input_cfg=eduka_input.input_config()
         return self._ei, self.input_cfg
 
+    def pointer_devs(self):
+        """The mice, touchpads and touch screens, asked once (xinput)."""
+        if not hasattr(self, '_pointer_devs'):
+            self._pointer_devs=self._ei.pointer_devices()
+        return self._pointer_devs
+
     def page_keyboard(self):
         ei, cfg=self.input_widgets_ready()
         p=Page('Keyboard', 'Keyboard layouts, the key that switches them and key repeat. Changes work at once.')
@@ -1071,7 +1222,7 @@ class Settings(QDialog):
             self._dclick_state=not self._dclick_state
             b.setIcon(get_icon('face-smile' if self._dclick_state else 'face-plain', 'emblem-default')); b.setText('  '+(_('Well done!') if self._dclick_state else _('Double-click here to test')))
         test.mouseDoubleClickEvent=dbl; p.v.addWidget(test)
-        found=[d['name'] for d in ei.pointer_devices() if not d['touchpad']]
+        found=[d['name'] for d in self.pointer_devs() if not d['touchpad'] and not d.get('touchscreen')]
         p.v.addWidget(hint_label(_('Found: {d}').replace('{d}', ', '.join(found)) if found else _('Settings are used by every mouse that is plugged in.')))
         self.ms_speed.valueChanged.connect(self._input_changed); self.ms_dclick.valueChanged.connect(self._input_changed); self.ms_wheel.valueChanged.connect(self._input_changed)
         for cb in (self.ms_left, self.ms_natural, self.ms_middle): cb.toggled.connect(self._input_changed)
@@ -1080,7 +1231,7 @@ class Settings(QDialog):
 
     def page_touchpad(self):
         ei, cfg=self.input_widgets_ready()
-        pads=ei.touchpads()
+        pads=[d for d in self.pointer_devs() if d['touchpad']]
         p=Page('Touchpad', 'The touchpad of a laptop. Changes work at once.')
         top=QHBoxLayout(); top.setSpacing(16)
         self.tp_view=ei.TouchpadView(accent=theme_accent()); self.tp_view.setFixedSize(150, 116)
@@ -1118,6 +1269,169 @@ class Settings(QDialog):
             elif ev[0] == 'press': self.tp_view.press(ev[1])
             else: self.tp_view.release(ev[1])
 
+    # ------------------------------------------------------------ touch screen
+    def page_touchscreen(self):
+        ei, cfg=self.input_widgets_ready()
+        screens=[d for d in self.pointer_devs() if d.get('touchscreen')]
+        p=Page('Touch Screen', 'Touch screens of laptops, tablets and all-in-one computers. Changes work at once.')
+        top=QHBoxLayout(); top.setSpacing(16)
+        pic=QLabel(); pic.setPixmap(self.sub_icon('touchscreen', 'input-tablet').pixmap(48, 48)); top.addWidget(pic, 0, Qt.AlignTop)
+        info=QVBoxLayout(); info.setSpacing(6)
+        name=QLabel(', '.join(d['name'] for d in screens) if screens else _('No touch screen found on this computer.')); name.setObjectName('cardTitle'); name.setWordWrap(True); info.addWidget(name)
+        info.addWidget(hint_label('Tap to click and drag a finger to scroll.' if screens else 'The settings are kept and used when a touch screen is found.'))
+        if session_type() == 'wayland':
+            info.addWidget(hint_label('In a Wayland session the compositor sets up touch screens; these settings are used in the X11 session.'))
+        info.addStretch(1); top.addLayout(info, 1); p.v.addLayout(top)
+        f=form()
+        self.ts_enabled=QCheckBox('Touch screen on'); self.ts_enabled.setChecked(bool(cfg['ts_enabled'])); f.addRow('', self.ts_enabled)
+        self.ts_output=QComboBox(); self.ts_output.addItem('Automatic (the built-in screen)', '')
+        for out, primary, built_in in ei.connected_outputs():
+            self.ts_output.addItem(out + (_(' (built-in)') if built_in else _(' (main screen)') if primary else ''), out)
+        if cfg['ts_output'] and self.ts_output.findData(cfg['ts_output']) < 0:
+            self.ts_output.addItem(cfg['ts_output'] + _(' (not connected)'), cfg['ts_output'])
+        self.ts_output.setCurrentIndex(max(0, self.ts_output.findData(cfg['ts_output'])))
+        f.addRow('Screen:', self.ts_output)
+        f.addRow('', hint_label('With two monitors or a projector the touch stays on the screen it belongs to. A turned screen is followed by itself.'))
+        self.ts_rotation=QComboBox()
+        for key, label in ei.TOUCH_ROTATIONS: self.ts_rotation.addItem(label, key)
+        self.ts_rotation.setCurrentIndex(max(0, self.ts_rotation.findData(cfg['ts_rotation'])))
+        f.addRow('Touch direction:', self.ts_rotation)
+        f.addRow('', hint_label('Only when the touch goes the wrong way (a screen that is built in turned).'))
+        p.v.addLayout(f)
+        c=p.new_card('Touch-friendly desktop')
+        self.ts_kinetic=QCheckBox('Scroll lists and pages by dragging a finger (smooth, kinetic scrolling)'); self.ts_kinetic.setChecked(bool(cfg['ts_kinetic'])); c.addWidget(self.ts_kinetic)
+        c.addWidget(hint_label('Used by Eduka-Desktop, Eduka-Panel and Eduka-Settings the next time they open. GTK programs and Firefox scroll with a finger by themselves.'))
+        big=QPushButton(get_icon('zoom-in', 'view-fullscreen'), '  '+_('Bigger buttons for fingers')); big.clicked.connect(self.touch_friendly_sizes)
+        c.addWidget(big, 0, Qt.AlignLeft)
+        c.addWidget(hint_label('Makes Eduka-Panel taller and the tiles of Eduka-Desktop large. Change them back on the Eduka-Panel and Effects pages.'))
+        k=p.new_card('On-screen keyboard')
+        have=ei.onboard_installed()
+        self.osk_autostart=QCheckBox('Start the on-screen keyboard (Onboard) at login'); self.osk_autostart.setChecked(ei.osk_autostart_enabled()); k.addWidget(self.osk_autostart)
+        show=QPushButton(get_icon('input-keyboard', 'preferences-desktop-keyboard'), '  '+_('Show the on-screen keyboard')); show.clicked.connect(lambda: safe_popen(['onboard']))
+        k.addWidget(show, 0, Qt.AlignLeft)
+        self.osk_autostart.setEnabled(have); show.setEnabled(have)
+        k.addWidget(hint_label('To type without a keyboard on a tablet or touch screen.' if have else 'Install the package "onboard" to type without a keyboard.'))
+        self.ts_enabled.toggled.connect(self._input_changed); self.ts_kinetic.toggled.connect(self._input_changed)
+        self.ts_output.currentIndexChanged.connect(self._input_changed); self.ts_rotation.currentIndexChanged.connect(self._input_changed)
+        self.osk_autostart.toggled.connect(lambda on: ei.set_osk_autostart(on))
+        return p.finish()
+
+    def touch_friendly_sizes(self):
+        """Recommended sizes for fingers: a taller panel and large tiles."""
+        if hasattr(self, 'panel_height'):
+            self.panel_height.setValue(max(self.panel_height.value(), 52))
+        if hasattr(self, 'tile_size'):
+            self.tile_size.setCurrentIndex(max(0, self.tile_size.findData(150)))
+        if hasattr(self, 'icon_size'):
+            self.icon_size.setValue(max(self.icon_size.value(), 30))
+        self.apply_settings()
+        self.show_status(_('Bigger buttons for fingers are used now.'))
+
+    # ------------------------------------------------------------ fingerprint
+    def page_fingerprint(self):
+        import eduka_fingerprint as efp
+        self._fp=efp
+        p=Page('Fingerprint', 'Log in, unlock the screen and confirm administrator actions with a finger. The password keeps working as well.')
+        top=QHBoxLayout(); top.setSpacing(16)
+        pic=QLabel(); pic.setPixmap(fingerprint_icon(64).pixmap(48, 48)); top.addWidget(pic, 0, Qt.AlignTop)
+        info=QVBoxLayout(); info.setSpacing(4)
+        self.fp_reader=QLabel(_('Looking for a fingerprint reader…')); self.fp_reader.setObjectName('cardTitle'); self.fp_reader.setWordWrap(True); info.addWidget(self.fp_reader)
+        self.fp_state=hint_label(''); info.addWidget(self.fp_state)
+        top.addLayout(info, 1)
+        again=QPushButton('Check again'); again.clicked.connect(self.fp_refresh); top.addWidget(again, 0, Qt.AlignTop)
+        p.v.addLayout(top)
+        c=p.new_card('Saved fingers')
+        self.fp_list=QListWidget(); self.fp_list.setObjectName('layoutList'); self.fp_list.setFixedHeight(118); c.addWidget(self.fp_list)
+        row=QHBoxLayout(); row.setSpacing(8)
+        self.fp_finger=QComboBox()
+        for key, label in efp.FINGERS: self.fp_finger.addItem(label, key)
+        self.fp_add=QPushButton(get_icon('list-add'), ' '+_('Add finger…')); self.fp_add.clicked.connect(lambda: self.fp_scan('enroll'))
+        self.fp_test=QPushButton(get_icon('dialog-ok-apply', 'emblem-default'), ' '+_('Test')); self.fp_test.clicked.connect(lambda: self.fp_scan('verify'))
+        self.fp_remove=QPushButton(get_icon('list-remove'), ' '+_('Remove')); self.fp_remove.clicked.connect(self.fp_delete)
+        row.addWidget(self.fp_finger, 1); row.addWidget(self.fp_add); row.addWidget(self.fp_test); row.addWidget(self.fp_remove)
+        c.addLayout(row)
+        c.addWidget(hint_label('Choose a finger, press "Add finger…" and follow the window. Test checks a saved finger.'))
+        u=p.new_card('Use the fingerprint')
+        self.fp_pam=QCheckBox('Accept a finger at the login screen, the screen lock, sudo and administrator password windows')
+        self.fp_pam.setChecked(efp.pam_enabled()); u.addWidget(self.fp_pam)
+        self.fp_pam_hint=hint_label('For every account of this computer; needs an administrator password. The login screen waits a few seconds for a finger, then the password works as before.')
+        u.addWidget(self.fp_pam_hint)
+        self.fp_pam.toggled.connect(self.fp_pam_toggled)
+        self.fp_set_buttons(False)
+        return p.finish()
+
+    def fp_set_buttons(self, reader, fingers=()):
+        for w in (self.fp_add, self.fp_finger):
+            w.setEnabled(bool(reader))
+        self.fp_test.setEnabled(bool(reader) and bool(fingers))
+        self.fp_remove.setEnabled(bool(reader) and bool(fingers))
+        self.fp_pam.setEnabled(self._fp.pam_profile_installed() and is_admin_user() and shutil.which('pkexec') is not None)
+
+    def fp_refresh(self):
+        efp=self._fp
+        if not efp.fprintd_installed():
+            self.fp_reader.setText(_('Fingerprint support is not installed.'))
+            self.fp_state.setText(_('Install the packages "fprintd" and "libpam-fprintd".'))
+            self.fp_list.clear(); self.fp_set_buttons(False); return
+        self.fp_reader.setText(_('Looking for a fingerprint reader…')); self.fp_state.setText('')
+        proc=QProcess(self); proc.setProcessChannelMode(QProcess.MergedChannels); self._fp_proc=proc
+        proc.finished.connect(lambda *_a, pr=proc: self.fp_listed(bytes(pr.readAll()).decode('utf-8', 'ignore')))
+        proc.errorOccurred.connect(lambda *_a: self.fp_listed(''))
+        proc.start('fprintd-list', [efp.user_name()])
+
+    def fp_listed(self, text):
+        efp=self._fp
+        reader, fingers=efp.parse_list(text)
+        self.fp_list.clear()
+        if not reader:
+            self.fp_reader.setText(_('No fingerprint reader was found.'))
+            self.fp_state.setText(_('Connect a fingerprint reader (or check that it is supported by libfprint) and press "Check again".'))
+            self.fp_set_buttons(False); return
+        self.fp_reader.setText(reader)
+        self.fp_state.setText(_('{n} fingers saved for this account.').replace('{n}', str(len(fingers))) if fingers else _('No finger saved yet.'))
+        for f in fingers:
+            it=QListWidgetItem(fingerprint_icon(), _(efp.FINGER_NAMES.get(f, f))); it.setData(Qt.UserRole, f); self.fp_list.addItem(it)
+        if fingers:
+            self.fp_list.setCurrentRow(0)
+        self.fp_set_buttons(True, fingers)
+
+    def fp_scan(self, mode):
+        it=self.fp_list.currentItem()
+        finger=it.data(Qt.UserRole) if mode == 'verify' and it is not None else self.fp_finger.currentData()
+        FingerprintDialog(self, mode, finger, self._fp).exec_()
+        self.fp_refresh()
+
+    def fp_delete(self):
+        it=self.fp_list.currentItem()
+        if it is None:
+            return
+        finger=it.data(Qt.UserRole)
+        if QMessageBox.question(self, _('Remove fingerprint'), _('Remove the saved fingerprint "{f}"?').replace('{f}', it.text())) != QMessageBox.Yes:
+            return
+        r=subprocess.run(self._fp.delete_args(finger), capture_output=True, text=True, timeout=60)
+        if r.returncode != 0 and '-f' in (r.stderr or '') + (r.stdout or ''):
+            # fprintd before 1.92 can only remove every finger at once.
+            if QMessageBox.question(self, _('Remove fingerprint'), _('This fprintd can only remove all saved fingers at once. Remove all of them?')) == QMessageBox.Yes:
+                r=subprocess.run(self._fp.delete_args(), capture_output=True, text=True, timeout=60)
+        self.show_status(_('Fingerprint removed.') if r.returncode == 0 else (r.stderr or r.stdout or _('The fingerprint could not be removed.')).strip(), error=r.returncode != 0)
+        self.fp_refresh()
+
+    def fp_pam_toggled(self, on):
+        efp=self._fp
+        if on == efp.pam_enabled():
+            return
+        try:
+            r=subprocess.run(['pkexec', efp.HELPER, '--enable' if on else '--disable'], capture_output=True, text=True, timeout=180)
+            ok=r.returncode == 0
+            message=(r.stderr or r.stdout or '').strip()
+        except Exception as e:
+            ok=False; message=str(e)
+        if ok:
+            self.show_status(_('Fingerprint login switched on.') if on else _('Fingerprint login switched off.'))
+        else:
+            self.fp_pam.blockSignals(True); self.fp_pam.setChecked(efp.pam_enabled()); self.fp_pam.blockSignals(False)
+            self.show_status(message.splitlines()[-1] if message else _('Not changed.'), error=True)
+
     def collect_input(self):
         cfg=dict(self.input_cfg)
         if hasattr(self, 'kb_list'):
@@ -1128,6 +1442,9 @@ class Settings(QDialog):
         if hasattr(self, 'tp_enabled'):
             cfg.update(tp_enabled=self.tp_enabled.isChecked(), tp_tap=self.tp_tap.isChecked(), tp_natural=self.tp_natural.isChecked(), tp_dwt=self.tp_dwt.isChecked(),
                        tp_scroll=self.tp_scroll.currentData(), tp_speed=self.tp_speed.value()/100.0, tp_icon=self.tp_icon.isChecked())
+        if hasattr(self, 'ts_enabled'):
+            cfg.update(ts_enabled=self.ts_enabled.isChecked(), ts_output=self.ts_output.currentData() or '',
+                       ts_rotation=self.ts_rotation.currentData() or 'normal', ts_kinetic=self.ts_kinetic.isChecked())
         return cfg
 
     def apply_input(self):
@@ -1135,7 +1452,7 @@ class Settings(QDialog):
         cfg=self.collect_input(); self.input_cfg=cfg
         self._ei.save_input_config(cfg); self._ei.apply_all(cfg)
         if hasattr(self, 'tp_view'): self.tp_view.disabled=not cfg['tp_enabled']; self.tp_view.update()
-        self.show_status(_('Keyboard, mouse and touchpad settings applied.'))
+        self.show_status(_('Keyboard, mouse, touchpad and touch screen settings applied.'))
 
     THEME_INFO = {
         THEME_PASTEL: 'Eduka-Pastel (the default): soft mint green and sky blue with cute colored badges, big raised round cards and pill buttons; light and friendly for school.',
@@ -1219,7 +1536,7 @@ class Settings(QDialog):
         self.preview_info=hint_label(''); self.preview_info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); self.preview_info.setMinimumHeight(30)
         pv=QVBoxLayout(); pv.setSpacing(4); pv.addWidget(self.preview_strip); pv.addWidget(self.preview_info)
         f.addRow('Preview:', pv)
-        self.label=QLineEdit(); self.label.setMaxLength(24); self.label.setPlaceholderText('Edukasaun'); f.addRow('Button name:', self.label)
+        self.label=QLineEdit(); self.label.setMaxLength(24); self.label.setPlaceholderText(DEFAULT_MENU_LABEL); f.addRow('Button name:', self.label)
         self.icon=QLineEdit(); self.icon.setPlaceholderText(START_ICON); self.icon.setMinimumWidth(120); browse=QPushButton('Browse…'); browse.clicked.connect(self.browse_icon); default_icon=QPushButton('Default'); default_icon.setToolTip('Use the Edukasaun start icon'); default_icon.clicked.connect(lambda: self.icon.setText(START_ICON))
         row=QHBoxLayout(); row.addWidget(self.icon,1); row.addWidget(browse); row.addWidget(default_icon); f.addRow('Button icon:', row)
         self.show_text=QCheckBox('Show text beside icon'); f.addRow('', self.show_text)
@@ -1719,7 +2036,7 @@ class Settings(QDialog):
     def update_preview(self, *_):
         if not hasattr(self, 'panel_height'):
             return
-        label=self.label.text().strip() or 'Edukasaun'
+        label=self.label.text().strip() or DEFAULT_MENU_LABEL
         icon=self.icon.text().strip() or START_ICON
         panel_h=self.panel_height.value()
         usable=panel_h-8
@@ -1727,7 +2044,8 @@ class Settings(QDialog):
         shown=max(16, min(requested, usable))
         size=menu_button_icon_size(icon, shown, self.keep_aspect.isChecked())
         self.preview.setText((' '+label) if self.show_text.isChecked() else '')
-        self.preview.setIcon(get_icon(icon, 'start-here')); self.preview.setIconSize(size)
+        shown_icon=START_BUTTON_ICON if icon == START_ICON and os.path.isfile(START_BUTTON_ICON) else icon
+        self.preview.setIcon(get_icon(shown_icon, 'start-here')); self.preview.setIconSize(size)
         self.preview_strip.setFixedHeight(panel_h)
         radius=max(12, int(panel_h/2)); btn_radius=max(10, int(panel_h/2.4))
         theme=self.theme.currentText() if hasattr(self, 'theme') else DEFAULT_THEME
@@ -1757,9 +2075,10 @@ class Settings(QDialog):
         if hasattr(self, 'theme_cards'):
             for name, card in self.theme_cards.items(): card.setIcon(QIcon(theme_preview(name)))
         # Icons follow the (possibly just changed) icon theme.
-        for key, (name, icon, _page) in zip(self.page_keys, self.pages):
-            ic=self._ei.touchpad_icon(48, accent=theme_accent()) if key == 'touchpad' and hasattr(self, '_ei') else get_icon(icon, 'preferences-system')
-            self.nav.item(self.nav_rows[key]).setIcon(ic)
+        for nav_key, icon in getattr(self, 'nav_entries', []):
+            self.nav.item(self.nav_rows[nav_key]).setIcon(get_icon(icon, 'preferences-system'))
+        for tabs, idx, key, icon in getattr(self, 'tab_entries', []):
+            tabs.setTabIcon(idx, self.sub_icon(key, icon))
         self.logo.setPixmap(get_icon(START_ICON,'start-here').pixmap(40,40))
 
     def load_values(self):
@@ -1794,7 +2113,7 @@ class Settings(QDialog):
         self.visual_access.setChecked(bool(desktop.get('visual_accessibility',False)))
         self.hearing_access.setChecked(bool(desktop.get('hearing_accessibility',False)))
         self.orca.setChecked(bool(desktop.get('orca_enabled',False)))
-        self.label.setText(panel.get('menu_label','Edukasaun'))
+        self.label.setText(panel.get('menu_label',DEFAULT_MENU_LABEL))
         self.icon.setText(panel.get('menu_icon',START_ICON)); self.icon.setCursorPosition(0)
         self.show_text.setChecked(bool(panel.get('show_menu_text',True)))
         self.icon_size.setValue(int(panel.get('menu_icon_size',26)))
@@ -1848,9 +2167,19 @@ class Settings(QDialog):
         if not safe_popen(['orca','--setup']):
             QMessageBox.warning(self, 'Orca settings', 'Orca Voice Settings could not be opened in this desktop session.')
 
+    PAGE_ALIASES = {'theme': 'appearance', 'touch': 'touchscreen', 'touch-screen': 'touchscreen', 'fprint': 'fingerprint',
+                    'behavior': 'desktop', 'menu': 'desktop', 'language': 'general', 'sddm': 'login'}
+
     def open_page(self, key):
-        if key in self.nav_rows:
-            self.nav.setCurrentRow(self.nav_rows[key])
+        """Opens a page or tab by its name (eduka-settings --page NAME)."""
+        key=self.PAGE_ALIASES.get(key, key)
+        target=self.page_nav.get(key)
+        if target is None:
+            return
+        row, tabs, idx=target
+        self.nav.setCurrentRow(row)
+        if tabs is not None:
+            tabs.setCurrentIndex(idx)
 
     def activate_existing_window(self):
         if self.isMinimized():
@@ -1859,7 +2188,7 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or 'Edukasaun','menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        panel={'menu_label':self.label.text().strip() or DEFAULT_MENU_LABEL,'menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
         desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu

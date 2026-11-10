@@ -33,6 +33,8 @@ fi
 # The live user created by live-config: username= on the kernel command
 # line, LIVE_USERNAME in its configuration, otherwise "user".
 user=""
+# The kernel command line is one line of words, split on purpose.
+# shellcheck disable=SC2013
 for arg in $(cat "$CMDLINE"); do
     case "$arg" in username=*) user="${arg#username=}" ;; esac
 done

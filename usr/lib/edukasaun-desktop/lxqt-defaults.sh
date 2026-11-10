@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# shellcheck shell=sh
 # Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 # Shared shell helpers for Eduka-Desktop's LXQt integration.
 # Sourced by /usr/bin/eduka-desktop-session (at every login, as the user).
@@ -52,6 +53,42 @@ eduka_ensure_window_manager() {
     else
         tmp="$conf.eduka-tmp"
         { printf '[General]\nwindow_manager=%s\n\n' "$wm"; cat "$conf"; } > "$tmp" && mv "$tmp" "$conf"
+    fi
+    return 0
+}
+
+# Wayland compositors LXQt 2 can run on, in order of preference (labwc is
+# the one LXQt recommends and the lightest).
+EDUKA_WAYLAND_CANDIDATES="labwc kwin_wayland wayfire niri sway"
+
+# eduka_ensure_wayland_compositor CONFIG_HOME
+# The Wayland session (eduka-desktop-session --wayland) needs a compositor
+# in CONFIG_HOME/lxqt/session.conf ([General] compositor=…), else LXQt asks
+# for one first. Only fills a missing value; a user's choice is never changed.
+eduka_ensure_wayland_compositor() {
+    config_home="$1"
+    [ -n "$config_home" ] || return 0
+    conf="$config_home/lxqt/session.conf"
+    has_comp='^[[:space:]]*compositor[[:space:]]*=[[:space:]]*[^[:space:]]'
+    if [ -f "$conf" ] && grep -Eq "$has_comp" "$conf"; then
+        return 0
+    fi
+    comp=""
+    for candidate in $EDUKA_WAYLAND_CANDIDATES; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            comp="$candidate"
+            break
+        fi
+    done
+    [ -n "$comp" ] || return 0
+    mkdir -p "$config_home/lxqt" || return 0
+    [ -f "$conf" ] || printf '[General]\n' > "$conf"
+    sed -i '/^[[:space:]]*compositor[[:space:]]*=[[:space:]]*$/d' "$conf" 2>/dev/null || :
+    if grep -q '^\[General\]' "$conf"; then
+        sed -i "/^\[General\]/a compositor=$comp" "$conf" 2>/dev/null || :
+    else
+        tmp="$conf.eduka-tmp"
+        { printf '[General]\ncompositor=%s\n\n' "$comp"; cat "$conf"; } > "$tmp" && mv "$tmp" "$conf"
     fi
     return 0
 }

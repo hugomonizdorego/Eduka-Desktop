@@ -1,3 +1,44 @@
+edukasaun-desktop-menu (0.11.0~rc1) trixie; urgency=medium
+
+  * Release candidate 0.11 RC of the final stable version.
+  * Login: lxqt-panel, lxqt-notificationd and picom's own autostart entry
+    stay off in Eduka-Desktop sessions (LXQt autostart entries with
+    Hidden=true, written by the new eduka-session-prepare before LXQt
+    starts and removed again with the package): no lxqt-panel flash at
+    login, no second notification server, and only the picom Eduka starts
+    runs, with Eduka's compositor settings (never twice). The Super key
+    opens Eduka-Desktop (lxqt-globalkeys); a new account gets an Edukasaun
+    wallpaper at its first login. Tested with a real LXQt session with
+    xfwm4 and with Openbox and picom.
+  * Official Edukasaun OS logo: the start button shows the logo and MENU
+    (the old default label and picture change once), the menu header shows
+    the Edukasaun OS wordmark and opens www.edukasaunos.tl; login screen,
+    icons and About updated. System information: "Based on Debian
+    Stable", no code name.
+  * Eduka-Settings: pages about the same thing share one entry with tabs
+    (17 entries became 11; old page names still work); new Touch Screen
+    page (on/off, the monitor it belongs to, direction correction, kinetic
+    finger scrolling, bigger buttons, Onboard on-screen keyboard) and
+    Fingerprint page (fprintd; fingerprint login through pam-auth-update
+    and a new polkit action). Row titles are translated; windows open
+    centered with the title bar on the screen (it was above the screen
+    with Openbox).
+  * Menu: Edukasaun is the one category for learning, science and games;
+    category name overrides match whole words; clearer empty category text;
+    a short fade when it opens. Edukasaun-Dark: a nearly solid surface.
+  * Wallpapers from /usr/share/background/Edukasaun (older folders are
+    still read, chosen pictures keep working).
+  * X11 and Wayland: input settings only in X11 sessions, a Wayland
+    compositor is preselected for the test Wayland session, Firefox gets
+    XInput 2, the touch screen is mapped again after screen changes.
+  * Bug fix: a popup closed during its fade no longer raises an error.
+  * The Timor Aid dictionary note is removed from the documents.
+  * Recommends lxqt-globalkeys, fprintd, libpam-fprintd and onboard.
+  * Translations (Portuguese, Indonesian, Tetun) of the new texts.
+  * Details: /usr/share/edukasaun-desktop/doc/HISTORY.txt
+
+ -- Edukasaun OS <dev@edukasaun.org>  Tue, 10 Nov 2026 06:17:14 +0000
+
 edukasaun-desktop-menu (0.10.0~beta3) trixie; urgency=medium
 
   * Licenses: GPL-3.0-or-later with SPDX lines, a LICENSE file and a

@@ -48,12 +48,13 @@ chmod 0755 "$STAGE"/usr/bin/*
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/live-autologin
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-sddm-apply
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-parental-apply "$STAGE"/usr/lib/edukasaun-desktop/eduka-parental-daemon
+chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-fingerprint-apply "$STAGE"/usr/lib/edukasaun-desktop/eduka-session-prepare
 for s in preinst postinst prerm postrm; do
     [ -f "$STAGE/DEBIAN/$s" ] && chmod 0755 "$STAGE/DEBIAN/$s"
 done
 
 # Syntax-check every Python program before packaging.
-for f in "$STAGE"/usr/bin/* "$STAGE"/usr/lib/edukasaun-desktop/*.py "$STAGE"/usr/lib/edukasaun-desktop/eduka-parental-*; do
+for f in "$STAGE"/usr/bin/* "$STAGE"/usr/lib/edukasaun-desktop/*.py "$STAGE"/usr/lib/edukasaun-desktop/eduka-*; do
     if head -n1 "$f" | grep -q python; then
         python3 - "$f" <<'PY'
 import ast, sys

@@ -13,6 +13,9 @@ starts and whenever a mouse, touchpad or keyboard is plugged in.
   buttons, natural scrolling, tap to click, disable while typing, scrolling
   method, touchpad on/off). Without xinput the speed falls back to xset m.
 * Double-click time and wheel lines: Qt (lxqt.conf) and GTK (settings.ini).
+* Touch screens (0.11): on/off, the monitor the touch belongs to (xinput
+  map-to-output, which also follows a turned screen), an orientation
+  correction (libinput calibration matrix) and the on-screen keyboard.
 
 The same values are written to LXQt's session.conf, so lxqt-session does not
 bring old values back at the next login.
@@ -20,7 +23,7 @@ bring old values back at the next login.
 import re, shutil, subprocess
 from pathlib import Path
 
-from eduka_common import BASE_CONFIG, read_json, write_json, _set_ini_value, _get_ini_value
+from eduka_common import BASE_CONFIG, read_json, write_json, session_type, _set_ini_value, _get_ini_value
 
 
 def _set_ini(path, section, key, value):
@@ -40,12 +43,22 @@ DEFAULTS = {
     'double_click': 400, 'wheel_lines': 3,
     'tp_enabled': True, 'tp_tap': True, 'tp_natural': True, 'tp_dwt': True, 'tp_speed': 0.0,
     'tp_scroll': 'two-finger', 'tp_icon': True,
+    'ts_enabled': True, 'ts_output': '', 'ts_rotation': 'normal', 'ts_kinetic': True, 'osk_autostart': False,
 }
 
 SWITCH_KEYS = [('grp:alt_shift_toggle', 'Alt + Shift'), ('grp:win_space_toggle', 'Super + Space'),
                ('grp:ctrl_shift_toggle', 'Ctrl + Shift'), ('grp:alts_toggle', 'Both Alt keys'),
                ('grp:caps_toggle', 'Caps Lock'), ('', 'No key (use Eduka-Panel)')]
 SCROLL_METHODS = [('two-finger', 'Two fingers'), ('edge', 'Right edge'), ('none', 'No scrolling')]
+# Orientation correction of a touch screen that is built in turned (libinput
+# calibration matrices, as in the libinput documentation).
+TOUCH_ROTATIONS = [('normal', 'Normal'), ('right', 'Turned right (90°)'), ('inverted', 'Upside down (180°)'),
+                   ('left', 'Turned left (270°)')]
+TOUCH_MATRICES = {'normal': (1, 0, 0, 0, 1, 0, 0, 0, 1), 'right': (0, -1, 1, 1, 0, 0, 0, 0, 1),
+                  'inverted': (-1, 0, 1, 0, -1, 1, 0, 0, 1), 'left': (0, 1, 0, -1, 0, 1, 0, 0, 1)}
+BUILTIN_OUTPUT = re.compile(r'^(eDP|LVDS|DSI)', re.I)
+ONBOARD_AUTOSTART = Path.home()/'.config/autostart/eduka-onboard.desktop'
+ONBOARD_MARK = 'X-Eduka-OnScreenKeyboard=true'
 
 TOUCHPAD_NAME = re.compile(r'touch\s*pad|trackpad|glidepoint|synaptics|alps|elan\s*\d*\s*:?\s*tp|\bTP\b', re.I)
 SKIP_POINTER = re.compile(r'XTEST|Virtual core|Video Bus|Power Button|Sleep Button|Lid Switch|\bkeyboard\b|consumer control|system control|wmi hotkeys', re.I)
@@ -95,7 +108,16 @@ def current_layouts():
     return [x for x in (m.group(1).split(',') if m else []) if x]
 
 
+def x11_input():
+    """setxkbmap and xinput only reach real devices in an X11 session; in a
+    Wayland session they would only change XWayland (the Wayland compositor
+    owns keyboards, mice and touch screens there)."""
+    return session_type() == 'x11'
+
+
 def apply_keyboard(cfg):
+    if not x11_input():
+        return False
     ok = True
     if shutil.which('setxkbmap'):
         layouts = [re.sub(r'[^A-Za-z0-9_()-]', '', x) for x in cfg['layouts'] if x][:4]
@@ -128,11 +150,28 @@ def apply_keyboard(cfg):
 
 
 # ------------------------------------------------------------------ pointers
+def touch_modes():
+    """{device id: 'direct' | 'dependent'} from `xinput list --long`: a
+    touch screen reports direct touch, a touchpad dependent touch."""
+    o = _run(['xinput', 'list', '--long']) or ''
+    modes, current = {}, None
+    for line in o.splitlines():
+        m = re.search(r'\bid=(\d+)\s+\[', line)
+        if m:
+            current = int(m.group(1)); continue
+        m = re.search(r'Touch mode:\s*(\w+)', line)
+        if m and current is not None:
+            modes[current] = m.group(1).lower()
+    return modes
+
+
 def pointer_devices():
-    """[{id, name, touchpad}] of the real mice and touchpads (xinput)."""
-    if not shutil.which('xinput'):
+    """[{id, name, touchpad, touchscreen}] of the real mice, touchpads and
+    touch screens (xinput)."""
+    if not shutil.which('xinput') or not x11_input():
         return []
     o = _run(['xinput', 'list']) or ''
+    modes = touch_modes()
     devs = []
     for line in o.splitlines():
         m = re.search(r'↳\s*(.+?)\s+id=(\d+)\s+\[slave\s+pointer', line)
@@ -140,9 +179,56 @@ def pointer_devices():
             continue
         name, did = m.group(1).strip(), int(m.group(2))
         props = _run(['xinput', 'list-props', str(did)]) or ''
-        touch = bool(TOUCHPAD_NAME.search(name)) or 'libinput Tapping Enabled' in props or 'Synaptics' in props
-        devs.append({'id': did, 'name': name, 'touchpad': touch, 'libinput': 'libinput' in props, 'props': props})
+        screen = modes.get(did) == 'direct'
+        touch = not screen and (modes.get(did) == 'dependent' or bool(TOUCHPAD_NAME.search(name))
+                                or 'libinput Tapping Enabled' in props or 'Synaptics' in props)
+        devs.append({'id': did, 'name': name, 'touchpad': touch, 'touchscreen': screen,
+                     'libinput': 'libinput' in props, 'props': props})
     return devs
+
+
+def touchscreens():
+    return [d for d in pointer_devices() if d.get('touchscreen')]
+
+
+def connected_outputs():
+    """[(name, primary, built_in)] of the connected monitors (xrandr)."""
+    o = _run(['xrandr', '--query']) if shutil.which('xrandr') else None
+    out = []
+    for line in (o or '').splitlines():
+        m = re.match(r'^(\S+)\s+connected(\s+primary)?', line)
+        if m:
+            out.append((m.group(1), bool(m.group(2)), bool(BUILTIN_OUTPUT.match(m.group(1)))))
+    return out
+
+
+def touch_output(cfg, outputs=None):
+    """The monitor the touch screen belongs to: the chosen one while it is
+    connected, else the built-in screen, else the primary one."""
+    outputs = connected_outputs() if outputs is None else outputs
+    names = [n for n, _p, _b in outputs]
+    want = str(cfg.get('ts_output') or '')
+    if want in names:
+        return want
+    for n, _p, built_in in outputs:
+        if built_in:
+            return n
+    for n, primary, _b in outputs:
+        if primary:
+            return n
+    return names[0] if names else ''
+
+
+def apply_touchscreen(cfg, dev, outputs=None):
+    b = lambda v: 1 if v else 0
+    _set_prop(dev, 'Device Enabled', b(cfg.get('ts_enabled', True)))
+    matrix = TOUCH_MATRICES.get(cfg.get('ts_rotation'), TOUCH_MATRICES['normal'])
+    _set_prop(dev, 'libinput Calibration Matrix', *[f'{v:g}' for v in matrix])
+    output = touch_output(cfg, outputs)
+    if output:
+        # Maps the touch to that monitor only; xinput also turns it with a
+        # rotated screen (Eduka-Panel maps again after every screen change).
+        _run(['xinput', 'map-to-output', str(dev['id']), output])
 
 
 def touchpads():
@@ -158,7 +244,13 @@ def _set_prop(dev, prop, *values):
 def apply_pointers(cfg, devices=None):
     devices = pointer_devices() if devices is None else devices
     b = lambda v: 1 if v else 0
+    outputs = None
     for d in devices:
+        if d.get('touchscreen'):
+            if outputs is None:
+                outputs = connected_outputs()
+            apply_touchscreen(cfg, d, outputs)
+            continue
         if d['touchpad']:
             _set_prop(d, 'Device Enabled', b(cfg['tp_enabled']))
             _set_prop(d, 'libinput Tapping Enabled', b(cfg['tp_tap']))
@@ -173,7 +265,7 @@ def apply_pointers(cfg, devices=None):
             _set_prop(d, 'libinput Natural Scrolling Enabled', b(cfg['mouse_natural']))
             _set_prop(d, 'libinput Left Handed Enabled', b(cfg['left_handed']))
             _set_prop(d, 'libinput Middle Emulation Enabled', b(cfg['middle_emulation']))
-    if not any(d.get('libinput') for d in devices) and shutil.which('xset'):
+    if x11_input() and not any(d.get('libinput') for d in devices) and shutil.which('xset'):
         # Old drivers: plain X acceleration (1..5) instead of libinput's speed.
         _run(['xset', 'm', f"{int(round(1+(float(cfg['mouse_speed'])+1)*2))}/1", '4'])
     home = Path.home()
@@ -198,8 +290,37 @@ def apply_all(cfg=None):
 
 def device_signature():
     """Changes when a mouse, touchpad or keyboard is plugged in or out."""
-    o = _run(['xinput', 'list', '--id-only']) if shutil.which('xinput') else None
+    o = _run(['xinput', 'list', '--id-only']) if shutil.which('xinput') and x11_input() else None
     return (o or '').split()
+
+
+# ------------------------------------------------------------------ on-screen keyboard
+def onboard_installed():
+    return shutil.which('onboard') is not None
+
+
+def osk_autostart_enabled():
+    try:
+        return ONBOARD_MARK in ONBOARD_AUTOSTART.read_text(encoding='utf-8')
+    except OSError:
+        return False
+
+
+def set_osk_autostart(on):
+    """Start Onboard at login (an autostart entry of this account only)."""
+    try:
+        if on:
+            ONBOARD_AUTOSTART.parent.mkdir(parents=True, exist_ok=True)
+            ONBOARD_AUTOSTART.write_text(
+                '[Desktop Entry]\nType=Application\nName=On-screen keyboard (Onboard)\n'
+                'Comment=Started by Eduka-Settings → Mouse & Touch → Touch Screen\n'
+                'Exec=onboard\nTryExec=onboard\nIcon=onboard\nNoDisplay=true\nOnlyShowIn=LXQt;\n'
+                + ONBOARD_MARK + '\n', encoding='utf-8')
+        elif osk_autostart_enabled():
+            ONBOARD_AUTOSTART.unlink()
+        return True
+    except OSError:
+        return False
 
 
 # ------------------------------------------------------------------ picture

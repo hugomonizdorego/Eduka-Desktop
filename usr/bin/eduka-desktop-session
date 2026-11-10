@@ -18,10 +18,23 @@ mode=x11
 # (startlxqt resets XDG_CURRENT_DESKTOP to "LXQt").
 export EDUKA_DESKTOP_SESSION="$mode"
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+# Firefox on X11: smooth scrolling and touch screens (XInput 2).
+export MOZ_USE_XINPUT2=1
+
+# LXQt settings of this account for Eduka-Desktop (before anything of LXQt
+# starts): lxqt-panel and lxqt-notificationd stay off (Eduka-Panel replaces
+# them) and the Super key opens the start menu.
+if [ -x /usr/lib/edukasaun-desktop/eduka-session-prepare ]; then
+    /usr/lib/edukasaun-desktop/eduka-session-prepare || :
+fi
 
 if [ "$mode" = wayland ]; then
     export XDG_SESSION_TYPE=wayland
     if command -v startlxqtwayland >/dev/null 2>&1; then
+        if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+            . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+            eduka_ensure_wayland_compositor "${XDG_CONFIG_HOME:-$HOME/.config}" || :
+        fi
         exec startlxqtwayland
     fi
     echo "eduka-desktop-session: startlxqtwayland not found; install lxqt-wayland-session" >&2

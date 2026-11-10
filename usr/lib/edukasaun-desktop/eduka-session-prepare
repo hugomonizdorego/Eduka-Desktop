@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""Prepare the LXQt settings of this account for an Eduka-Desktop session.
+
+Run by eduka-desktop-session as the user, every login, before startlxqt
+(nothing of LXQt runs yet, so no LXQt program writes these files meanwhile):
+
+* lxqt-panel and lxqt-notificationd do not start: Eduka-Panel is the panel,
+  the Action Center and the notification server of Eduka-Desktop. This is
+  LXQt's own way to switch off an autostart module (a copy of its entry in
+  ~/.config/autostart with Hidden=true). Before 0.11 lxqt-panel started and
+  was stopped a few seconds later: it flashed at every login and its main
+  menu held the Super key. The files carry a mark; removing the package
+  deletes them again (postrm).
+* picom's own autostart entry (/etc/xdg/autostart/picom.desktop, started in
+  every desktop) stays off as well: Eduka-Panel starts picom itself with the
+  settings of the theme and of Eduka-Settings → Compositor, and leaves it
+  off with xfwm4 or KWin, which composite themselves. Before 0.11 the
+  autostart picom (with shadows and fading from picom.conf) came first and
+  Eduka's compositor settings were not used.
+* The Super (Windows) key opens Eduka-Desktop, the start menu, through
+  lxqt-globalkeys (the LXQt shortcut daemon).
+
+Files the user made (without the mark) are never changed.
+"""
+import configparser, os, sys, tempfile
+
+MARK = 'Disabled by Edukasaun Desktop'
+HIDE = {
+    'lxqt-panel.desktop': ('LXQt Panel', 'lxqt-panel', True),
+    'lxqt-notifications.desktop': ('LXQt Notification Daemon', 'lxqt-notificationd', True),
+    'picom.desktop': ('picom', 'picom', False),
+}
+SHORTCUT_COMMENT = 'Eduka-Desktop (start menu)'
+SHORTCUT_SECTION = 'Super_L.900'
+SHORTCUT_EXEC = 'eduka-menu, --toggle'
+
+
+def config_home():
+    return os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
+
+
+def write_atomic(path, text):
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.eduka-', dir=folder)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+        mask = os.umask(0o022); os.umask(mask)
+        os.chmod(tmp, 0o644 & ~mask)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def hide_lxqt_modules(cfg):
+    for name, (title, program, module) in HIDE.items():
+        path = os.path.join(cfg, 'autostart', name)
+        if os.path.lexists(path):
+            try:
+                if os.path.islink(path):
+                    continue
+                with open(path, encoding='utf-8', errors='ignore') as f:
+                    if MARK not in f.read():
+                        continue          # the user's own entry
+            except OSError:
+                continue
+        write_atomic(path,
+                     '[Desktop Entry]\n'
+                     'Type=Application\n'
+                     f'Name={title}\n'
+                     f'Comment={MARK}: Eduka-Panel replaces it in Eduka-Desktop sessions\n'
+                     f'Exec={program}\n'
+                     + ('OnlyShowIn=LXQt;\nX-LXQt-Module=true\n' if module else '') +
+                     'Hidden=true\n')
+
+
+def system_shortcuts():
+    """LXQt's default shortcuts (lxqt-globalkeysd reads them while the
+    account has no file of its own)."""
+    for folder in ('/etc/xdg/lxqt', '/usr/share/lxqt'):
+        path = os.path.join(folder, 'globalkeyshortcuts.conf')
+        if os.path.isdir(path):           # some packagings ship a folder there
+            path = os.path.join(path, 'globalkeyshortcuts.conf')
+        if os.path.isfile(path):
+            return path
+    return ''
+
+
+def super_key_opens_menu(cfg):
+    """Adds Super_L → eduka-menu --toggle to ~/.config/lxqt/globalkeyshortcuts.conf.
+    A missing file starts from LXQt's defaults, so the other shortcuts stay."""
+    if not any(os.access(os.path.join(d, 'lxqt-globalkeysd'), os.X_OK)
+               for d in os.environ.get('PATH', '/usr/bin:/bin').split(':') if d):
+        return
+    path = os.path.join(cfg, 'lxqt', 'globalkeyshortcuts.conf')
+    text = ''
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+    else:
+        source = system_shortcuts()
+        if source:
+            with open(source, encoding='utf-8', errors='ignore') as f:
+                text = f.read()
+    parser = configparser.RawConfigParser(strict=False, interpolation=None)
+    parser.optionxform = str
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return                                   # a broken file stays as it is
+    for section in parser.sections():
+        if parser.get(section, 'Comment', fallback='') == SHORTCUT_COMMENT:
+            return                               # already there (maybe changed by the user)
+    if text and not text.endswith('\n'):
+        text += '\n'
+    text += ('\n' if text else '') + (f'[{SHORTCUT_SECTION}]\nComment={SHORTCUT_COMMENT}\nEnabled=true\nExec={SHORTCUT_EXEC}\n')
+    write_atomic(path, text)
+
+
+def main():
+    cfg = config_home()
+    for step in (hide_lxqt_modules, super_key_opens_menu):
+        try:
+            step(cfg)
+        except Exception as e:                   # never stop the login
+            print(f'eduka-session-prepare: {step.__name__}: {e}', file=sys.stderr)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

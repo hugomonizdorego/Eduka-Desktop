@@ -23,10 +23,13 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.10.0 Beta"
-# Debian package version (a "~" sorts before the final 0.10.0, after 0.9.25).
-DEB_VERSION = "0.10.0~beta3"
+VERSION = "0.11 RC"
+# Debian package version: release candidate 1 of 0.11 (a "~" sorts before
+# the final 0.11.0 and after 0.10.0~beta3).
+DEB_VERSION = "0.11.0~rc1"
 SETTINGS_REVISION = "0.9.6-transparency"
+# 0.11: the official Edukasaun OS logo and "MENU" on the start button.
+BRAND_REVISION = "0.11-official-logo"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
@@ -120,7 +123,17 @@ EUS_RUNTIME_DIR = Path(os.environ.get('XDG_RUNTIME_DIR','/tmp'))/'eduka-update-s
 EUS_PANEL_STATUS_PATH = EUS_RUNTIME_DIR/'panel-status.json'
 EUS_ICON_DIR = Path('/usr/lib/EUS-ICONS')
 ASSET_DIR = Path('/usr/share/edukasaun-desktop/assets')
-START_ICON = str(ASSET_DIR/'StartMenu.png')
+# Official Edukasaun OS symbol (0.11): the start button and window icon.
+START_ICON = str(ASSET_DIR/'StartMenu.svg')
+OLD_START_ICONS = (str(ASSET_DIR/'StartMenu.png'),)      # defaults before 0.11
+START_BUTTON_ICON = str(ASSET_DIR/'StartMenu-button.svg')  # the same with a white ring
+# Edukasaun OS wordmark (symbol + name) at the top of Eduka-Desktop; the
+# light copy has white letters for the dark themes.
+BRAND_WORDMARK = str(ASSET_DIR/'edukasaun-os-wordmark.svg')
+BRAND_WORDMARK_LIGHT = str(ASSET_DIR/'edukasaun-os-wordmark-light.svg')
+EDUKASAUN_WEBSITE = 'https://www.edukasaunos.tl'
+DEFAULT_MENU_LABEL = 'MENU'
+OLD_MENU_LABELS = ('Edukasaun',)                      # default before 0.11
 GENERIC_ICON = str(ASSET_DIR/'app-generic.png')
 
 # --- X11 / Wayland session handling -------------------------------------
@@ -207,6 +220,21 @@ def ensure_compositor():
     """
     if not in_eduka_session() or session_type() == 'wayland':
         return False
+    # Eduka-Panel and Eduka-Desktop both start at login and both ask for the
+    # compositor: one at a time, so picom is never started twice.
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        lock=open(RUNTIME_DIR/'compositor.lock', 'w')
+    except OSError:
+        return _ensure_compositor_locked()
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        return _ensure_compositor_locked()
+
+def _ensure_compositor_locked():
     _note_picom_crash()
     choice=compositor_choice()
     _wm_compositing(choice)
@@ -1448,6 +1476,12 @@ def _(text, lang=None):
     if out is None and colon:
         out=data.get(core_key+':')
         if out is not None: colon=''
+    if out is None and not colon:
+        # Row titles of Eduka-Settings drop the ':' of their catalog text
+        # ("Pointer speed" for "Pointer speed:"); before 0.11 they stayed English.
+        alt=data.get(core_key+':')
+        if alt is not None:
+            out=alt.rstrip().rstrip(':：').rstrip()
     if out is None:
         for rx, value in patterns:
             mm=rx.match(core_key)
@@ -2016,11 +2050,47 @@ def fade_in(widget, ms=150):
         widget.setWindowOpacity(1-(1-t)**3)
         if t >= 1.0:
             timer.stop(); widget.setWindowOpacity(1.0)
+    def finish():
+        try:
+            timer.stop(); widget.setWindowOpacity(1.0)
+        except RuntimeError:
+            pass
     timer.timeout.connect(step)
     widget._eduka_fade=timer
     widget.setWindowOpacity(0.0); timer.start()
-    QTimer.singleShot(ms+120, lambda: (timer.stop(), widget.setWindowOpacity(1.0)))
+    # A child timer: when a popup closes (and is deleted) before the fade
+    # ends, the timer goes with it (a plain singleShot hit the deleted popup).
+    done=QTimer(widget); done.setSingleShot(True); done.timeout.connect(finish); done.start(ms+120)
     return timer
+
+def place_window(window):
+    """Center a normal application window on the screen and keep its title
+    bar on the screen. Qt dialogs that are made normal windows (Eduka-Settings,
+    About) were placed by Openbox with the title bar above the top edge,
+    so the window could not be moved. QWidget.move() places the frame."""
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QApplication, QWidget
+    screen=QApplication.primaryScreen()
+    if screen is None:
+        return
+    avail=screen.availableGeometry()
+    # QWidget.size(): Eduka-Settings has controls named width and height.
+    size=QWidget.size(window); w, h=size.width(), size.height()
+    title=30          # room for a typical title bar before the frame is known
+    x=avail.x()+max(0, (avail.width()-w)//2)
+    y=avail.y()+max(0, (avail.height()-h-title)//2)
+    window.move(x, y)
+    def check():
+        try:
+            if not window.isVisible():
+                return
+            fg=window.frameGeometry()
+            if fg.top() < avail.top() or fg.left() < avail.left():
+                window.move(max(fg.left(), avail.left()), max(fg.top(), avail.top()))
+        except RuntimeError:
+            pass
+    for ms in (250, 900):
+        QTimer.singleShot(ms, check)
 
 def round_menu(menu):
     """Give any QMenu (also Qt's built-in ones) smooth rounded corners.
@@ -2059,6 +2129,36 @@ class RoundedMenu(QMenu):
         super().addMenu(sub)
         return sub
 
+def touch_scrolling_wanted():
+    """Eduka-Settings → Mouse & Touch → Touch Screen: kinetic finger scrolling."""
+    try:
+        data=read_json(BASE_CONFIG/'input.json', {})
+        return bool(data.get('ts_kinetic', True)) if isinstance(data, dict) else True
+    except Exception:
+        return True
+
+def enable_touch_scrolling(root):
+    """Lists and pages of a window scroll smoothly when a finger drags them
+    on a touch screen (QScroller, kinetic). The mouse is not affected; a
+    tap still clicks."""
+    if not touch_scrolling_wanted():
+        return
+    try:
+        from PyQt5.QtWidgets import QScroller, QScrollerProperties, QAbstractScrollArea
+        for area in root.findChildren(QAbstractScrollArea):
+            vp=area.viewport()
+            if vp is None or vp.property('eduka_touch_scroll'):
+                continue
+            QScroller.grabGesture(vp, QScroller.TouchGesture)
+            scroller=QScroller.scroller(vp); props=scroller.scrollerProperties()
+            props.setScrollMetric(QScrollerProperties.HorizontalOvershootPolicy, QScrollerProperties.OvershootAlwaysOff)
+            props.setScrollMetric(QScrollerProperties.VerticalOvershootPolicy, QScrollerProperties.OvershootAlwaysOff)
+            props.setScrollMetric(QScrollerProperties.DecelerationFactor, 0.35)
+            scroller.setScrollerProperties(props)
+            vp.setProperty('eduka_touch_scroll', True)
+    except Exception:
+        pass
+
 def rounded_text_context_menu(edit):
     """Replace a QLineEdit's square Cut/Copy/Paste menu with a rounded one."""
     edit.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -2074,7 +2174,7 @@ DEFAULT_PANEL = {
     "position": "Bottom",
     "transparency": 0.54,
     "icon_size": 24,
-    "menu_label": "Edukasaun",
+    "menu_label": DEFAULT_MENU_LABEL,
     "menu_icon": START_ICON,
     "menu_icon_size": 26,
     "menu_icon_keep_aspect": True,
@@ -2145,8 +2245,9 @@ CATEGORY_NAME_OVERRIDES = {
     'feathernotes': 'Office', 'featherpad': 'Accessories',
     # Preferences/System
     'appearance': 'Preferences', 'brightness': 'Preferences', 'date and time': 'Preferences',
-    'dimensions': 'Preferences', 'desktop': 'Preferences', 'qt5 configuration': 'Preferences',
-    'fcitx': 'Preferences', 'printer': 'System Tools', 'monitor': 'System Tools',
+    'dimensions': 'Preferences', 'desktop preferences': 'Preferences', 'desktop settings': 'Preferences',
+    'qt5 configuration': 'Preferences', 'monitor settings': 'Preferences',
+    'fcitx': 'Preferences', 'printer': 'System Tools', 'system monitor': 'System Tools', 'monitor': 'System Tools',
 }
 CATEGORY_EXEC_OVERRIDES = {
     'vlc': 'Sound & Video', 'audacious': 'Sound & Video', 'mpv': 'Sound & Video',
@@ -2261,6 +2362,16 @@ def read_panel_config():
     theme=normalize_theme_style(data.get('theme_style'))
     if data.get('theme_style') != theme:
         data['theme_style']=theme
+        changed=True
+    if data.get('_brand_revision') != BRAND_REVISION:
+        # Once, after the update to 0.11: the old default label and picture of
+        # the start button become "MENU" and the official logo. A label or
+        # picture the user chose stays as it is.
+        if str(data.get('menu_label') or '').strip() in OLD_MENU_LABELS + ('',):
+            data['menu_label']=DEFAULT_MENU_LABEL
+        if str(data.get('menu_icon') or '').strip() in OLD_START_ICONS + ('',):
+            data['menu_icon']=START_ICON
+        data['_brand_revision']=BRAND_REVISION
         changed=True
     if changed:
         write_json(panel_config_path(), data)
@@ -2874,6 +2985,13 @@ def safe_popen(cmd):
     except Exception:
         return False
 
+def open_website(url=EDUKASAUN_WEBSITE):
+    """Open a web page in the user's web browser (xdg-open, never a shell)."""
+    url=str(url or '').strip()
+    if not url.startswith(('https://', 'http://')):
+        return False
+    return safe_popen(['xdg-open', url])
+
 def terminal_command(args):
     """Run a Terminal=true application (htop, vim, …) inside a terminal
     window; without one it would run invisibly."""
@@ -3126,18 +3244,42 @@ def load_apps(force=False):
 def rebuild_app_registry():
     return load_apps(force=True)
 
+def _has_word(text, word):
+    """True when `word` (or its plural) is a whole word of `text`: "calc"
+    is in "LibreOffice Calc" but not in "Calculator"."""
+    return re.search(r'(?<![a-z0-9])' + re.escape(word) + r's?(?![a-z0-9])', text) is not None
+
 def app_override_category(app):
     # The English name decides (names may be translated now).
     name=(app.get('name_en','') or app.get('name','') or '').strip().casefold()
     exe=os.path.basename((app.get('exec','').split() or [''])[0]).casefold()
     did=(app.get('desktop_id','') or '').replace('.desktop','').casefold()
     for key, cat in CATEGORY_NAME_OVERRIDES.items():
-        if key in name or key == did:
+        if key == did or _has_word(name, key):
             return cat
     for key, cat in CATEGORY_EXEC_OVERRIDES.items():
-        if key == exe or key in did or key in name:
+        if key == exe or key in did or _has_word(name, key):
             return cat
     return ''
+
+# Edukasaun is the one menu for learning, science and games: the main
+# categories Education, Science and Game of the freedesktop.org menu
+# specification, their usual sub-categories, and well-known learning apps.
+EDUKASAUN_CATEGORY_WORDS = ('education', 'science', 'game', 'math', 'astronomy', 'chemistry', 'physics',
+                            'biology', 'geography', 'geoscience')
+EDUKASAUN_APP_WORDS = ('gcompris', 'scratch', 'turbowarp', 'kdeedu', 'kbruch', 'kturtle', 'kstars', 'kalzium',
+                       'marble', 'geogebra', 'tuxpaint', 'tux paint', 'tuxmath', 'tuxtype', 'stellarium', 'celestia')
+
+def app_in_edukasaun(app):
+    """True for an education, science or game application (shown only in
+    the Edukasaun category, not a second time elsewhere)."""
+    cats=(app.get('categories','') or '').casefold()
+    if any(w in cats for w in EDUKASAUN_CATEGORY_WORDS):
+        return True
+    name=((app.get('name_en','') or '')+' '+(app.get('name','') or '')).casefold()
+    did=(app.get('desktop_id','') or '').replace('.desktop','').casefold()
+    exe=os.path.basename((app.get('exec','').split() or [''])[0]).casefold()
+    return any(_has_word(name, w) or w == did or w == exe for w in EDUKASAUN_APP_WORDS)
 
 def app_matches_category(app, category):
     if category == 'All':
@@ -3147,23 +3289,25 @@ def app_matches_category(app, category):
     override = app_override_category(app)
     if override:
         return category == override
+    # Games, learning and science applications: only in Edukasaun.
+    if app_in_edukasaun(app):
+        return category == 'Edukasaun'
+    if category == 'Edukasaun':
+        return False
     cats=(app.get('categories','') or '').lower()
     name=((app.get('name_en','') or '')+' '+(app.get('name','') or '')).lower()
     did=(app.get('desktop_id','') or '').lower()
     exe=os.path.basename((app.get('exec','').split() or [''])[0]).lower()
     blob=' '.join([cats,name,did,exe])
     # Category priority rules. These keep broad/incorrect .desktop categories from
-    # placing multimedia/education/preference apps in Programming.
+    # placing multimedia/preference apps in Programming.
     multimedia_words=['audio','video','audiovideo','multimedia','player','vlc','audacious','mpv','celluloid','pavucontrol']
-    education_words=['education','science','game','gcompris','tux','scratch','turbowarp','kdeedu','kbruch','kturtle','kstars','kalzium','marble','geogebra']
     pref_words=['settings','preferences','configuration','appearance','brightness','desktopsettings','lxqt-config','nm-connection-editor']
     if category == 'Sound & Video' and any(x in blob for x in multimedia_words):
         return True
-    if category == 'Edukasaun' and any(x in blob for x in education_words):
-        return True
     if category == 'Preferences' and any(x in blob for x in pref_words):
         return True
-    if category == 'Programming' and (any(x in blob for x in multimedia_words+education_words+pref_words) or 'development' not in cats):
+    if category == 'Programming' and (any(x in blob for x in multimedia_words+pref_words) or 'development' not in cats):
         return False
     for cname, icon, needles in CATEGORY_ORDER:
         if cname == category:
@@ -3385,8 +3529,7 @@ def distro_info():
     return {
         'os': 'Edukasaun OS',
         'version': '1.0',
-        'codename': 'Kameli',
-        'base': 'Debian GNU/Linux 13 (Trixie)',
+        'base': 'Based on Debian Stable',
         'desktop': 'Eduka-Desktop (LXQt Session)',
     }
 

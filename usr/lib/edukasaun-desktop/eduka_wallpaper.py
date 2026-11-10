@@ -23,7 +23,11 @@ from urllib.parse import quote
 
 from eduka_common import (CACHE_DIR, read_desktop_config, save_desktop_config, child_env, _get_ini_value, _set_ini_value)
 
-BACKGROUND_DIRS = [Path('/usr/share/Edukasaun/Backgrounds')]
+# Edukasaun OS wallpapers (0.11): /usr/share/background/Edukasaun. The
+# freedesktop.org-style /usr/share/backgrounds/Edukasaun and the folder of
+# the versions before 0.11 are read as well, so no picture goes missing.
+WALLPAPER_DIR = Path('/usr/share/background/Edukasaun')
+BACKGROUND_DIRS = [WALLPAPER_DIR, Path('/usr/share/backgrounds/Edukasaun'), Path('/usr/share/Edukasaun/Backgrounds')]
 IMAGE_EXT = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.svg')
 MODES = [('zoom', 'Zoom'), ('tile', 'Mosaic'), ('center', 'Centered'), ('fit', 'Scaled'), ('stretch', 'Stretched')]
 TRANSITIONS = [('none', 'No transition'), ('fast', 'Fast fade (0.5 s)'), ('normal', 'Fade (1 s)'), ('slow', 'Slow fade (2 s)')]
@@ -33,6 +37,22 @@ PCMANFM_CONF = Path.home()/'.config/pcmanfm-qt/lxqt/settings.conf'
 DEFAULTS = {'images': [], 'mode': 'zoom', 'color': '#1f6b45', 'slideshow': False, 'interval': 10,
             'random': True, 'transition': 'normal', 'extra': []}
 SHORTCUTS = [('Home', 'user-home.desktop'), ('Trash', 'trash-can.desktop'), ('Computer', 'computer.desktop'), ('Network', 'network.desktop')]
+
+
+def _relocated(path):
+    """A chosen picture of an older wallpaper folder that is now in
+    /usr/share/background/Edukasaun (same file name) keeps working."""
+    if os.path.exists(path):
+        return path
+    for old in BACKGROUND_DIRS[1:]:
+        try:
+            rel = Path(path).relative_to(old)
+        except ValueError:
+            continue
+        new = WALLPAPER_DIR/rel
+        if new.is_file():
+            return str(new)
+    return path
 
 
 def wallpaper_config():
@@ -48,7 +68,7 @@ def wallpaper_config():
     if cfg['transition'] not in TRANSITION_MS: cfg['transition'] = 'normal'
     try: cfg['interval'] = max(1, min(1440, int(cfg['interval'])))
     except Exception: cfg['interval'] = 10
-    cfg['images'] = [str(p) for p in cfg['images'] if isinstance(p, str)]
+    cfg['images'] = [_relocated(str(p)) for p in cfg['images'] if isinstance(p, str)]
     cfg['extra'] = [str(p) for p in cfg['extra'] if isinstance(p, str)]
     return cfg
 
@@ -62,16 +82,24 @@ def list_wallpapers(extra=()):
     """Every picture in the Edukasaun background folders, plus the pictures
     the user added."""
     seen, out = set(), []
+
+    def add(path):
+        # The same picture through a link (one folder linked to another)
+        # is shown once.
+        key = os.path.realpath(path)
+        if key not in seen:
+            seen.add(key); out.append(str(path))
+
     for d in BACKGROUND_DIRS:
         try:
             for p in sorted(d.rglob('*')):
-                if p.suffix.lower() in IMAGE_EXT and p.is_file() and str(p) not in seen:
-                    seen.add(str(p)); out.append(str(p))
+                if p.suffix.lower() in IMAGE_EXT and p.is_file():
+                    add(p)
         except Exception:
             continue
     for p in extra:
-        if p not in seen and os.path.isfile(p):
-            seen.add(p); out.append(p)
+        if os.path.isfile(p):
+            add(p)
     return out
 
 
@@ -173,6 +201,44 @@ def current_image(cfg=None):
     cfg = cfg or wallpaper_config()
     imgs = [p for p in cfg['images'] if os.path.isfile(p)]
     return imgs[0] if imgs else ''
+
+
+def _pcmanfm_wallpaper():
+    """The picture pcmanfm-qt shows now: this account's setting, else the
+    system default of the LXQt profile."""
+    for conf in (PCMANFM_CONF, Path('/etc/xdg/pcmanfm-qt/lxqt/settings.conf'),
+                 Path('/usr/share/pcmanfm-qt/lxqt/settings.conf')):
+        value = _get_ini_value(conf, 'Desktop', 'Wallpaper')
+        if value is not None:
+            return value
+    return ''
+
+
+def first_login_wallpaper():
+    """Once per account (0.11): an Edukasaun wallpaper from
+    /usr/share/background/Edukasaun instead of LXQt's stock picture. A
+    wallpaper the user, Eduka-Settings or the system administrator chose is
+    kept."""
+    try:
+        data = read_desktop_config()
+    except Exception:
+        return False
+    if data.get('wallpaper') or data.get('wallpaper_first_login_done'):
+        return False
+    save_desktop_config({'wallpaper_first_login_done': True})
+    current = _pcmanfm_wallpaper()
+    stock = (not current or not os.path.isfile(current)
+             or current.startswith(('/usr/share/lxqt/', '/usr/share/pcmanfm-qt/', '/usr/share/wallpapers/')))
+    if not stock:
+        return False
+    pictures = [p for p in list_wallpapers() if p.startswith(str(WALLPAPER_DIR) + '/')] or list_wallpapers()
+    if not pictures:
+        return False
+    names = ('default', 'edukasaun', 'edukasaun-default', 'edukasaun-os')
+    choice = next((p for p in pictures if Path(p).stem.casefold() in names), pictures[0])
+    cfg = wallpaper_config(); cfg['images'] = [choice]
+    save_wallpaper_config(cfg)
+    return apply_wallpaper(cfg)
 
 
 def apply_wallpaper(cfg=None, path=None):

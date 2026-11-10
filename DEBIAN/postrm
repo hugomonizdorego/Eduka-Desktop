@@ -6,11 +6,12 @@ UNITS="eduka-live-autologin.service eduka-parental.service"
 ETC_FILES="/etc/sddm.conf.d/10-edukasaun.conf /etc/xdg/autostart/eduka-panel.desktop /etc/xdg/autostart/eduka-menu-daemon.desktop"
 NOTIFY_MARK='Disabled by Edukasaun Desktop'
 
-# Eduka-Panel hides LXQt's notification daemon in the accounts that used
-# Eduka-Desktop. Give it back to plain LXQt sessions: each local account
-# removes Eduka's own override file (recognised by its comment) itself, so
-# nothing in a home folder is changed by root.
-restore_lxqt_notifications() {
+# Eduka-Desktop sessions switch off lxqt-panel, LXQt's notification daemon
+# and picom's own autostart (eduka-session-prepare: autostart entries with
+# Hidden=true). Give them back: each local account removes Eduka's own
+# files (recognised by their comment) itself, so nothing in a home folder is
+# changed by root.
+restore_lxqt_modules() {
     command -v runuser >/dev/null 2>&1 || return 0
     while IFS=: read -r name _ uid _ _ home _; do
         case "$uid" in ''|*[!0-9]*) continue ;; esac
@@ -19,8 +20,10 @@ restore_lxqt_notifications() {
         fi
         # shellcheck disable=SC2016  # the inner script gets its own arguments
         runuser -u "$name" -- sh -c '
-            f="$1/.config/autostart/lxqt-notifications.desktop"
-            if [ -f "$f" ] && [ ! -L "$f" ] && grep -qs "$2" "$f"; then rm -f "$f"; fi
+            for n in lxqt-panel.desktop lxqt-notifications.desktop picom.desktop; do
+                f="$1/.config/autostart/$n"
+                if [ -f "$f" ] && [ ! -L "$f" ] && grep -qs "$2" "$f"; then rm -f "$f"; fi
+            done
         ' sh "$home" "$NOTIFY_MARK" </dev/null >/dev/null 2>&1 || true
     done < /etc/passwd
     skel=/etc/skel/.config/autostart/lxqt-notifications.desktop
@@ -50,7 +53,7 @@ case "$1" in
         if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
         fi
-        restore_lxqt_notifications
+        restore_lxqt_modules
         # Login screen files written by Eduka-Settings and the live session;
         # useless without the theme and the Eduka-Desktop session.
         rm -f /etc/sddm.conf.d/zz-eduka-live-autologin.conf /etc/lightdm/lightdm.conf.d/90-eduka-live-autologin.conf \

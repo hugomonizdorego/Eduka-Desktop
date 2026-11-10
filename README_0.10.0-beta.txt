@@ -71,5 +71,4 @@ Changes in the first 0.10.0 Beta package (0.10.0~beta1):
 - Versions: this is 0.10.0 Beta (Debian package 0.10.0~beta1). From now on development is slower (slow ring): fewer changes, more checking.
 - Translations for Portuguese, Indonesian and Tetun of the new texts.
 
-The Tetun check against the Timor Aid dictionary follows when www.timoraid.org can be reached from the build environment.
 Development continues slowly (slow ring) toward the final version 1.1.12 (November 2026).
