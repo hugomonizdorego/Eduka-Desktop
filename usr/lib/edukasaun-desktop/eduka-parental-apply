@@ -13,6 +13,10 @@ Reads one JSON object from standard input (written by Eduka-Settings):
   message   text shown before the computer shuts down (max 300 characters)
   emoji     one of EMOJIS
   reset     true = start counting again from now (today's used time is cleared)
+  break_minutes  0 = off, otherwise 10 - 120: Eduka-Panel reminds to take a
+            short break after that many minutes of use (RC2)
+  recommendation  the suggestion the settings came from (shown again in
+            Eduka-Settings), one of RECOMMENDED or ''
 
 Or, from the lock screen (Ctrl+Alt+P), one more period without changing
 the settings:
@@ -25,6 +29,7 @@ CONF = '/etc/edukasaun-desktop/parental.json'
 USAGE = '/var/lib/edukasaun-desktop/parental-usage.json'
 EMOJIS = ['😊', '😴', '📚', '⏰', '🌙', '👋', '❤️', '⭐', '🙏', '🏃', '🌈', '🧸', '🎒', '☀️', '🍎', '💤']
 MODES = ('boot', 'daily')
+RECOMMENDED = ('small', 'primary', 'teen', 'lesson', 'evening')
 
 
 def conf_seconds(conf):
@@ -88,8 +93,15 @@ def main():
     seconds = conf_seconds(req)
     mode = req.get('mode') if req.get('mode') in MODES else 'boot'
     emoji = req.get('emoji') if req.get('emoji') in EMOJIS else EMOJIS[0]
+    try:
+        brk = int(req.get('break_minutes', 0) or 0)
+    except (TypeError, ValueError):
+        brk = 0
+    brk = 0 if brk <= 0 else max(10, min(120, brk))
+    rec = str(req.get('recommendation', ''))
     conf = {'enabled': bool(req.get('enabled', False)), 'seconds': seconds, 'minutes': max(1, -(-seconds // 60)), 'mode': mode,
-            'message': clean_text(req.get('message', ''), 300), 'emoji': emoji, 'changed_at': int(time.time())}
+            'message': clean_text(req.get('message', ''), 300), 'emoji': emoji, 'changed_at': int(time.time()),
+            'break_minutes': brk, 'recommendation': rec if rec in RECOMMENDED else ''}
     write_atomic(CONF, conf)
     if req.get('reset') or not conf['enabled']:
         write_atomic(USAGE, {'date': time.strftime('%Y-%m-%d'), 'seconds': 0, 'boot_id': ''})

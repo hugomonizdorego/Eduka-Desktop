@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Edukasaun-Login-Dark
+Comment=Edukasaun login screen (LightDM), dark
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Edukasaun-Login-Dark
+IconTheme=Papirus-Dark

@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""eduka-quick: show Eduka-Quick, the round quick launcher (Super+Q).
+
+The pie is drawn by the resident Eduka-Desktop daemon (eduka-menu --daemon),
+so it appears at once; this command only asks the daemon, and starts it when
+it does not run yet.
+
+  eduka-quick             show (or hide) Eduka-Quick where the mouse is
+  eduka-quick --settings  open Eduka-Settings → Eduka-Quick
+"""
+import sys, time
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+from eduka_common import ensure_dirs, menu_daemon_alive, send_menu_command, safe_popen
+
+
+def main():
+    if '--help' in sys.argv or '-h' in sys.argv:
+        print(__doc__.strip()); return 0
+    if '--settings' in sys.argv:
+        safe_popen(['eduka-settings', '--page', 'quick']); return 0
+    ensure_dirs()
+    if not menu_daemon_alive():
+        safe_popen(['eduka-menu', '--daemon'])
+        for _ in range(60):          # the first start takes a moment
+            time.sleep(0.1)
+            if menu_daemon_alive():
+                break
+        time.sleep(0.4)
+    send_menu_command('quick')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

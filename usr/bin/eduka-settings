@@ -113,6 +113,10 @@ QListWidget#navList{{background:transparent;border:0;outline:0;padding:0;}}
 QListWidget#navList::item{{padding:10px 10px;border-radius:12px;margin:2px 0;color:{c['text']};font-weight:600;}}
 QListWidget#navList::item:hover{{background:{c['hover']};}}
 QListWidget#navList::item:selected{{background:{c['accent']};color:#ffffff;}}
+QListWidget#overviewList{{background:transparent;border:0;outline:0;}}
+QListWidget#overviewList::item{{padding:4px 8px;border-radius:10px;color:{c['text']};font-weight:600;}}
+QListWidget#overviewList::item:hover{{background:{c['hover']};}}
+QListWidget#overviewList::item:selected{{background:{c['hover']};color:{c['text']};border:1px solid {c['accent']};}}
 QToolButton#navItem{{background:transparent;border:{'1px solid transparent' if c.get('shadow') else '0'};border-radius:{c.get('pill', 11)-2 if c.get('shadow') else 11}px;padding:6px 10px;text-align:left;color:{c['text']};font-weight:600;}}
 QToolButton#navItem:hover{{background:{c['hover']};}}
 QToolButton#navItem:checked{{background:{c.get('nav_sel_bg', c['accent'])};color:{c.get('nav_sel_text', '#ffffff')};{('border:1px solid '+c['shadow']+';') if c.get('shadow') else ''}}}
@@ -135,6 +139,7 @@ QTabBar#pageTabBar::tab:first{{margin-left:26px;}}
 QTabBar#pageTabBar::tab:hover{{border:1px solid {c['accent']};}}
 QTabBar#pageTabBar::tab:selected{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
 QScrollArea#pageScroll{{background:transparent;border:0;}}
+QScrollArea#navScroll,QScrollArea#navScroll>QWidget>QWidget{{background:transparent;border:0;}}
 QScrollArea#pageScroll>QWidget>QWidget{{background:transparent;}}
 QLabel#pageTitle{{font-size:20px;font-weight:800;color:{c['title']};}}
 QLabel#pageHint,QLabel#fieldHint{{color:{c['sub']};}}
@@ -162,6 +167,9 @@ QPushButton#chip:checked{{background:{c['accent']};color:#ffffff;border:1px soli
 QToolButton#emojiChip{{font-size:18px;border-radius:17px;border:1px solid {c['field_border']};background:{c['field']};}}
 QToolButton#emojiChip:hover{{border:1px solid {c['accent']};}}
 QToolButton#emojiChip:checked{{border:2px solid {c['accent']};background:{c['hover']};}}
+QToolButton#recCard{{text-align:left;border-radius:12px;border:1px solid {c['field_border']};background:{c['field']};padding:8px 12px;font-weight:600;}}
+QToolButton#recCard:hover{{border:1px solid {c['accent']};}}
+QToolButton#recCard:checked{{border:2px solid {c['accent']};background:{c['hover']};}}
 QPushButton#primary:hover{{background:{c['accent_hover']};}}
 QPushButton#resetButton{{background:{c['reset']};color:{c['reset_text']};border:1px solid rgba(220,160,0,80);}}
 QPushButton#maintButton{{text-align:left;padding:10px 14px;}}
@@ -191,7 +199,8 @@ class NavBar(QWidget):
     def add_group(self, title, first=False):
         if not first:
             line=QFrame(); line.setObjectName('navLine'); self.lay.addSpacing(6); self.lay.addWidget(line)
-        lab=QLabel(title); lab.setObjectName('navGroup'); self.lay.addWidget(lab)
+        if title:
+            lab=QLabel(title); lab.setObjectName('navGroup'); self.lay.addWidget(lab)
 
     def add_item(self, icon, text):
         b=QToolButton(); b.setObjectName('navItem'); b.setCheckable(True); b.setText('  '+text.replace('&', '&&')); b.setIcon(icon); b.setIconSize(QSize(20,20))
@@ -557,7 +566,13 @@ class LoginPreview(QWidget):
         p.setBrush(accent); p.drawRoundedRect(QRectF(bar.left()+3, bar.top()+2.5, 46, 10), 5, 5)
 
 
-class Settings(QDialog):
+# Pages added in 0.11 RC2 (users, fonts, date and time, LightDM, Eduka-Quick,
+# the overview and more) live in eduka_settings_ext.py.
+import eduka_settings_ext as ext
+ext.UI.Page=Page; ext.UI.form=form; ext.UI.hint_label=hint_label
+
+
+class Settings(ext.ExtPages, QDialog):
     def __init__(self):
         super().__init__()
         ensure_dirs(); icon_theme_setup(force=True)
@@ -601,7 +616,11 @@ class Settings(QDialog):
         chip=QLabel(VERSION); chip.setObjectName('versionChip'); chip.setAlignment(Qt.AlignCenter); chip.setFixedWidth(chip.sizeHint().width()+16)
         names.addWidget(chip); brand.addLayout(names, 1); sl.addLayout(brand)
         self.nav=NavBar()
-        sl.addWidget(self.nav, 1)
+        # The list of pages scrolls on small screens (RC2 has more pages).
+        nav_scroll=QScrollArea(); nav_scroll.setObjectName('navScroll'); nav_scroll.setWidgetResizable(True)
+        nav_scroll.setFrameShape(QFrame.NoFrame); nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        nav_scroll.setWidget(self.nav); self.nav_scroll=nav_scroll
+        sl.addWidget(nav_scroll, 1)
         reset=QPushButton('Reset to Defaults'); reset.setObjectName('resetButton'); reset.clicked.connect(self.reset_defaults); sl.addWidget(reset)
         root.addWidget(side)
 
@@ -610,14 +629,19 @@ class Settings(QDialog):
         # 0.11: pages about the same thing share one entry, with tabs
         # (17 entries became 11). The old page names still open their tab.
         groups=[
+            ('', [('overview','All Settings','systemsettings',
+                   [('overview','All Settings','systemsettings',self.page_overview)])]),
             ('PERSONALIZE', [('appearance','Appearance','preferences-desktop-theme',
                               [('appearance','Theme','preferences-desktop-theme',self.page_appearance),
+                               ('fonts','Fonts','preferences-desktop-font',self.page_fonts),
                                ('effects','Effects','applications-graphics',self.page_effects)]),
                              ('wallpaper','Wallpaper & Icons','preferences-desktop-wallpaper',
                               [('wallpaper','Wallpaper','preferences-desktop-wallpaper',self.page_wallpaper),
                                ('desktopicons','Desktop Icons','user-desktop',self.page_desktop_icons)])]),
             ('DESKTOP', [('desktop','Eduka-Desktop','start-here',
                           [('desktop','Eduka-Desktop','start-here',self.page_behavior)]),
+                         ('quick','Eduka-Quick','eduka-quick',
+                          [('quick','Eduka-Quick','eduka-quick',self.page_quick)]),
                          ('panel','Eduka-Panel','preferences-desktop',
                           [('panel','Panel','preferences-desktop',self.page_icon_name),
                            ('clock','Clock','preferences-system-time',self.page_clock),
@@ -628,14 +652,21 @@ class Settings(QDialog):
                           [('mouse','Mouse','input-mouse',self.page_mouse),
                            ('touchpad','Touchpad','input-touchpad',self.page_touchpad),
                            ('touchscreen','Touch Screen','input-tablet',self.page_touchscreen)])]),
-            ('SYSTEM', [('general','Language & Startup','preferences-desktop-locale',
-                         [('general','Language & Startup','preferences-desktop-locale',self.page_general)]),
+            ('SYSTEM', [('users','Users','system-users',
+                         [('users','Users','system-users',self.page_users)]),
+                        ('general','Language & Time','preferences-desktop-locale',
+                         [('general','Language & Startup','preferences-desktop-locale',self.page_general),
+                          ('datetime','Date & Time','preferences-system-time',self.page_datetime)]),
                         ('accessibility','Accessibility','preferences-desktop-accessibility',
-                         [('accessibility','Accessibility','preferences-desktop-accessibility',self.page_accessibility)]),
+                         [('accessibility','Vision','preferences-desktop-accessibility',self.page_a11y_vision),
+                          ('hearing','Hearing','audio-volume-high',self.page_a11y_hearing),
+                          ('screenreader','Screen Reader','orca',self.page_a11y_speech)]),
                         ('parental','Parental Control','preferences-system-parental-controls',
-                         [('parental','Parental Control','preferences-system-parental-controls',self.page_parental)]),
+                         [('parental','Parental Control','preferences-system-parental-controls',self.page_parental),
+                          ('privacy','Privacy','preferences-system-privacy',self.page_privacy)]),
                         ('login','Login & Fingerprint','system-users',
                          [('login','Login Screen','system-users',self.page_login),
+                          ('lightdm','LightDM','system-users',self.page_lightdm),
                           ('fingerprint','Fingerprint','fingerprint',self.page_fingerprint)]),
                         ('maintenance','Maintenance','applications-system',
                          [('maintenance','Maintenance','applications-system',self.page_advanced)])]),
@@ -645,7 +676,7 @@ class Settings(QDialog):
             # Group heading and a line separate the sections.
             self.nav.add_group(group, first=gi == 0)
             for nav_key, nav_name, nav_icon, subs in entries:
-                row=self.nav.add_item(get_icon(nav_icon,'preferences-system'), nav_name)
+                row=self.nav.add_item(ext.quick_icon() if nav_key == 'quick' else get_icon(nav_icon,'preferences-system'), nav_name)
                 self.nav_rows[nav_key]=row; self.nav_entries.append((nav_key, nav_icon))
                 tabs=None
                 if len(subs) > 1:
@@ -658,7 +689,8 @@ class Settings(QDialog):
                     scroll=QScrollArea(); scroll.setObjectName('pageScroll'); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(page)
                     self.pages.append((name, icon, page)); self.page_keys.append(key)
                     if tabs is not None:
-                        tabs.addTab(scroll, self.sub_icon(key, icon), _(name))
+                        # '&' would underline the next letter of a tab (mnemonic).
+                        tabs.addTab(scroll, self.sub_icon(key, icon), _(name).replace('&', '&&'))
                         self.tab_entries.append((tabs, ti, key, icon)); self.page_nav[key]=(row, tabs, ti)
                     else:
                         self.page_nav[key]=(row, None, 0)
@@ -667,7 +699,7 @@ class Settings(QDialog):
                     tabs.currentChanged.connect(lambda _i, t=tabs: self.page_shown())
         self.nav.finish()
         self.nav.currentRowChanged.connect(lambda _r: QTimer.singleShot(0, self.page_shown))
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['appearance'])
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex); self.nav.setCurrentRow(self.nav_rows['overview'])
         content.addWidget(self.stack, 1)
 
         bar=QHBoxLayout(); bar.setContentsMargins(26,8,26,16); bar.setSpacing(8)
@@ -686,7 +718,7 @@ class Settings(QDialog):
         QTimer.singleShot(0, self.enable_live_apply)
 
     LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad',
-                 'touchscreen', 'fingerprint')
+                 'touchscreen', 'fingerprint', 'users', 'fonts', 'datetime', 'lightdm', 'quick', 'overview', 'privacy')
 
     def sub_icon(self, key, icon):
         if key == 'touchpad' and hasattr(self, '_ei'):
@@ -695,6 +727,12 @@ class Settings(QDialog):
             return fingerprint_icon()
         if key == 'touchscreen':
             return get_icon('preferences-desktop-touchscreen', ['input-touchscreen', 'input-tablet', 'input-mouse'])
+        if key == 'quick':
+            return ext.quick_icon()
+        if key == 'screenreader':
+            return get_icon('orca', ['preferences-desktop-accessibility', 'audio-input-microphone'])
+        if key == 'hearing':
+            return get_icon('audio-volume-high', ['audio-speakers', 'preferences-desktop-sound'])
         return get_icon(icon, 'preferences-system')
 
     def current_page_key(self):
@@ -721,6 +759,7 @@ class Settings(QDialog):
         for key, (_name, _icon, page) in zip(self.page_keys, self.pages):
             if key in self.LIVE_SKIP: continue
             for w in page.findChildren(QWidget):
+                if w.property('eduka_no_live'): continue     # applies itself (RC2 pages)
                 if isinstance(w, (QCheckBox, QRadioButton)) or (isinstance(w, QToolButton) and w.isCheckable()):
                     w.toggled.connect(kick)
                 elif isinstance(w, QComboBox) and w is not getattr(self, 'theme', None):
@@ -860,16 +899,37 @@ class Settings(QDialog):
 
     # ------------------------------------------------------------ parental control
     def page_parental(self):
-        from eduka_parental import EMOJIS, PRESETS, emoji_icon
+        from eduka_parental import EMOJIS, PRESETS, RECOMMENDATIONS, TIPS, BREAK_CHOICES, emoji_icon, duration_text
         p=Page('Parental Control', 'Limit how long this computer can be used. When the time is up your message appears over the whole screen, keyboard and mouse stop working and the computer shuts down.')
         self.pc_status=QLabel(''); self.pc_status.setObjectName('capability'); self.pc_status.setWordWrap(True); p.v.addWidget(self.pc_status)
         self.pc_enabled=QCheckBox('Use a time limit on this computer'); p.v.addWidget(self.pc_enabled)
-        p.v.addWidget(self.card_title('Time allowed'))
+
+        # RC2: suggestions by age; a click fills in the form below (Save applies).
+        rec=p.new_card('Recommendations')
+        rec.addWidget(hint_label('Choose who uses this computer; the time, the counting, the break reminder and a friendly message are filled in for you.'))
+        grid=QGridLayout(); grid.setHorizontalSpacing(10); grid.setVerticalSpacing(10); self.pc_recs={}
+        for i, r in enumerate(RECOMMENDATIONS):
+            b=QToolButton(); b.setObjectName('recCard'); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
+            b.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            ic=emoji_icon(r['emoji'])
+            if not ic.isNull(): b.setIcon(ic); b.setIconSize(QSize(30, 30))
+            when=_('per day') if r['mode'] == 'daily' else _('each start')
+            b.setText(_(r['title'])+'\n'+duration_text(r['seconds'])+' '+when)
+            b.setToolTip(_(r['why'])); b.setAccessibleName(_(r['title'])); b.setAccessibleDescription(_(r['why']))
+            b.setMinimumHeight(58)
+            b.clicked.connect(lambda _c=False, rr=r: self.use_parental_recommendation(rr))
+            grid.addWidget(b, i//2, i%2); self.pc_recs[r['key']]=b
+        rec.addLayout(grid)
+        self.pc_rec_why=hint_label(''); rec.addWidget(self.pc_rec_why)
+        tips=QLabel('\n'.join('•  '+_(t) for t in TIPS)); tips.setObjectName('fieldHint'); tips.setWordWrap(True)
+        rec.addWidget(tips)
+
+        tcard=p.new_card('Time allowed')
         row=QHBoxLayout(); row.setSpacing(8); self.pc_presets={}
         for secs, label in PRESETS:
             b=QPushButton(label); b.setObjectName('chip'); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, v=secs: self.set_pc_seconds(v)); row.addWidget(b); self.pc_presets[secs]=b
-        row.addStretch(1); p.v.addLayout(row)
+        row.addStretch(1); tcard.addLayout(row)
         manual=QHBoxLayout(); manual.setSpacing(6)
         manual.addWidget(QLabel('Or set it yourself:'))
         self.pc_h=QSpinBox(); self.pc_h.setRange(0, 24); self.pc_h.setSuffix(' h')
@@ -878,10 +938,17 @@ class Settings(QDialog):
         for w, tip in ((self.pc_h, 'Hours'), (self.pc_m, 'Minutes'), (self.pc_s, 'Seconds')):
             w.setToolTip(tip); w.setAccessibleName(tip); w.setMinimumWidth(84); w.valueChanged.connect(self.pc_time_changed); manual.addWidget(w)
         self.pc_total=QLabel(''); self.pc_total.setObjectName('fieldHint'); manual.addWidget(self.pc_total)
-        manual.addStretch(1); p.v.addLayout(manual)
+        manual.addStretch(1); tcard.addLayout(manual)
         f=form()
         self.pc_mode=QComboBox(); self.pc_mode.addItem('Each time the computer starts', 'boot'); self.pc_mode.addItem('In total per day', 'daily')
-        f.addRow('Count:', self.pc_mode); p.v.addLayout(f)
+        f.addRow('Count:', self.pc_mode)
+        self.pc_break=QComboBox(); self.pc_break.setAccessibleName('Break reminder')
+        for m in BREAK_CHOICES:
+            self.pc_break.addItem(_('Off') if not m else _('Every {n} minutes').replace('{n}', str(m)), m)
+        f.addRow('Break reminder:', self.pc_break)
+        f.addRow('', hint_label('Eduka-Panel shows a friendly reminder to rest the eyes and move, also without a time limit.'))
+        tcard.addLayout(f)
+
         msg=p.new_card('Message before shutting down')
         self.pc_message=QPlainTextEdit(); self.pc_message.setPlaceholderText('It is time to rest. See you later!'); self.pc_message.setFixedHeight(76)
         self.pc_message.textChanged.connect(lambda: self.pc_message.toPlainText().__len__() > 300 and self.pc_message.setPlainText(self.pc_message.toPlainText()[:300]))
@@ -900,9 +967,27 @@ class Settings(QDialog):
         self.pc_save=QPushButton('Save Parental Control'); self.pc_save.setObjectName('primary'); self.pc_save.clicked.connect(self.save_parental); btns.addWidget(self.pc_save)
         msg.addLayout(btns)
         msg.addWidget(hint_label('Saving always asks for an administrator password, so only parents and teachers can change or switch off the limit. On the message screen a parent can press Ctrl+Alt+P to add 30 minutes.'))
+        self._pc_rec=''
         self.load_parental()
         t=QTimer(self); t.timeout.connect(self.update_parental_status); t.start(5000); self.update_parental_status()
         return p.finish()
+
+    def use_parental_recommendation(self, r):
+        """Fill in the form from a suggestion (nothing is saved yet)."""
+        from eduka_parental import RECOMMENDATIONS
+        known={_(x['message']) for x in RECOMMENDATIONS} | {x['message'] for x in RECOMMENDATIONS}
+        self._pc_rec=r['key']
+        for key, b in self.pc_recs.items(): b.setChecked(key == r['key'])
+        self.pc_enabled.setChecked(True)
+        self.set_pc_seconds(r['seconds'])
+        self.pc_mode.setCurrentIndex(max(0, self.pc_mode.findData(r['mode'])))
+        self.pc_break.setCurrentIndex(max(0, self.pc_break.findData(r['break'])))
+        current=self.pc_message.toPlainText().strip()
+        if not current or current in known:
+            self.pc_message.setPlainText(_(r['message']))
+        b=self.pc_emojis.get(r['emoji'])
+        if b: b.setChecked(True)
+        self.pc_rec_why.setText('✓ '+_(r['why'])+' '+_('Press Save Parental Control to use it.'))
 
     def load_parental(self):
         try:
@@ -918,6 +1003,14 @@ class Settings(QDialog):
         idx=self.pc_mode.findData(conf.get('mode', 'boot')); self.pc_mode.setCurrentIndex(max(0, idx))
         self.pc_message.setPlainText(str(conf.get('message', '')))
         b=self.pc_emojis.get(conf.get('emoji', '😊')) or next(iter(self.pc_emojis.values())); b.setChecked(True)
+        try: brk=int(conf.get('break_minutes', 0) or 0)
+        except Exception: brk=0
+        idx=self.pc_break.findData(brk)
+        if idx < 0 and brk:
+            self.pc_break.addItem(_('Every {n} minutes').replace('{n}', str(brk)), brk); idx=self.pc_break.count()-1
+        self.pc_break.setCurrentIndex(max(0, idx))
+        self._pc_rec=str(conf.get('recommendation', '') or '')
+        for key, rb in self.pc_recs.items(): rb.setChecked(key == self._pc_rec)
 
     def pc_seconds(self):
         return max(60, min(86400, self.pc_h.value()*3600+self.pc_m.value()*60+self.pc_s.value()))
@@ -941,7 +1034,8 @@ class Settings(QDialog):
         emoji=next((e for e, b in self.pc_emojis.items() if b.isChecked()), '😊')
         secs=self.pc_seconds()
         return {'enabled': self.pc_enabled.isChecked(), 'seconds': secs, 'minutes': max(1, -(-secs//60)), 'mode': self.pc_mode.currentData(),
-                'message': self.pc_message.toPlainText().strip()[:300], 'emoji': emoji, 'reset': True}
+                'message': self.pc_message.toPlainText().strip()[:300], 'emoji': emoji, 'reset': True,
+                'break_minutes': int(self.pc_break.currentData() or 0), 'recommendation': getattr(self, '_pc_rec', '')}
 
     def update_parental_status(self):
         from eduka_parental import read_state, minutes_text
@@ -1509,19 +1603,6 @@ class Settings(QDialog):
             QMessageBox.warning(self, theme, f'{theme} needs at least 2 GB of memory and two CPU threads.\n\n'+detected)
             self._leave_liquid(); return
         self._liquid_confirmed=True
-
-    def page_accessibility(self):
-        p=Page('Accessibility', 'Clearer vision, spoken navigation and visible status information.')
-        f=form()
-        self.visual_access=QCheckBox('High contrast, opaque surfaces and larger text'); f.addRow('Vision:', self.visual_access)
-        self.hearing_access=QCheckBox('Show network, sound and alert status as text on Eduka-Panel'); f.addRow('Hearing:', self.hearing_access)
-        self.orca=QCheckBox('Orca screen reader — speaks focused applications and menus'); f.addRow('Screen reader:', self.orca)
-        voice=QPushButton(get_icon('preferences-desktop-accessibility'), ' Orca Voice Settings'); voice.clicked.connect(self.open_orca_voice_settings)
-        row=QHBoxLayout(); row.addWidget(voice); row.addStretch(); f.addRow('Voice:', row)
-        p.v.addLayout(f)
-        orca_status='Orca is ready.' if orca_available() else 'Orca is not available in this session.'
-        p.v.addWidget(hint_label(orca_status+' Pointer announcements use a short dwell so speech stays smooth.'))
-        return p.finish()
 
     def page_icon_name(self):
         p=Page('Eduka-Panel', 'The start button, the panel size and taskbar, and the clock of the Action Center.')
@@ -2168,7 +2249,9 @@ class Settings(QDialog):
             QMessageBox.warning(self, 'Orca settings', 'Orca Voice Settings could not be opened in this desktop session.')
 
     PAGE_ALIASES = {'theme': 'appearance', 'touch': 'touchscreen', 'touch-screen': 'touchscreen', 'fprint': 'fingerprint',
-                    'behavior': 'desktop', 'menu': 'desktop', 'language': 'general', 'sddm': 'login'}
+                    'behavior': 'desktop', 'menu': 'desktop', 'language': 'general', 'sddm': 'login',
+                    'all': 'overview', 'fonts-selection': 'fonts', 'time': 'datetime', 'date': 'datetime',
+                    'accounts': 'users', 'vision': 'accessibility', 'orca': 'screenreader', 'pie': 'quick'}
 
     def open_page(self, key):
         """Opens a page or tab by its name (eduka-settings --page NAME)."""

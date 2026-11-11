@@ -1818,6 +1818,8 @@ def _ac_qss():
     return f"""
 QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
 QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
+QToolButton#acSync{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:11px;padding:0;margin:4px;}}
+QToolButton#acSync:hover{{border:1px solid {u['accent']};}}
 QFrame#mediaRow{{background:transparent;border:1px solid transparent;border-radius:12px;}}
 QFrame#mediaRow:hover{{background:{u['tile']};border:1px solid {u['btn_border']};}}
 MarqueeLabel#mediaTitle{{font-size:13px;font-weight:800;color:{u['title']};}}
@@ -1887,8 +1889,8 @@ class ActionCenter(PopupFrame):
 
         # Clock card in the middle: digital or analog, greeting and date.
         self.clock_card=QFrame(); self.clock_card.setObjectName('acClock')
-        card_lay=QVBoxLayout(self.clock_card); card_lay.setContentsMargins(0,0,0,0)
-        self.clock_stack=QStackedWidget(); card_lay.addWidget(self.clock_stack)
+        card_lay=QGridLayout(self.clock_card); card_lay.setContentsMargins(0,0,0,0)
+        self.clock_stack=QStackedWidget(); card_lay.addWidget(self.clock_stack, 0, 0)
         clock_page=WeatherBackdrop(); self.weather_bg=clock_page; self.ck=QGridLayout(clock_page); self.ck.setContentsMargins(12,10,12,12); self.ck.setHorizontalSpacing(12); self.ck.setVerticalSpacing(2)
         self.face=ClockFace(); self.face.clicked.connect(self.show_globe)
         self.greeting=QLabel(); self.greeting.setObjectName('acGreeting'); self.greeting.setWordWrap(True)
@@ -1904,6 +1906,16 @@ class ActionCenter(PopupFrame):
         self.zone_map=TimeZoneMap(); self.zone_map.clicked.connect(self.show_clock); zl.addWidget(self.zone_map, 0, Qt.AlignHCenter)
         self.zone_info=QLabel(''); self.zone_info.setObjectName('acDate'); self.zone_info.setAlignment(Qt.AlignCenter); self.zone_info.setWordWrap(True); zl.addWidget(self.zone_info)
         self.clock_stack.addWidget(zone_page)
+        # Sync time (RC2): a small round button in the corner of the clock card
+        # sets the clock from network time and follows the time zone.
+        self.sync_button=QToolButton(); self.sync_button.setObjectName('acSync'); self.sync_button.setFixedSize(30,30)
+        self.sync_button.setIconSize(QSize(16,16)); self.sync_button.setCursor(Qt.PointingHandCursor)
+        self.sync_button.setToolTip(_('Sync time: the clock and the time zone follow the internet'))
+        self.sync_button.setAccessibleName(_('Sync time')); self.sync_button.clicked.connect(self.sync_time)
+        card_lay.addWidget(self.sync_button, 0, 0, Qt.AlignTop | Qt.AlignRight); self.sync_button.raise_()
+        self._sync_pix=None; self._sync_angle=0; self._sync_thread=None; self._sync_box={}
+        self._sync_timer=QTimer(self); self._sync_timer.timeout.connect(self._spin_sync)
+        self.set_sync_icon(0)
         # A stacked widget is as tall as its tallest page: size only by the visible one.
         self.clock_stack.currentChanged.connect(self._stack_sizes); self._stack_sizes(0)
         self.clock_card.setContextMenuPolicy(Qt.CustomContextMenu); self.clock_card.customContextMenuRequested.connect(self.clock_menu)
@@ -2018,6 +2030,8 @@ class ActionCenter(PopupFrame):
         for w in (self.face, self.greeting, self.date_label):
             self.ck.removeWidget(w)
         self.face.set_options(self.clock_opts, big=not dense)
+        # Room on the right for the Sync time button in the corner.
+        self.ck.setContentsMargins(12, 10, 34 if dense else 12, 12)
         if dense:
             self.ck.addWidget(self.face, 0, 0, 2, 1, Qt.AlignVCenter)
             self.ck.addWidget(self.greeting, 0, 1, Qt.AlignBottom); self.ck.addWidget(self.date_label, 1, 1, Qt.AlignTop)
@@ -2187,8 +2201,63 @@ class ActionCenter(PopupFrame):
             act.triggered.connect(lambda _=False, v=value: self.set_clock('clock_color', v))
         m.addSeparator()
         m.addAction(get_icon('applications-internet', 'globe'), 'World globe', self.show_globe)
+        m.addAction(get_icon('emblem-synchronizing', ['view-refresh']), 'Sync time', self.sync_time)
+        m.addAction(get_icon('preferences-system-time', 'preferences-system'), 'Date & time settings…', lambda: self.launch('eduka-settings --page datetime'))
         m.addAction(get_icon('preferences-system'), 'Clock settings…', lambda: self.launch('eduka-settings --page clock'))
         m.exec_(self.clock_card.mapToGlobal(pos))
+
+    def set_sync_icon(self, angle=0):
+        """The sync arrows; they turn while the clock is synced."""
+        if self._sync_pix is None:
+            ratio=max(1.0, self.devicePixelRatioF())
+            self._sync_pix=get_icon('emblem-synchronizing', ['view-refresh', 'reload', 'preferences-system-time']).pixmap(QSize(16,16)*ratio)
+            self._sync_pix.setDevicePixelRatio(ratio)
+        if not angle:
+            self.sync_button.setIcon(QIcon(self._sync_pix)); return
+        pix=QPixmap(self._sync_pix.size()); pix.setDevicePixelRatio(self._sync_pix.devicePixelRatio()); pix.fill(Qt.transparent)
+        p=QPainter(pix); p.setRenderHint(QPainter.SmoothPixmapTransform); p.setRenderHint(QPainter.Antialiasing)
+        c=pix.width()/pix.devicePixelRatio()/2; p.translate(c, c); p.rotate(angle); p.translate(-c, -c)
+        p.drawPixmap(0, 0, self._sync_pix); p.end()
+        self.sync_button.setIcon(QIcon(pix))
+
+    def sync_time(self):
+        """Sync time: network time first, then the time zone of the place
+        (eduka_datetime.sync_now, in a thread: it waits for the network)."""
+        if self._sync_thread is not None and self._sync_thread.is_alive():
+            return
+        import threading
+        box={}
+        def work():
+            try:
+                import eduka_datetime
+                box['res']=eduka_datetime.sync_now()
+            except Exception as exc:
+                box['res']={'ok': False, 'message': str(exc)}
+        self._sync_box=box
+        self._sync_thread=threading.Thread(target=work, daemon=True); self._sync_thread.start()
+        self.sync_button.setToolTip(_('Syncing the clock…')); self._sync_timer.start(40)
+
+    def _spin_sync(self):
+        self._sync_angle=(self._sync_angle+15) % 360; self.set_sync_icon(self._sync_angle)
+        if self._sync_thread is not None and self._sync_thread.is_alive():
+            return
+        self._sync_timer.stop(); self._sync_angle=0; self.set_sync_icon(0)
+        self.sync_button.setToolTip(_('Sync time: the clock and the time zone follow the internet'))
+        res=self._sync_box.get('res') or {}
+        try:
+            self.update_time(); self.panel.update_clock()
+        except Exception:
+            pass
+        summary=_('Time synced') if res.get('ok') else _('Sync time')
+        body=_(res.get('message') or 'The clock could not be synced.')
+        server=getattr(self.panel, 'notify_server', None)
+        try:
+            if server is not None and server.registered:
+                server.notify('Eduka-Panel', 0, 'preferences-system-time', summary, body, [], {'transient': True}, 6000)
+                return
+        except Exception:
+            pass
+        safe_popen(['notify-send', '-i', 'preferences-system-time', summary, body])
 
     def set_clock(self, key, value):
         save_panel_config({key: value})
@@ -3589,6 +3658,8 @@ class EdukaPanel(QWidget):
         self._parental_lock=None; self._parental_warned=set(); self.parental={}
         self.parental_timer=QTimer(self); self.parental_timer.timeout.connect(self.check_parental); self.parental_timer.start(5000)
         QTimer.singleShot(3000, self.check_parental)
+        # Accessibility (RC2): mono sound is made again at every login.
+        QTimer.singleShot(7000, self.restore_accessibility)
         # Removable drives (checked every 3 seconds; lsblk takes a few ms).
         self.drives=[]; self._drive_keys=None
         self.drive_timer=QTimer(self); self.drive_timer.timeout.connect(self.update_drives); self.drive_timer.start(3000)
@@ -4454,8 +4525,55 @@ class EdukaPanel(QWidget):
         else:
             ew.set_desktop_wallpaper(new)
 
+    def restore_accessibility(self):
+        import threading
+        def work():
+            try:
+                import eduka_a11y
+                eduka_a11y.restore_session()
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def check_break_reminder(self):
+        """Parental Control's break reminder (RC2): after break_minutes of use
+        a friendly notification asks to rest the eyes and move."""
+        path='/etc/edukasaun-desktop/parental.json'
+        try:
+            key=os.stat(path).st_mtime
+        except OSError:
+            key=None
+        if key != getattr(self, '_break_key', 'unset'):
+            self._break_key=key; every=0
+            try:
+                with open(path, encoding='utf-8') as f:
+                    every=max(0, int(json.load(f).get('break_minutes', 0) or 0))*60
+            except Exception:
+                every=0
+            self._break_every=every
+            self._break_next=time.monotonic()+every if every else None
+        if not getattr(self, '_break_next', None) or self._parental_lock is not None:
+            return
+        if time.monotonic() < self._break_next:
+            return
+        self._break_next=time.monotonic()+self._break_every
+        summary=_('Time for a short break')
+        body=_('Look at something far away for 20 seconds, stand up and stretch. 🙂')
+        server=getattr(self, 'notify_server', None)
+        try:
+            if server is not None and server.registered:
+                server.notify('Eduka-Panel', 0, 'preferences-system-parental-controls', summary, body, [], {}, 12000)
+                return
+        except Exception:
+            pass
+        safe_popen(['notify-send', '-i', 'preferences-system-parental-controls', summary, body])
+
     def check_parental(self):
         from eduka_parental import read_state, ParentalLockScreen, minutes_text
+        try:
+            self.check_break_reminder()
+        except Exception:
+            pass
         st=read_state(); self.parental=st; phase=st.get('phase')
         if phase not in ('warn', 'lock'):
             self._parental_warned.clear()

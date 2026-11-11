@@ -1,3 +1,23 @@
+Edukasaun Desktop Suite 0.11 RC2 (release candidate 2, package 0.11.0~rc2)
+- 0.11 RC2 is the second release candidate and close to the final stable version.
+- Eduka-Settings:
+  - All Settings (new first page): every setting in one place with a search box, in sections like the system settings of a full desktop: Appearance, Eduka, Preferences, Hardware and Administration. Tiles open the Eduka pages or the LXQt and Debian tools for display, network, sound, Bluetooth, printers, power, disks, input method, startup and preferred applications, windows, firewall and software sources; tools that are not installed are not shown.
+  - Users (new): add and delete accounts (keep or delete their files), change the full name, the login name (the home folder and the login lists follow), the password (your own with the current password), standard or administrator, "can log in" and "shown on the login screen". Account pictures: your own photo, the initials in a color or a friendly picture; SDDM, LightDM and Eduka-Desktop show the same picture (AccountsService and ~/.face). The last administrator cannot be removed, locked or deleted, and nobody can delete or rename the account they use.
+  - Fonts (new, Appearance → Fonts): default, desktop, document, monospace and window title fonts, text scaling factor, hinting, antialiasing and subpixel order. They are written for Qt/LXQt, GTK 2, 3 and 4, the GNOME keys, fontconfig, the X resources, the desktop icons, Openbox and xfwm4.
+  - Date & Time (new, Language & Time): network time on or off, Sync now, the time zone (found from the internet or chosen by region and city), the clock by hand and the hardware clock for computers with Windows.
+  - LightDM (new, Login & Fingerprint): see below.
+  - Accessibility rebuilt with three tabs: Vision (strong contrast, large text, mouse pointer size, reduce motion, magnifier, on-screen keyboard), Hearing (status as text, mono sound, sound and notification settings) and Screen Reader (Orca, a voice with speed, pitch, volume and language that can be tried, and the keys to know).
+  - Parental Control: neater cards and recommendations by age (small children, primary school, teenagers, a computer lesson, homework in the evening) based on the WHO guideline and the Canadian 24-Hour Movement Guidelines, tips, and a break reminder.
+  - Privacy (new): recent files on or off and clear the list, delete thumbnails, empty the trash, weather and location.
+  - Eduka-Quick (new): see below.
+- Action Center: a Sync time button on the clock card (and in its right-click menu): the clock follows network time and the time zone of the place.
+- Eduka-Quick (new): a round quick launcher inspired by Gnome-Pie. Super+Q shows a circle of programs where the mouse is; point in a direction and click, or press, drag and release. Groups open a smaller circle; arrows, numbers and Enter work too. The programs, actions, groups and the key are chosen in Eduka-Settings → Eduka-Quick. It also works without a compositor (a round window, no black corners).
+- LightDM: Edukasaun themes for slick-greeter and lightdm-gtk-greeter in the same four styles as the SDDM login screen (pastel, light, dark, glass) with the accent color, background, logo and clock. Both are set together in Eduka-Settings, also hiding the account list, typing a name, the guest account, automatic login (always asks for the password) and which display manager is used at the next start. The live account edukasaun stays hidden on installed computers with LightDM as well.
+- Eduka-Desktop: the tiles tell the screen reader what each program is for.
+- Fixes: tab names with "&" (Language & Startup, Date & Time) lost a letter; the clock's time zone is read from /etc/localtime first.
+- Packaging: recommends accountsservice and systemd-timesyncd (or another time service); suggests slick-greeter or lightdm-gtk-greeter, magnus and gufw; new helpers eduka-users-apply and eduka-lightdm-apply with polkit actions; manual page for eduka-quick.
+- Translations for Portuguese, Indonesian and Tetun of the new texts.
+
 Edukasaun Desktop Suite 0.11 RC (release candidate 1, package 0.11.0~rc1)
 - 0.11 RC is the release candidate of the final stable version: from now on mainly bug fixes.
 - Login (bug fixes, checked with a real LXQt login with xfwm4 and with Openbox + picom):

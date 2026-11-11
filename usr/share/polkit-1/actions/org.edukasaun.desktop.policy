@@ -50,4 +50,63 @@
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-fingerprint-apply</annotate>
   </action>
+  <action id="org.edukasaun.desktop.users">
+    <description>Change user accounts</description>
+    <message>An administrator password is required to add, remove or change user accounts</message>
+    <icon_name>system-users</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-users-apply</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.lightdm-config">
+    <description>Change the look of the LightDM login screen</description>
+    <message>Authentication is required to change the login screen</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-lightdm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--look</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.lightdm-login">
+    <description>Change how people log in with LightDM</description>
+    <message>An administrator password is required to change the login options</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-lightdm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--seat</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.lightdm-autologin">
+    <description>Switch automatic login (LightDM) on or off</description>
+    <message>An administrator password is required to change automatic login</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-lightdm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--autologin</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.display-manager">
+    <description>Choose the display manager (SDDM or LightDM)</description>
+    <message>An administrator password is required to change the display manager</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-lightdm-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--display-manager</annotate>
+  </action>
 </policyconfig>

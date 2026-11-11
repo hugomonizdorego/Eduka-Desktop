@@ -24,7 +24,7 @@ Run by eduka-desktop-session as the user, every login, before startlxqt
 
 Files the user made (without the mark) are never changed.
 """
-import configparser, os, sys, tempfile
+import configparser, json, os, sys, tempfile
 
 MARK = 'Disabled by Edukasaun Desktop'
 HIDE = {
@@ -124,9 +124,65 @@ def super_key_opens_menu(cfg):
     write_atomic(path, text)
 
 
+QUICK_COMMENT = 'Eduka-Quick'
+QUICK_KEYS = ('Meta+Q', 'Control+Alt+Space', 'Control+Alt+A', 'Meta+Space')
+
+
+def quick_launcher_key(cfg):
+    """Eduka-Quick (RC2) on its key: the choice of Eduka-Settings
+    (~/.config/eduka-desktop/desktop/quick.json, on by default with Super+Q)
+    is written before lxqt-globalkeysd reads the file."""
+    if not any(os.access(os.path.join(d, 'lxqt-globalkeysd'), os.X_OK)
+               for d in os.environ.get('PATH', '/usr/bin:/bin').split(':') if d):
+        return
+    enabled, key = True, QUICK_KEYS[0]
+    try:
+        with open(os.path.join(cfg, 'eduka-desktop', 'desktop', 'quick.json'), encoding='utf-8') as f:
+            data = json.load(f)
+        enabled = bool(data.get('enabled', True))
+        key = data.get('hotkey') if data.get('hotkey') in QUICK_KEYS else key
+    except (OSError, ValueError, AttributeError):
+        pass
+    path = os.path.join(cfg, 'lxqt', 'globalkeyshortcuts.conf')
+    if not os.path.isfile(path):
+        return                                   # super_key_opens_menu makes it first
+    with open(path, encoding='utf-8', errors='ignore') as f:
+        text = f.read()
+    parser = configparser.RawConfigParser(strict=False, interpolation=None)
+    parser.optionxform = str
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return
+    encoded = key.replace('+', '%2B')
+    mine = [s for s in parser.sections() if parser.get(s, 'Comment', fallback='') == QUICK_COMMENT]
+    taken = [s for s in parser.sections() if s.rsplit('.', 1)[0] == encoded and s not in mine]
+    lines = text.splitlines()
+    if mine:
+        section = mine[0]
+        ident = section.rsplit('.', 1)[1] if '.' in section else '950'
+        out, inside = [], False
+        for line in lines:
+            st = line.strip()
+            if st.startswith('[') and st.endswith(']'):
+                inside = st[1:-1] == section
+                if inside and not taken:
+                    line = f'[{encoded}.{ident}]'
+            elif inside and st.startswith('Enabled='):
+                line = 'Enabled=' + ('true' if enabled and not taken else 'false')
+            out.append(line)
+        new = '\n'.join(out) + '\n'
+    elif enabled and not taken:
+        new = text.rstrip('\n') + f'\n\n[{encoded}.950]\nComment={QUICK_COMMENT}\nEnabled=true\nExec=eduka-quick\n'
+    else:
+        return
+    if new != text:
+        write_atomic(path, new)
+
+
 def main():
     cfg = config_home()
-    for step in (hide_lxqt_modules, super_key_opens_menu):
+    for step in (hide_lxqt_modules, super_key_opens_menu, quick_launcher_key):
         try:
             step(cfg)
         except Exception as e:                   # never stop the login

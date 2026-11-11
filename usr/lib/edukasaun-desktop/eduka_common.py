@@ -23,10 +23,10 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.11 RC"
+VERSION = "0.11 RC2"
 # Debian package version: release candidate 1 of 0.11 (a "~" sorts before
 # the final 0.11.0 and after 0.10.0~beta3).
-DEB_VERSION = "0.11.0~rc1"
+DEB_VERSION = "0.11.0~rc2"
 SETTINGS_REVISION = "0.9.6-transparency"
 # 0.11: the official Edukasaun OS logo and "MENU" on the start button.
 BRAND_REVISION = "0.11-official-logo"
@@ -3617,6 +3617,14 @@ def local_timezone_name():
     tz=os.environ.get('TZ', '').lstrip(':')
     if tz and '/' in tz:
         return tz
+    # /etc/localtime first: systemd-timedated (Eduka-Settings → Date & Time,
+    # Sync time) changes only this link; /etc/timezone may be left behind.
+    try:
+        link=os.readlink('/etc/localtime')
+        if '/zoneinfo/' in link:
+            return link.split('/zoneinfo/', 1)[1]
+    except Exception:
+        pass
     try:
         name=Path('/etc/timezone').read_text().strip()
         if name: return name

@@ -1,0 +1,13 @@
+# Edukasaun login screen for slick-greeter: the same look as the SDDM login
+# screen (pastel style). Eduka-Settings → Login & Fingerprint → LightDM writes
+# the chosen look to /etc/lightdm/slick-greeter.conf, which wins over this.
+[x.dm.slick-greeter]
+background='/usr/share/edukasaun-desktop/login/slick-pastel.png'
+background-color='#71a397'
+draw-user-backgrounds=false
+draw-grid=false
+logo='/usr/share/edukasaun-desktop/login/logo-small.png'
+theme-name='Edukasaun-Login'
+icon-theme-name='Papirus-Light'
+font-name='Sans 11'
+clock-format='%H:%M'

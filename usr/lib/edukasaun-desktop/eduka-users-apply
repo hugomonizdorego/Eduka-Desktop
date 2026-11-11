@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""Change user accounts for Eduka-Settings → Users. Runs as root through
+pkexec (polkit action org.edukasaun.desktop.users: administrator password).
+
+Reads one JSON object from standard input:
+  {"action": "create",    "name", "full_name", "password", "admin", "hidden"}
+  {"action": "delete",    "name", "keep_files"}
+  {"action": "password",  "name", "password"}
+  {"action": "full_name", "name", "full_name"}
+  {"action": "rename",    "name", "new_name"}
+  {"action": "admin",     "name", "admin"}
+  {"action": "lock",      "name", "locked"}
+  {"action": "hidden",    "name", "hidden"}
+  {"action": "avatar",    "name", "image"}     (PNG or JPEG the caller may read)
+
+Every value is checked again here. Only normal accounts (uid 1000-59999)
+are changed; the account that asks cannot delete, lock or rename itself,
+and the last administrator always stays an administrator.
+
+Hidden accounts are listed in /etc/edukasaun-desktop/hidden-users; SDDM gets
+them in /etc/sddm.conf.d/40-eduka-hidden-users.conf (together with the live
+account that live-autologin hides) and LightDM through AccountsService
+(SystemAccount=true). Pictures go through AccountsService, so SDDM,
+slick-greeter and lightdm-gtk-greeter all show the same one.
+"""
+import grp, json, os, pwd, re, shutil, stat, subprocess, sys, tempfile
+
+NAME_RE = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
+RESERVED = {'root', 'daemon', 'bin', 'sys', 'sync', 'games', 'man', 'lp', 'mail', 'news', 'uucp', 'proxy',
+            'www-data', 'backup', 'list', 'irc', 'gnats', 'nobody', 'systemd-network', 'systemd-resolve',
+            'messagebus', 'sddm', 'lightdm', 'polkitd', 'avahi', 'colord', 'pulse', 'rtkit', 'saned',
+            'usbmux', 'geoclue', 'admin', 'administrator', 'sudo', 'users', 'edukasaun', 'guest'}
+ADMIN_GROUP = 'sudo'
+BASE_GROUPS = ('audio', 'video', 'plugdev', 'netdev', 'bluetooth', 'lpadmin', 'scanner', 'cdrom', 'dip', 'users')
+UID_MIN, UID_MAX = 1000, 60000
+HIDDEN_FILE = '/etc/edukasaun-desktop/hidden-users'
+SDDM_HIDDEN = '/etc/sddm.conf.d/40-eduka-hidden-users.conf'
+SDDM_LIVE_HIDDEN = '/etc/sddm.conf.d/30-eduka-hide-live-user.conf'
+SDDM_AUTOLOGIN = '/etc/sddm.conf.d/20-eduka-autologin.conf'
+LIGHTDM_AUTOLOGIN = '/etc/lightdm/lightdm.conf.d/50-eduka-autologin.conf'
+AS_USERS = '/var/lib/AccountsService/users'
+AS_ICONS = '/var/lib/AccountsService/icons'
+DEFAULT_MARKER = '/var/lib/edukasaun-desktop/default-user'
+MAX_IMAGE = 8 * 1024 * 1024
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C.UTF-8'}
+
+
+def fail(message, code=2):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def run(args, data=None):
+    r = subprocess.run(args, input=data, capture_output=True, text=True, env=ENV, timeout=120)
+    if r.returncode != 0:
+        lines = (r.stderr or r.stdout or '').strip().splitlines()
+        fail(f'{os.path.basename(args[0])}: ' + (lines[-1] if lines else f'error {r.returncode}'))
+    return r.stdout
+
+
+def caller():
+    try:
+        uid = int(os.environ.get('PKEXEC_UID', '-1'))
+    except ValueError:
+        uid = -1
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return ''
+
+
+def human(name):
+    """The passwd entry of a normal account, else stop."""
+    if not isinstance(name, str) or not NAME_RE.match(name):
+        fail('Invalid user name.')
+    try:
+        entry = pwd.getpwnam(name)
+    except KeyError:
+        fail(f'User {name} does not exist.')
+    if not UID_MIN <= entry.pw_uid < UID_MAX or name == 'nobody':
+        fail('Only normal user accounts can be changed here.')
+    return entry
+
+
+def admins():
+    try:
+        g = grp.getgrnam(ADMIN_GROUP)
+    except KeyError:
+        return set()
+    names = {n for n in g.gr_mem if _exists(n)}
+    names |= {p.pw_name for p in pwd.getpwall() if p.pw_gid == g.gr_gid}
+    return names
+
+
+def _exists(name):
+    try:
+        pwd.getpwnam(name); return True
+    except KeyError:
+        return False
+
+
+def active_admins():
+    """Administrators that can still log in (not locked)."""
+    out = set()
+    for name in admins():
+        try:
+            st = run(['passwd', '-S', name]).split()
+        except SystemExit:
+            continue
+        if len(st) > 1 and st[1] != 'L':
+            out.add(name)
+    return out
+
+
+def logged_in(uid):
+    for d in os.listdir('/proc'):
+        if d.isdigit():
+            try:
+                if os.stat(f'/proc/{d}').st_uid == uid:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def clean_full_name(text):
+    text = str(text or '').strip()
+    if len(text) > 64 or any(c in text for c in ':,=\n\r\t') or not all(c.isprintable() for c in text):
+        fail('The full name can have up to 64 characters, without : , or =.')
+    return text
+
+
+def clean_password(text):
+    if not isinstance(text, str) or not text or len(text) > 256 or '\n' in text or '\r' in text:
+        fail('Invalid password (1 to 256 characters, no line break).')
+    return text
+
+
+def write_text(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.eduka-')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ------------------------------------------------------------------ hidden accounts
+def read_hidden():
+    try:
+        with open(HIDDEN_FILE, encoding='utf-8') as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith('#') and NAME_RE.match(l.strip())]
+    except OSError:
+        return []
+
+
+def live_hidden():
+    try:
+        with open(SDDM_LIVE_HIDDEN, encoding='utf-8') as f:
+            for line in f:
+                if line.strip().startswith('HideUsers='):
+                    return [n.strip() for n in line.split('=', 1)[1].split(',') if NAME_RE.match(n.strip())]
+    except OSError:
+        pass
+    return []
+
+
+def write_hidden(names):
+    names = sorted({n for n in names if _exists(n)})
+    write_text(HIDDEN_FILE, '# Accounts hidden from the login screen (Eduka-Settings → Users).\n' + ''.join(n + '\n' for n in names))
+    every = sorted(set(names) | set(live_hidden()))
+    if every:
+        if os.path.isdir('/etc/sddm.conf.d') or shutil.which('sddm'):
+            write_text(SDDM_HIDDEN, '# Written by Eduka-Settings → Users: accounts not listed on the login screen.\n'
+                                    '[Users]\nHideUsers=' + ','.join(every) + '\n')
+    elif os.path.exists(SDDM_HIDDEN):
+        os.remove(SDDM_HIDDEN)
+
+
+def accounts_service_flag(name, key, value):
+    """Set a key of /var/lib/AccountsService/users/NAME ([User] section)."""
+    path = os.path.join(AS_USERS, name)
+    lines = []
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        pass
+    if '[User]' not in lines:
+        lines = ['[User]'] + lines
+    lines = [l for l in lines if not l.startswith(key + '=')]
+    if value is not None:
+        lines.insert(lines.index('[User]') + 1, f'{key}={value}')
+    write_text(path, '\n'.join(lines) + '\n', 0o600)
+
+
+def restart_accounts_service():
+    if shutil.which('systemctl') and os.path.isdir('/run/systemd/system'):
+        subprocess.run(['systemctl', 'try-restart', 'accounts-daemon.service'], capture_output=True, env=ENV, timeout=30)
+
+
+def set_hidden(name, hidden):
+    names = set(read_hidden())
+    if hidden:
+        names.add(name)
+    else:
+        names.discard(name)
+    write_hidden(names)
+    accounts_service_flag(name, 'SystemAccount', 'true' if hidden else None)
+    restart_accounts_service()
+
+
+# ------------------------------------------------------------------ pictures
+def open_image(path, uid):
+    """Open the picture once and check that very file: the caller must be
+    allowed to read it, and it must be a PNG or JPEG of a sensible size."""
+    try:
+        fd = os.open(os.path.realpath(str(path)), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        fail(f'Picture not found: {path}')
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= MAX_IMAGE:
+        os.close(fd); fail('Not a usable picture.')
+    if not ((st.st_mode & 0o004) or (st.st_uid == uid and st.st_mode & 0o400)):
+        os.close(fd); fail('The picture must be readable by your account.')
+    head = os.pread(fd, 8, 0)
+    if not (head.startswith(b'\x89PNG\r\n\x1a\n') or head[:3] == b'\xff\xd8\xff'):
+        os.close(fd); fail('Only PNG or JPEG pictures can be used.')
+    return fd
+
+
+def set_avatar(entry, image, uid):
+    fd = open_image(image, uid)
+    os.makedirs(AS_ICONS, exist_ok=True)
+    target = os.path.join(AS_ICONS, entry.pw_name)
+    tmp_fd, tmp = tempfile.mkstemp(dir=AS_ICONS, prefix='.eduka-')
+    with os.fdopen(fd, 'rb') as src, os.fdopen(tmp_fd, 'wb') as dst:
+        shutil.copyfileobj(src, dst)
+    os.chmod(tmp, 0o644)
+    done = False
+    if shutil.which('busctl'):
+        # Through accounts-daemon when it runs: it updates its own records.
+        r = subprocess.run(['busctl', 'call', 'org.freedesktop.Accounts', '/org/freedesktop/Accounts',
+                            'org.freedesktop.Accounts', 'FindUserByName', 's', entry.pw_name],
+                           capture_output=True, text=True, env=ENV, timeout=20)
+        m = re.search(r'"(/org/freedesktop/Accounts/User\d+)"', r.stdout or '')
+        if r.returncode == 0 and m:
+            r = subprocess.run(['busctl', 'call', 'org.freedesktop.Accounts', m.group(1), 'org.freedesktop.Accounts.User',
+                                'SetIconFile', 's', tmp], capture_output=True, text=True, env=ENV, timeout=20)
+            done = r.returncode == 0
+    if done:
+        os.remove(tmp)
+    else:
+        os.replace(tmp, target)
+        accounts_service_flag(entry.pw_name, 'Icon', target)
+    # The same picture in the account's own ~/.face (written as that user).
+    if os.path.isdir(entry.pw_dir) and os.path.exists(target) and shutil.which('runuser'):
+        subprocess.run(['runuser', '-u', entry.pw_name, '--', 'cp', '-f', '--remove-destination', target,
+                        os.path.join(entry.pw_dir, '.face')], capture_output=True, env=ENV, timeout=20)
+        subprocess.run(['runuser', '-u', entry.pw_name, '--', 'cp', '-f', '--remove-destination', target,
+                        os.path.join(entry.pw_dir, '.face.icon')], capture_output=True, env=ENV, timeout=20)
+
+
+# ------------------------------------------------------------------ autologin entries
+def autologin_files():
+    return [p for p in (SDDM_AUTOLOGIN, LIGHTDM_AUTOLOGIN) if os.path.exists(p)]
+
+
+def drop_autologin(name):
+    for path in autologin_files():
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+        if re.search(rf'(?m)^\s*(User|autologin-user)\s*=\s*{re.escape(name)}\s*$', text):
+            os.remove(path)
+
+
+def rename_autologin(old, new):
+    for path in autologin_files():
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+        changed = re.sub(rf'(?m)^(\s*(?:User|autologin-user)\s*=\s*){re.escape(old)}\s*$', rf'\g<1>{new}', text)
+        if changed != text:
+            write_text(path, changed)
+
+
+# ------------------------------------------------------------------ actions
+def act_create(req, me):
+    name = req.get('name')
+    if not isinstance(name, str) or not NAME_RE.match(name) or name in RESERVED:
+        fail('Invalid or reserved login name.')
+    if _exists(name):
+        fail(f'User {name} already exists.')
+    try:
+        grp.getgrnam(name); fail(f'A group called {name} already exists; choose another name.')
+    except KeyError:
+        pass
+    full = clean_full_name(req.get('full_name', ''))
+    password = clean_password(req.get('password'))
+    groups = [g for g in BASE_GROUPS if _group(g)]
+    if req.get('admin'):
+        groups.append(ADMIN_GROUP)
+    args = ['useradd', '--create-home', '--shell', '/bin/bash', '--comment', full]
+    if groups:
+        args += ['--groups', ','.join(groups)]
+    run(args + [name])
+    run(['chpasswd'], f'{name}:{password}\n')
+    if req.get('hidden'):
+        set_hidden(name, True)
+    print(f'Account {name} created.')
+
+
+def _group(name):
+    try:
+        grp.getgrnam(name); return True
+    except KeyError:
+        return False
+
+
+def protect_admin(name, what):
+    if name in admins() and not (active_admins() - {name}):
+        fail(f'{name} is the last administrator: {what} is not possible.')
+
+
+def act_delete(req, me):
+    entry = human(req.get('name'))
+    if entry.pw_name == me:
+        fail('You cannot delete the account you are using.')
+    if logged_in(entry.pw_uid):
+        fail(f'{entry.pw_name} is logged in. Log that account out first.')
+    protect_admin(entry.pw_name, 'deleting it')
+    if req.get('keep_files', False):
+        run(['userdel', entry.pw_name])          # the home folder stays
+    else:
+        _userdel_remove(entry.pw_name)
+    for path in (os.path.join(AS_USERS, entry.pw_name), os.path.join(AS_ICONS, entry.pw_name)):
+        if os.path.exists(path):
+            os.remove(path)
+    hidden = set(read_hidden())
+    if entry.pw_name in hidden:
+        write_hidden(hidden - {entry.pw_name})
+    drop_autologin(entry.pw_name)
+    try:
+        with open(DEFAULT_MARKER, encoding='utf-8') as f:
+            if f.read().strip() == entry.pw_name:
+                os.remove(DEFAULT_MARKER)
+    except OSError:
+        pass
+    restart_accounts_service()
+    print(f'Account {entry.pw_name} deleted.')
+
+
+def _userdel_remove(name):
+    r = subprocess.run(['userdel', '--remove', name], capture_output=True, text=True, env=ENV, timeout=120)
+    # 12: the home folder or mail spool was already missing; the account is gone.
+    if r.returncode not in (0, 12):
+        lines = (r.stderr or '').strip().splitlines()
+        fail('userdel: ' + (lines[-1] if lines else f'error {r.returncode}'))
+
+
+def act_password(req, me):
+    entry = human(req.get('name'))
+    password = clean_password(req.get('password'))
+    run(['chpasswd'], f'{entry.pw_name}:{password}\n')
+    print('Password changed.')
+
+
+def act_full_name(req, me):
+    entry = human(req.get('name'))
+    run(['usermod', '--comment', clean_full_name(req.get('full_name', '')), entry.pw_name])
+    print('Name changed.')
+
+
+def act_rename(req, me):
+    entry = human(req.get('name'))
+    new = req.get('new_name')
+    if not isinstance(new, str) or not NAME_RE.match(new) or new in RESERVED:
+        fail('Invalid or reserved login name.')
+    if _exists(new) or _group(new):
+        fail(f'The name {new} is already used.')
+    if entry.pw_name == me:
+        fail('You cannot rename the account you are using; log in with another administrator account.')
+    if logged_in(entry.pw_uid):
+        fail(f'{entry.pw_name} is logged in. Log that account out first.')
+    old = entry.pw_name
+    args = ['usermod', '--login', new]
+    if entry.pw_dir == f'/home/{old}' and not os.path.exists(f'/home/{new}'):
+        args += ['--home', f'/home/{new}', '--move-home']
+    run(args + [old])
+    try:
+        g = grp.getgrnam(old)
+        if g.gr_gid == entry.pw_gid:
+            run(['groupmod', '--new-name', new, old])
+    except KeyError:
+        pass
+    for base in ('/var/mail', '/var/spool/cron/crontabs'):
+        if os.path.exists(os.path.join(base, old)) and not os.path.exists(os.path.join(base, new)):
+            os.rename(os.path.join(base, old), os.path.join(base, new))
+    for base in (AS_USERS, AS_ICONS):
+        if os.path.exists(os.path.join(base, old)):
+            os.rename(os.path.join(base, old), os.path.join(base, new))
+    icon_file = os.path.join(AS_USERS, new)
+    if os.path.exists(icon_file):
+        with open(icon_file, encoding='utf-8') as f:
+            text = f.read()
+        write_text(icon_file, text.replace(os.path.join(AS_ICONS, old), os.path.join(AS_ICONS, new)), 0o600)
+    hidden = set(read_hidden())
+    if old in hidden:
+        write_hidden((hidden - {old}) | {new})
+    rename_autologin(old, new)
+    restart_accounts_service()
+    print(f'Account {old} is now {new}.')
+
+
+def act_admin(req, me):
+    entry = human(req.get('name'))
+    if not _group(ADMIN_GROUP):
+        fail('This computer has no sudo group.')
+    if req.get('admin'):
+        run(['gpasswd', '--add', entry.pw_name, ADMIN_GROUP])
+        print(f'{entry.pw_name} is an administrator now.')
+    else:
+        protect_admin(entry.pw_name, 'making it a standard account')
+        run(['gpasswd', '--delete', entry.pw_name, ADMIN_GROUP])
+        print(f'{entry.pw_name} is a standard account now.')
+
+
+def act_lock(req, me):
+    entry = human(req.get('name'))
+    if req.get('locked'):
+        if entry.pw_name == me:
+            fail('You cannot lock the account you are using.')
+        protect_admin(entry.pw_name, 'locking it')
+        run(['usermod', '--lock', '--expiredate', '1', entry.pw_name])
+        print(f'{entry.pw_name} cannot log in any more.')
+    else:
+        run(['usermod', '--unlock', '--expiredate', '', entry.pw_name])
+        print(f'{entry.pw_name} can log in again.')
+
+
+def act_hidden(req, me):
+    entry = human(req.get('name'))
+    set_hidden(entry.pw_name, bool(req.get('hidden')))
+    print('Login screen list updated.')
+
+
+def act_avatar(req, me):
+    entry = human(req.get('name'))
+    try:
+        uid = int(os.environ.get('PKEXEC_UID', '-1'))
+    except ValueError:
+        uid = -1
+    set_avatar(entry, req.get('image', ''), uid)
+    print('Picture changed.')
+
+
+ACTIONS = {'create': act_create, 'delete': act_delete, 'password': act_password, 'full_name': act_full_name,
+           'rename': act_rename, 'admin': act_admin, 'lock': act_lock, 'hidden': act_hidden, 'avatar': act_avatar}
+
+
+def main():
+    if os.geteuid() != 0:
+        fail('eduka-users-apply must run as root (pkexec).', 1)
+    try:
+        req = json.loads(sys.stdin.read(65536))
+    except Exception:
+        fail('Invalid request.')
+    if not isinstance(req, dict) or req.get('action') not in ACTIONS:
+        fail('Unknown action.')
+    ACTIONS[req['action']](req, caller())
+
+
+if __name__ == '__main__':
+    main()

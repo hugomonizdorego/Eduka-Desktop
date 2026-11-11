@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""Apply the Edukasaun LightDM login settings. Runs as root via pkexec.
+
+LightDM has two Edukasaun-styled greeters, configured together so both look
+and behave the same as the SDDM login screen:
+  slick-greeter        /etc/lightdm/slick-greeter.conf ([Greeter])
+  lightdm-gtk-greeter  /etc/xdg/lightdm/lightdm-gtk-greeter.conf.d/90-eduka-settings.conf
+and the colors of the login card for the greeter's GTK theme
+(Edukasaun-Login) in the lightdm account: ~lightdm/.config/gtk-3.0/gtk.css.
+
+Reads one JSON object from standard input (written by Eduka-Settings).
+The first argument picks what is changed, and with it the polkit action:
+  --look             style, accent, clock, background, logo (and a small
+                     copy of the logo for slick-greeter, made by Eduka-Settings)
+                     (org.edukasaun.desktop.lightdm-config; administrators at
+                     the computer need no password)
+  --seat             greeter, hide the account list, typing a name, guest
+                     (org.edukasaun.desktop.lightdm-login)
+  --autologin        autologin_user ('' = off) (org.edukasaun.desktop.lightdm-autologin,
+                     always asks for the password)
+  --display-manager  display_manager: sddm | lightdm, used at the next start
+                     (org.edukasaun.desktop.display-manager, always asks)
+
+Every value is validated; pictures must be real PNG/JPEG/WebP/BMP files the
+calling user may read, so this helper cannot be used to copy other files.
+"""
+import json, os, pwd, re, shutil, stat, subprocess, sys, tempfile
+
+MODES = ('--look', '--seat', '--autologin', '--display-manager')
+STYLES = ('pastel', 'light', 'dark', 'glass')
+GREETERS = ('slick-greeter', 'lightdm-gtk-greeter')
+SLICK_CONF = '/etc/lightdm/slick-greeter.conf'
+GTK_CONF = '/etc/xdg/lightdm/lightdm-gtk-greeter.conf.d/90-eduka-settings.conf'
+SEAT_CONF = '/etc/lightdm/lightdm.conf.d/50-eduka-settings.conf'
+AUTOLOGIN_CONF = '/etc/lightdm/lightdm.conf.d/50-eduka-autologin.conf'
+STATE = '/etc/edukasaun-desktop/lightdm.json'
+DATA_DIR = '/usr/share/Edukasaun/LightDM'
+BACKGROUND = DATA_DIR + '/Default.png'
+LOGO = DATA_DIR + '/Logo.png'
+LOGO_SMALL = DATA_DIR + '/Logo-small.png'
+SDDM_BACKGROUND = '/usr/share/Edukasaun/SDDM/Default.png'
+SDDM_LOGO = '/usr/share/Edukasaun/SDDM/Logo.png'
+SCHOOL_LOGO = '/usr/share/Edukasaun/Logo/Edukasaun Logo.png'
+BUILTIN_LOGO = '/usr/share/sddm/themes/edukasaun/logo.png'
+GRADIENTS = '/usr/share/edukasaun-desktop/login'
+BUILTIN_SMALL_LOGO = GRADIENTS + '/logo-small.png'
+SESSION = 'edukasaun-desktop'
+XGREETERS = '/usr/share/xgreeters'
+DM_BINARIES = {'lightdm': '/usr/sbin/lightdm', 'sddm': '/usr/bin/sddm'}
+MAX_IMAGE = 25 * 1024 * 1024
+DEFAULT_ACCENT = {'pastel': '#3fa684', 'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
+
+# The login card of every style: the colors of the SDDM theme (Main.qml).
+PALETTES = {
+    'pastel': dict(card='rgba(252,254,253,0.96)', card_border='#d9eae3', field='#ffffff', field_border='#cfe3db',
+                   text='#24403a', sub='#5d7671', bar='rgba(237,247,242,0.90)', hover='rgba(63,166,132,0.12)', middle='#edf7f2'),
+    'light': dict(card='rgba(255,255,255,0.95)', card_border='rgba(255,255,255,0.85)', field='#ffffff', field_border='#d3e0db',
+                  text='#10231e', sub='#5b6e69', bar='rgba(255,255,255,0.90)', hover='rgba(0,120,90,0.10)', middle='#8fcf7a'),
+    'dark': dict(card='rgba(32,35,34,0.92)', card_border='rgba(255,255,255,0.20)', field='#2e3432', field_border='rgba(255,255,255,0.25)',
+                 text='#ffffff', sub='rgba(255,255,255,0.70)', bar='rgba(32,35,34,0.85)', hover='rgba(255,255,255,0.10)', middle='#1f2a28'),
+    'glass': dict(card='rgba(255,255,255,0.55)', card_border='rgba(255,255,255,0.90)', field='rgba(255,255,255,0.85)',
+                  field_border='rgba(255,255,255,0.95)', text='#10231e', sub='#4b5e59', bar='rgba(255,255,255,0.50)',
+                  hover='rgba(255,255,255,0.35)', middle='#7fb9dc'),
+}
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def caller_uid():
+    try:
+        return int(os.environ.get('PKEXEC_UID', os.getuid()))
+    except ValueError:
+        return os.getuid()
+
+
+def on_accent(accent):
+    r, g, b = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+    return '#10231e' if (0.299 * r + 0.587 * g + 0.114 * b) > 170 else '#ffffff'
+
+
+def greeter_css(style, accent):
+    """The login card of lightdm-gtk-greeter (and the menus and entries of
+    slick-greeter) in the colors of the SDDM login screen."""
+    p = dict(PALETTES[style], accent=accent, on_accent=on_accent(accent), style=style)
+    return '''/* Edukasaun login (LightDM): {style} style, accent {accent}.
+   Written by Eduka-Settings → Login & Fingerprint → LightDM; replaced on every change. */
+#panel_window {{ background-color: {bar}; background-image: none; color: {text}; box-shadow: none; border: none; }}
+#panel_window menubar, #panel_window #menubar {{ background: transparent; background-image: none; box-shadow: none; border: none; padding: 0 6px; }}
+#panel_window menubar > menuitem {{ color: {text}; padding: 4px 10px; border-radius: 8px; }}
+#panel_window menubar > menuitem:hover {{ background-color: {hover}; }}
+#panel_window menubar > menuitem label, #panel_window label {{ color: {text}; font-weight: bold; }}
+#login_window, #power_window {{ background-color: {card}; background-image: none; border: 1px solid {card_border};
+  border-radius: 18px; box-shadow: none; color: {text}; padding: 8px; margin: 0; }}
+#login_window #content_frame, #power_window #content_frame,
+#login_window #buttonbox_frame, #power_window #buttonbox_frame {{ background: transparent; background-image: none; border: none; box-shadow: none; }}
+#login_window #buttonbox_frame, #power_window #buttonbox_frame {{ padding: 4px 12px 14px 12px; }}
+#login_window label, #power_window label {{ color: {text}; }}
+#login_window #message_label {{ color: {sub}; }}
+#login_window entry, #login_window combobox button, #login_window combobox box {{ background-color: {field}; background-image: none;
+  color: {text}; border: 1px solid {field_border}; border-radius: 10px; min-height: 34px; box-shadow: none; }}
+#login_window entry {{ padding: 0 10px; }}
+#login_window entry:focus {{ border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}
+#login_window button, #power_window button {{ border-radius: 10px; min-height: 32px; padding: 0 16px; background-image: none;
+  background-color: {field}; color: {text}; border: 1px solid {field_border}; box-shadow: none; }}
+#login_window button label, #power_window button label {{ color: {text}; }}
+#login_window #login_button, #power_window #power_ok_button {{ background-color: {accent}; border-color: {accent}; }}
+#login_window #login_button label, #power_window #power_ok_button label {{ color: {on_accent}; font-weight: bold; }}
+#login_window #login_button:hover, #power_window #power_ok_button:hover {{ background-color: shade({accent}, 1.08); }}
+#login_window button:focus {{ box-shadow: 0 0 0 2px alpha({accent}, 0.45); }}
+#user_image {{ border-radius: 50%; padding: 3px; background-color: {field}; border: 2px solid {accent}; }}
+#user_image_border {{ background: transparent; border: none; }}
+#greeter_infobar {{ border-radius: 10px; }}
+/* slick-greeter draws white names on dark boxes: its prompts are light too. */
+entry.lightdm {{ color: #ffffff; caret-color: #ffffff; background-color: rgba(255,255,255,0.14); background-image: none;
+  border: 1px solid rgba(255,255,255,0.45); border-radius: 8px; box-shadow: none; }}
+entry.lightdm:focus {{ border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}
+entry.lightdm image {{ color: #ffffff; }}
+entry.lightdm selection {{ background-color: {accent}; color: {on_accent}; }}
+'''.format(**p)
+
+
+def open_image(path, uid):
+    """Open the picture once and check that very file (owner, mode, size and
+    the picture header come from the opened file)."""
+    real = os.path.realpath(path)
+    try:
+        fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        fail(f'Image not found: {path}')
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_size <= 0 or st.st_size > MAX_IMAGE:
+        os.close(fd)
+        fail(f'Not a usable image file: {path}')
+    readable_by_caller = (st.st_mode & 0o004) or (st.st_uid == uid and st.st_mode & 0o400)
+    if not readable_by_caller:
+        os.close(fd)
+        fail(f'The image must be readable by your account: {path}')
+    head = os.pread(fd, 16, 0)
+    if not (head.startswith(b'\x89PNG\r\n\x1a\n') or head[:3] == b'\xff\xd8\xff'
+            or (head[:4] == b'RIFF' and head[8:12] == b'WEBP') or head[:2] == b'BM'):
+        os.close(fd)
+        fail(f'Only PNG, JPEG, WebP or BMP pictures can be used: {path}')
+    return fd
+
+
+def install_image(source_fd, target):
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target))
+    with os.fdopen(source_fd, 'rb') as src, os.fdopen(fd, 'wb') as dst:
+        src.seek(0)
+        shutil.copyfileobj(src, dst, 1024 * 1024)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+
+
+def write_text(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def update_ini(path, section, values, header=None):
+    """Set keys of one section and keep every other line of the file."""
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8', errors='ignore') as handle:
+            lines = handle.read().splitlines()
+    out, current, seen, done = [], None, False, set()
+    def flush():
+        for key, value in values.items():
+            if key not in done:
+                out.append(f'{key}={value}'); done.add(key)
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            if current == section:
+                flush()
+            current = stripped[1:-1]
+            seen = seen or current == section
+            out.append(line); continue
+        if current == section:
+            m = re.match(r'\s*([A-Za-z0-9_-]+)\s*=', line)
+            if m and m.group(1) in values:
+                if m.group(1) not in done:
+                    out.append(f'{m.group(1)}={values[m.group(1)]}'); done.add(m.group(1))
+                continue
+        out.append(line)
+    if current == section:
+        flush()
+    if not seen:
+        if not lines and header:
+            out.append(header)
+        if out and out[-1].strip():
+            out.append('')
+        out.append(f'[{section}]')
+        flush()
+    write_text(path, '\n'.join(out) + '\n')
+
+
+def read_state():
+    try:
+        with open(STATE, encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_state(update):
+    data = read_state(); data.update(update)
+    write_text(STATE, json.dumps(data, indent=1, sort_keys=True) + '\n')
+
+
+def theme_exists(name):
+    return os.path.isdir(os.path.join('/usr/share/themes', name))
+
+
+def icon_theme(dark):
+    for name in (('Papirus-Dark',) if dark else ('Papirus-Light', 'Papirus')) + ('Papirus', 'Adwaita'):
+        if os.path.isdir(os.path.join('/usr/share/icons', name)):
+            return name
+    return 'Adwaita'
+
+
+def lightdm_home():
+    try:
+        entry = pwd.getpwnam('lightdm')
+        return entry.pw_dir, entry.pw_uid, entry.pw_gid
+    except KeyError:
+        return None, None, None
+
+
+def write_greeter_css(style, accent):
+    """GTK reads ~/.config/gtk-3.0/gtk.css of the account the greeter runs as."""
+    home, uid, gid = lightdm_home()
+    if not home or not home.startswith('/var/lib/') or not os.path.isdir(home):
+        return False
+    path = home
+    for part in ('.config', 'gtk-3.0'):
+        path = os.path.join(path, part)
+        if os.path.islink(path):
+            fail('Unexpected link in the LightDM home folder.')
+        if not os.path.isdir(path):
+            os.mkdir(path, 0o755)
+            os.chown(path, uid, gid)
+    target = os.path.join(path, 'gtk.css')
+    if os.path.islink(target):
+        os.remove(target)
+    write_text(target, greeter_css(style, accent))
+    return True
+
+
+def apply_look(req, uid):
+    style = str(req.get('style', 'pastel'))
+    if style not in STYLES:
+        fail('Unknown style.')
+    accent = str(req.get('accent', '') or DEFAULT_ACCENT[style])
+    if not re.fullmatch(r'#[0-9a-fA-F]{6}', accent):
+        fail('Accent must look like #3fa684.')
+    show_clock = bool(req.get('show_clock', True))
+    clock_24 = str(req.get('clock_format', '24h')) != '12h'
+    show_host = bool(req.get('show_hostname', True))
+    state = read_state()
+
+    background = str(req.get('background', ''))
+    if background == 'reset':
+        if os.path.exists(BACKGROUND):
+            os.remove(BACKGROUND)
+        state['background'] = 'style'
+    elif background == 'sddm':
+        state['background'] = 'sddm'
+    elif background:
+        install_image(open_image(background, uid), BACKGROUND)
+        state['background'] = 'own'
+    logo = str(req.get('logo', ''))
+    # slick-greeter draws the logo at its own size: Eduka-Settings sends a
+    # small copy it made (as the user; this helper never decodes pictures).
+    logo_small = str(req.get('logo_small', ''))
+    if logo == 'reset':
+        for path in (LOGO, LOGO_SMALL):
+            if os.path.exists(path):
+                os.remove(path)
+        state['logo'] = 'default'
+    elif logo == 'sddm':
+        state['logo'] = 'sddm'
+    elif logo:
+        install_image(open_image(logo, uid), LOGO)
+        state['logo'] = 'own'
+    if logo and logo != 'reset':
+        if logo_small:
+            install_image(open_image(logo_small, uid), LOGO_SMALL)
+        elif os.path.exists(LOGO_SMALL):
+            os.remove(LOGO_SMALL)
+
+    bg_kind = state.get('background', 'style')
+    if bg_kind == 'own' and os.path.exists(BACKGROUND):
+        bg = slick_bg = BACKGROUND
+    elif bg_kind == 'sddm' and os.path.exists(SDDM_BACKGROUND):
+        bg = slick_bg = SDDM_BACKGROUND
+    else:
+        bg = os.path.join(GRADIENTS, style + '.png')
+        # slick-greeter writes white names: its gradient is deeper.
+        slick_bg = os.path.join(GRADIENTS, 'slick-' + style + '.png')
+        if not os.path.exists(slick_bg):
+            slick_bg = bg
+    logo_kind = state.get('logo', 'default')
+    candidates = {'own': [LOGO], 'sddm': [SDDM_LOGO]}.get(logo_kind, []) + [SCHOOL_LOGO, BUILTIN_LOGO]
+    logo_path = next((p for p in candidates if os.path.exists(p)), '')
+    small = [LOGO_SMALL] if logo_kind in ('own', 'sddm') else []
+    slick_logo = next((p for p in small + [BUILTIN_SMALL_LOGO] if os.path.exists(p)), '')
+
+    dark = style == 'dark'
+    theme = 'Edukasaun-Login-Dark' if dark else 'Edukasaun-Login'
+    if not theme_exists(theme):
+        theme = 'Adwaita-dark' if dark else 'Adwaita'
+    icons = icon_theme(dark)
+    clock = '%H:%M' if clock_24 else '%l:%M %p'
+    pal = PALETTES[style]
+
+    update_ini(SLICK_CONF, 'Greeter', {
+        'background': slick_bg, 'background-color': pal['middle'], 'draw-user-backgrounds': 'false', 'draw-grid': 'false',
+        'logo': slick_logo, 'theme-name': theme, 'icon-theme-name': icons, 'font-name': 'Sans 11',
+        'xft-antialias': 'true', 'xft-hintstyle': 'hintslight', 'show-hostname': str(show_host).lower(),
+        'show-clock': str(show_clock).lower(), 'clock-format': clock, 'show-a11y': 'true', 'show-power': 'true',
+        'show-keyboard': 'true', 'enable-hidpi': 'auto'},
+        header='# Edukasaun login (slick-greeter). Eduka-Settings → Login & Fingerprint → LightDM\n'
+               '# changes the keys it knows and keeps every other line.')
+    # Only the Eduka-Desktop session is offered and Eduka has its own language
+    # setting: no session or language menus on the login screen.
+    indicators = ['~host' if show_host else '~spacer', '~spacer'] + (['~clock', '~spacer'] if show_clock else []) + \
+                 ['~a11y', '~power']
+    update_ini(GTK_CONF, 'greeter', {
+        'background': bg, 'user-background': 'false', 'theme-name': theme, 'icon-theme-name': icons,
+        'font-name': 'Sans 11', 'xft-antialias': 'true', 'xft-hintstyle': 'hintslight',
+        'default-user-image': logo_path or '#avatar-default', 'round-user-image': 'true', 'highlight-logged-user': 'true',
+        'position': '50%,center 50%,center', 'panel-position': 'top', 'clock-format': clock + ' · %a %d %b',
+        'indicators': ';'.join(indicators), 'a11y-states': '', 'hide-user-image': 'false'},
+        header='# Edukasaun login (lightdm-gtk-greeter). Written by Eduka-Settings → Login & Fingerprint → LightDM.')
+    write_greeter_css(style, accent)
+    save_state({'style': style, 'accent': accent, 'follow': bool(req.get('follow', False)),
+                'show_clock': show_clock, 'clock_format': '24h' if clock_24 else '12h',
+                'show_hostname': show_host, 'background': state.get('background', 'style'), 'logo': state.get('logo', 'default')})
+
+
+def installed_greeters():
+    return [g for g in GREETERS if os.path.exists(os.path.join(XGREETERS, g + '.desktop'))]
+
+
+def apply_seat(req):
+    values = {'user-session': SESSION}
+    greeter = str(req.get('greeter', ''))
+    if greeter:
+        if greeter not in GREETERS:
+            fail('Unknown greeter.')
+        if greeter not in installed_greeters():
+            fail(f'{greeter} is not installed.')
+        values['greeter-session'] = greeter
+    elif os.path.exists(SEAT_CONF):
+        # Keep the greeter chosen before, if it is still installed.
+        with open(SEAT_CONF, encoding='utf-8', errors='ignore') as handle:
+            m = re.search(r'(?m)^greeter-session=(\S+)', handle.read())
+        if m and m.group(1) in installed_greeters():
+            values['greeter-session'] = m.group(1)
+    values['greeter-hide-users'] = 'true' if req.get('hide_users') else 'false'
+    values['greeter-show-manual-login'] = 'true' if req.get('manual_login', True) else 'false'
+    guest = bool(req.get('guest')) and os.path.exists('/usr/sbin/guest-account')
+    values['allow-guest'] = 'true' if guest else 'false'
+    values['greeter-allow-guest'] = 'true' if guest else 'false'
+    lines = ['# Written by Eduka-Settings → Login & Fingerprint → LightDM.', '[Seat:*]']
+    lines += [f'{k}={v}' for k, v in values.items()]
+    write_text(SEAT_CONF, '\n'.join(lines) + '\n')
+    # slick-greeter shows the box for a typed name only with the list hidden
+    # or with greeter-show-manual-login; nothing more is needed there.
+    save_state({'greeter': values.get('greeter-session', ''), 'hide_users': values['greeter-hide-users'] == 'true',
+                'manual_login': values['greeter-show-manual-login'] == 'true', 'guest': guest})
+
+
+def apply_autologin(req):
+    user = str(req.get('autologin_user', '')).strip()
+    if not user:
+        if os.path.exists(AUTOLOGIN_CONF):
+            os.remove(AUTOLOGIN_CONF)
+        save_state({'autologin_user': ''})
+        return
+    if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):
+        fail('Invalid automatic login user.')
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        fail(f'User {user} does not exist.')
+    shell = os.path.basename(entry.pw_shell or '')
+    if not 1000 <= entry.pw_uid < 60000 or shell in ('nologin', 'false'):
+        fail('Automatic login is only possible for normal user accounts.')
+    write_text(AUTOLOGIN_CONF, ('# Written by Eduka-Settings: log in automatically (LightDM).\n'
+                                '[Seat:*]\n'
+                                f'autologin-user={user}\n'
+                                'autologin-user-timeout=0\n'
+                                f'autologin-session={SESSION}\n'))
+    save_state({'autologin_user': user})
+
+
+def apply_display_manager(req):
+    dm = str(req.get('display_manager', ''))
+    if dm not in DM_BINARIES:
+        fail('Unknown display manager.')
+    binary = DM_BINARIES[dm]
+    if not os.path.exists(binary):
+        fail(f'{dm} is not installed.')
+    write_text('/etc/X11/default-display-manager', binary + '\n')
+    if shutil.which('debconf-set-selections'):
+        try:
+            subprocess.run(['debconf-set-selections'], input=f'shared shared/default-x-display-manager select {dm}\n',
+                           text=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    unit = None
+    for base in ('/usr/lib/systemd/system', '/lib/systemd/system'):
+        if os.path.exists(os.path.join(base, dm + '.service')):
+            unit = os.path.join(base, dm + '.service'); break
+    if unit:
+        if os.path.isdir('/run/systemd/system') and shutil.which('systemctl'):
+            subprocess.run(['systemctl', 'enable', '--force', dm + '.service'], timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            # A chroot (ISO build): the alias systemctl would make.
+            link = '/etc/systemd/system/display-manager.service'
+            if os.path.islink(link) or os.path.exists(link):
+                os.remove(link)
+            os.symlink(unit, link)
+    save_state({'display_manager': dm})
+
+
+def main():
+    if os.geteuid() != 0:
+        fail('eduka-lightdm-apply must run as root (use pkexec).')
+    mode = sys.argv[1] if len(sys.argv) > 1 else ''
+    if mode not in MODES:
+        fail('Use --look, --seat, --autologin or --display-manager.')
+    try:
+        req = json.loads(sys.stdin.read(65536) or '{}')
+    except Exception:
+        fail('Invalid request.')
+    if not isinstance(req, dict):
+        fail('Invalid request.')
+    if mode == '--look':
+        apply_look(req, caller_uid())
+    elif mode == '--seat':
+        apply_seat(req)
+    elif mode == '--autologin':
+        apply_autologin(req)
+    else:
+        apply_display_manager(req)
+    print('LightDM login settings saved.')
+
+
+if __name__ == '__main__':
+    main()

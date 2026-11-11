@@ -315,6 +315,14 @@ class CategoryDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         return QSize(190, self.row_h)
 
+def app_description(app):
+    """What a screen reader says after the name of a program: what it is
+    for (Comment or GenericName), then that Enter opens it."""
+    what=str(app.get('comment') or app.get('generic') or '').strip()
+    action=_('Press Enter to open')
+    return f'{what}. {action}' if what else action
+
+
 class AppButton(QToolButton):
     def __init__(self, app, accent=None, parent=None):
         super().__init__(parent)
@@ -325,9 +333,10 @@ class AppButton(QToolButton):
         self.setText(app.get('name','Application'))
         self.setIcon(get_icon(app.get('icon')))
         self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        # No tooltip: the name is already written on the tile.
+        # No tooltip: the name is already written on the tile. The screen
+        # reader says what the program is for (its Comment) before "open".
         self.setAccessibleName(app.get('name','Application'))
-        self.setAccessibleDescription('Open application')
+        self.setAccessibleDescription(app_description(app))
         self.setFocusPolicy(Qt.StrongFocus)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.setMinimumSize(126, 112)
@@ -479,7 +488,7 @@ class AppListItem(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(app.get('name','Application'))
-        self.setAccessibleDescription('Open application')
+        self.setAccessibleDescription(app_description(app))
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.ctx)
         lay = QHBoxLayout(self); lay.setContentsMargins(12,8,12,8); lay.setSpacing(12)
@@ -1105,7 +1114,7 @@ class EdukaMenu(QWidget):
         for app in fav_apps[:MAX_FAVORITES]:
             btn=QPushButton(' '+app.get('name','Application')[:23])
             btn.setIcon(get_icon(app.get('icon')))
-            btn.setAccessibleName(app.get('name','Application')); btn.setFocusPolicy(Qt.StrongFocus); btn.installEventFilter(self)
+            btn.setAccessibleName(app.get('name','Application')); btn.setAccessibleDescription(app_description(app)); btn.setFocusPolicy(Qt.StrongFocus); btn.installEventFilter(self)
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
             btn.clicked.connect(lambda _,a=app: (self.hide_menu(force=True), launch_entry(a)))
             btn.customContextMenuRequested.connect(lambda pos,a=app,b=btn: self.favorite_context(a,b,pos))
@@ -1328,8 +1337,26 @@ class EdukaMenu(QWidget):
                 self.reload_style(reset=action == 'reset')
             elif action == 'reload-apps':
                 self.apps=load_apps(force=True); self.rebuild_categories(preserve=True); self.refresh_apps()
+            elif action == 'quick':
+                self.show_quick()
+            elif action == 'quick-reload':
+                if getattr(self, 'quick', None) is not None and self.quick.isVisible(): self.quick.load()
             else: self.toggle_menu()
         except Exception: pass
+
+    def show_quick(self):
+        """Eduka-Quick (RC2): the round quick launcher where the mouse is.
+        It lives in this resident process, so it appears at once."""
+        import eduka_quick
+        if not eduka_quick.read_config().get('enabled', True):
+            return
+        if self.isVisible():
+            self.hide_menu(force=True)
+        if getattr(self, 'quick', None) is None:
+            self.quick=eduka_quick.QuickPie()
+        if self.quick.isVisible():
+            self.quick.close_pie(); return
+        self.quick.popup(QCursor.pos())
 
     def reload_style(self, reset=False):
         """Re-read every setting written by Eduka-Settings and apply it

@@ -23,6 +23,7 @@ from catalog_0100 import NEW_0100
 from catalog_0101 import NEW_0101
 from catalog_0102 import NEW_0102
 from catalog_0110 import NEW_0110
+from catalog_0111 import NEW_0111
 from fix_tetun import TETUN_FIX, TETUN_WORDS
 
 OUT = HERE.parents[1]/'usr'/'share'/'edukasaun-desktop'/'i18n'
@@ -88,7 +89,7 @@ def check(lang, key, value):
 def main():
     cats = {'pt': {}, 'id': {}, 'tet': {}, 'pt_BR': {}}
     seen = set()
-    for row in FULL + NEW + NEW_0921 + NEW_0922 + NEW_0923 + NEW_0924 + NEW_0925 + NEW_0100 + NEW_0101 + NEW_0102 + NEW_0110:
+    for row in FULL + NEW + NEW_0921 + NEW_0922 + NEW_0923 + NEW_0924 + NEW_0925 + NEW_0100 + NEW_0101 + NEW_0102 + NEW_0110 + NEW_0111:
         en, pt, idn, tet = row
         tet = TETUN_FIX.get(en, tet)
         for a, b in TETUN_WORDS:

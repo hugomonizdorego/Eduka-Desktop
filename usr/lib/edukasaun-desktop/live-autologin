@@ -25,6 +25,23 @@ if ! grep -qw "boot=live" "$CMDLINE" 2>/dev/null; then
             if grep -qs '^User=edukasaun$' /etc/sddm.conf.d/20-eduka-autologin.conf; then
                 rm -f /etc/sddm.conf.d/20-eduka-autologin.conf
             fi
+            if grep -qs '^autologin-user=edukasaun$' /etc/lightdm/lightdm.conf.d/50-eduka-autologin.conf; then
+                rm -f /etc/lightdm/lightdm.conf.d/50-eduka-autologin.conf
+            fi
+            # LightDM (slick-greeter, lightdm-gtk-greeter) and Eduka-Settings
+            # read AccountsService: the live account is a system account there.
+            ASFILE="${EDUKA_ACCOUNTS_DIR:-/var/lib/AccountsService/users}/edukasaun"
+            if [ -d "$(dirname "$ASFILE")" ] && ! grep -qs '^SystemAccount=true$' "$ASFILE"; then
+                if [ -f "$ASFILE" ]; then
+                    sed -i '/^SystemAccount=/d' "$ASFILE"
+                    grep -q '^\[User\]' "$ASFILE" || printf '[User]\n' >> "$ASFILE"
+                    sed -i '/^\[User\]/a SystemAccount=true' "$ASFILE"
+                else
+                    printf '[User]\nSystemAccount=true\n' > "$ASFILE"
+                fi
+                chmod 600 "$ASFILE"
+                systemctl try-restart accounts-daemon.service >/dev/null 2>&1 || true
+            fi
         fi
     fi
     exit 0

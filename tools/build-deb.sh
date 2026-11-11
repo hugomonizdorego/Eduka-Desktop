@@ -49,6 +49,7 @@ chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/live-autologin
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-sddm-apply
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-parental-apply "$STAGE"/usr/lib/edukasaun-desktop/eduka-parental-daemon
 chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-fingerprint-apply "$STAGE"/usr/lib/edukasaun-desktop/eduka-session-prepare
+chmod 0755 "$STAGE"/usr/lib/edukasaun-desktop/eduka-users-apply "$STAGE"/usr/lib/edukasaun-desktop/eduka-lightdm-apply
 for s in preinst postinst prerm postrm; do
     [ -f "$STAGE/DEBIAN/$s" ] && chmod 0755 "$STAGE/DEBIAN/$s"
 done

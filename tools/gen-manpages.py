@@ -52,20 +52,38 @@ PAGES = {
     'eduka-settings': (
         'settings of Eduka-Desktop',
         ['[**--page** *PAGE*]'],
-        ['**eduka-settings** changes the look and behaviour of Eduka-Desktop: theme, accent color, icons and '
-         'cursor, wallpaper, desktop icons, effects, the menu and the panel, clock and weather, notifications, '
-         'keyboard, mouse, touchpad and touch screen, fingerprints, language, accessibility, Parental Control, '
-         'the login screen and maintenance tasks. Pages about the same thing share one entry with tabs. '
-         'Changes to Parental Control, the login screen and fingerprint login ask for an administrator '
-         'password (pkexec).',
+        ['**eduka-settings** changes the look and behaviour of Eduka-Desktop: theme, accent color, fonts, icons and '
+         'cursor, wallpaper, desktop icons, effects, the menu, Eduka-Quick and the panel, clock and weather, '
+         'notifications, keyboard, mouse, touchpad and touch screen, user accounts, language, date and time, '
+         'accessibility (vision, hearing, screen reader), Parental Control, privacy, the SDDM and LightDM login '
+         'screens, fingerprints and maintenance tasks. It opens on an overview of all settings with a search box; '
+         'pages about the same thing share one entry with tabs. Changes to other accounts, Parental Control, the '
+         'login screens and fingerprint login ask for an administrator password (pkexec).',
          'When Eduka-Settings is already open, its window is raised and shows the requested page.'],
-        [('--page PAGE', 'Open one page or tab: appearance, effects, wallpaper, desktopicons, desktop, panel, '
-          'clock, notifications, keyboard, mouse, touchpad, touchscreen, general, accessibility, parental, login, '
-          'fingerprint or maintenance.')],
+        [('--page PAGE', 'Open one page or tab: overview, appearance, fonts, effects, wallpaper, desktopicons, '
+          'desktop, quick, panel, clock, notifications, keyboard, mouse, touchpad, touchscreen, users, general, '
+          'datetime, accessibility, hearing, screenreader, parental, privacy, login, lightdm, fingerprint or '
+          'maintenance.')],
         [('~/.config/eduka-desktop/', 'settings of this account'),
          ('/etc/edukasaun-desktop/parental.json', 'Parental Control settings (system-wide)'),
-         ('/usr/share/sddm/themes/edukasaun/theme.conf.user', 'login screen settings')],
-        ['eduka-panel', 'eduka-menu', 'eduka-panel-reset', 'eduka-compositor', 'pkexec']),
+         ('/etc/edukasaun-desktop/hidden-users', 'accounts hidden on the login screens'),
+         ('/etc/edukasaun-desktop/lightdm.json', 'LightDM login screen settings'),
+         ('/usr/share/sddm/themes/edukasaun/theme.conf.user', 'SDDM login screen settings')],
+        ['eduka-panel', 'eduka-menu', 'eduka-quick', 'eduka-panel-reset', 'eduka-compositor', 'pkexec']),
+    'eduka-quick': (
+        'Eduka-Quick, the round quick launcher of Eduka-Desktop',
+        ['[**--settings**]'],
+        ['**eduka-quick** shows Eduka-Quick where the mouse is: a circle of programs, actions and groups. Point in '
+         'a direction and click, or press, drag and release; a group opens a smaller circle. Keys: the arrows, '
+         '1 to 9, Enter; Esc closes or goes back. Running it again while the circle is open closes it.',
+         'The circle is drawn by the resident Eduka-Desktop daemon (**eduka-menu --daemon**), so it appears at '
+         'once; the command starts the daemon when it does not run. Super+Q opens it (lxqt-globalkeys); the key, '
+         'the slices and the options are chosen in Eduka-Settings → Eduka-Quick. The idea comes from Gnome-Pie '
+         'by Simon Schneegans.'],
+        [('--settings', 'Open Eduka-Settings on the Eduka-Quick page.')],
+        [('~/.config/eduka-desktop/desktop/quick.json', 'on or off, key, options and slices'),
+         ('~/.config/lxqt/globalkeyshortcuts.conf', 'the key (entry "Eduka-Quick")')],
+        ['eduka-menu', 'eduka-settings', 'lxqt-globalkeysd']),
     'eduka-menu-settings': (
         'old name of eduka-settings',
         ['[*OPTION*]...'],

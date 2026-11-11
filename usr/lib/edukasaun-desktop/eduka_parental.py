@@ -23,6 +23,34 @@ EMOJI_DIR = '/usr/share/edukasaun-desktop/emoji'
 PRESETS = [(5*60, '5 min'), (10*60, '10 min'), (15*60, '15 min'), (30*60, '30 min'), (60*60, '1 hour'), (2*3600, '2 hours'), (3*3600, '3 hours')]
 MIN_SECONDS, MAX_SECONDS = 60, 24*3600
 
+# Suggestions shown in Eduka-Settings → Parental Control. Screen time by age
+# follows the WHO guideline for children under 5 (2019: at most 1 hour, less
+# is better) and the Canadian 24-Hour Movement Guidelines for 5-17 years (at
+# most 2 hours of free screen time a day). Parents and teachers choose;
+# nothing is applied before Save.
+RECOMMENDATIONS = [
+    {'key': 'small', 'title': 'Small children (2–5 years)', 'seconds': 3600, 'mode': 'daily', 'break': 20, 'emoji': '🧸',
+     'why': 'At most 1 hour a day, and less is better (WHO). Sit with them and talk about what they see.',
+     'message': 'Well done! The computer is resting now. Time to play!'},
+    {'key': 'primary', 'title': 'Primary school (6–12 years)', 'seconds': 2*3600, 'mode': 'daily', 'break': 30, 'emoji': '📚',
+     'why': 'At most 2 hours of free screen time a day, with a short break every 30 minutes.',
+     'message': 'Great work today! Rest your eyes, drink water and move a little.'},
+    {'key': 'teen', 'title': 'Teenagers (13–17 years)', 'seconds': 3*3600, 'mode': 'daily', 'break': 45, 'emoji': '⭐',
+     'why': '2 hours of free screen time plus time for school work; a break every 45 minutes.',
+     'message': 'Time is up for today. Sleep well and see you tomorrow!'},
+    {'key': 'lesson', 'title': 'Computer lesson at school', 'seconds': 45*60, 'mode': 'boot', 'break': 0, 'emoji': '🎒',
+     'why': 'One lesson of 45 minutes; the computer shuts down at the end, ready for the next class.',
+     'message': 'The lesson is over. Please save your work. Thank you!'},
+    {'key': 'evening', 'title': 'Homework in the evening', 'seconds': 90*60, 'mode': 'boot', 'break': 30, 'emoji': '🌙',
+     'why': '1 hour 30 minutes for homework, and no screens in the hour before sleep.',
+     'message': 'Homework time is over. Good night!'},
+]
+TIPS = ['Keep the computer in a shared room, not in a bedroom.',
+        'No screens in the hour before sleep.',
+        'Every 20 minutes, look at something far away for 20 seconds.',
+        'Talk with children about what they do and see on the computer.']
+BREAK_CHOICES = (0, 20, 30, 45, 60)
+
 
 def emoji_file(emoji):
     code = '_'.join(f'{ord(c):x}' for c in str(emoji) if ord(c) != 0xfe0f)

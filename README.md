@@ -2,7 +2,7 @@
 
 Edukasaun Desktop Suite: Eduka-Desktop (start menu), Eduka-Panel and
 Eduka-Settings (formerly Eduka-Menu Settings) for Edukasaun OS (Debian 13 Trixie, LXQt).
-Current version: **0.11 RC** (release candidate, package 0.11.0~rc1).
+Current version: **0.11 RC2** (release candidate 2, package 0.11.0~rc2).
 
 ## Build the .deb
 
@@ -27,14 +27,14 @@ Check the result with `lintian dist/edukasaun-desktop-menu_<version>_all.deb`
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.11.0~rc1_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.11.0~rc2_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.11.0~rc1_all.deb
+   rm ./edukasaun-desktop-menu_0.11.0~rc2_all.deb
    ```
 
 The package scripts never start a program with a window (in the chroot or
@@ -47,7 +47,7 @@ To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
 
 Recommended packages, settings and configuration for the ISO are listed in
-`README_0.11-rc.txt` (release notes of 0.11 RC).
+`README_0.11-rc2.txt` (release notes of 0.11 RC2, with those of 0.11 RC).
 
 ## Login sessions
 
@@ -205,6 +205,51 @@ Eduka-Desktop runs on LXQt (LGPL-2.1+), Openbox or xfwm4 (GPL-2.0+) and picom
 package, so their licenses stay as they are. PyQt5 (GPL-3.0) is the reason
 the whole program is GPL-3.0-or-later. The About window
 (`eduka-about`) lists every project with its license.
+
+## 0.11 RC2: users, fonts, time, LightDM, accessibility, Eduka-Quick
+
+- New pages live in `usr/lib/edukasaun-desktop/eduka_settings_ext.py`
+  (mixin `ExtPages`, which `Settings` in `eduka-settings` inherits; `UI`
+  hands over `Page`, `form` and `hint_label`). Pages that apply themselves
+  are in `LIVE_SKIP`; single controls carry the property `eduka_no_live`.
+  `run_in_background()` runs slow work in a thread and calls back in the
+  window's thread.
+- All Settings: `SETTINGS_SECTIONS` (Eduka page keys, `@tool` entries with
+  the commands in `TOOLS`; missing tools are hidden); first nav entry.
+- Users: `eduka_accounts.py` (user side: list, checks, own password via
+  passwd in a pty, own picture via AccountsService `SetIconFile`) and the
+  root helper `eduka-users-apply` (JSON on stdin; create, delete, password,
+  full_name, rename, admin, lock, hidden, avatar; polkit
+  `org.edukasaun.desktop.users`). Hidden accounts: `/etc/edukasaun-desktop/hidden-users`,
+  SDDM `/etc/sddm.conf.d/40-eduka-hidden-users.conf` (together with the
+  live account of `30-eduka-hide-live-user.conf`) and AccountsService
+  `SystemAccount=true` (LightDM).
+- Fonts: `eduka_fonts.py` (`apply_font(role, font)`, `apply_rendering()`,
+  `reset_fonts()`), state in `~/.config/eduka-desktop/desktop/fonts.json`.
+- Date & Time: `eduka_datetime.py` (`status()`, `set_zone()`, `set_ntp()`,
+  `set_time()`, `detect_zone()` with GeoJS, `sync_now()`); polkit rule for
+  `org.freedesktop.timedate1.set-ntp` (everyone at the computer) and
+  `set-timezone` (group sudo). Action Center: `sync_time()` on the clock card.
+- LightDM: `eduka-lightdm-apply --look|--seat|--autologin|--display-manager`
+  writes `/etc/lightdm/slick-greeter.conf`,
+  `/etc/xdg/lightdm/lightdm-gtk-greeter.conf.d/90-eduka-settings.conf`,
+  `/etc/lightdm/lightdm.conf.d/50-eduka-settings.conf` and
+  `50-eduka-autologin.conf`, and `~lightdm/.config/gtk-3.0/gtk.css`
+  (`greeter_css()`). Package defaults: `usr/share/lightdm/lightdm-gtk-greeter.conf.d/60-edukasaun.conf`,
+  `usr/share/glib-2.0/schemas/60_edukasaun-slick-greeter.gschema.override`;
+  themes `Edukasaun-Login(-Dark)` and backgrounds from
+  `tools/gen-login-backgrounds.py`.
+- Accessibility: `eduka_a11y.py` (large text, pointer size, mono sound with
+  a PulseAudio/PipeWire remap sink restored by Eduka-Panel, Orca voice in
+  `~/.local/share/orca/user-settings.conf`, `spd-say` test).
+- Parental Control: `RECOMMENDATIONS`, `TIPS`, `BREAK_CHOICES` in
+  `eduka_parental.py`; `break_minutes` and `recommendation` in
+  `parental.json`; Eduka-Panel `check_break_reminder()`.
+- Eduka-Quick: `eduka_quick.py` (`QuickPie`, `read_config()`,
+  `apply_hotkey()`), shown by the menu daemon (`send_menu_command('quick')`,
+  command `eduka-quick`); `eduka-session-prepare` writes the key
+  (`Meta+Q`) before lxqt-globalkeysd starts.
+- `VERSION` "0.11 RC2", `DEB_VERSION` 0.11.0~rc2.
 
 ## 0.11 RC: official logo, LXQt modules, touch screen and fingerprint
 

@@ -1,3 +1,61 @@
+edukasaun-desktop-menu (0.11.0~rc2) trixie; urgency=medium
+
+  * Release candidate 2 of 0.11, close to the final stable version.
+  * Eduka-Settings opens on "All Settings": an overview of every setting
+    with a search box, in sections like the system settings of a full
+    desktop (Appearance, Eduka, Preferences, Hardware, Administration).
+    Tiles open Eduka pages or the LXQt/Debian tool for display, network,
+    sound, Bluetooth, printers, power, disks, input method, startup
+    applications, preferred applications, windows, firewall and software
+    sources (only tools that are installed are shown).
+  * Users (new): add and delete accounts (with or without their files),
+    full name, login name (home folder, AccountsService and login lists
+    follow), password (own password with the current one), standard or
+    administrator, can log in, shown on the login screen, and the account
+    picture (photo, initials or a Noto Emoji picture) for SDDM, LightDM
+    and Eduka-Desktop through AccountsService and ~/.face. Root helper
+    eduka-users-apply (polkit org.edukasaun.desktop.users) checks every
+    value and keeps the last administrator.
+  * Fonts (new, Appearance → Fonts): default, desktop, document, monospace
+    and window title fonts, text scaling factor, hinting, antialiasing and
+    subpixel order for Qt/LXQt, GTK 2/3/4, the GNOME keys, fontconfig, X
+    resources, pcmanfm-qt, Openbox and xfwm4 (eduka_fonts.py).
+  * Date & Time (new) and Sync time in the Action Center: network time,
+    "Sync now", the time zone of the place (GeoJS) and by hand, the clock
+    by hand and the hardware clock mode (eduka_datetime.py, timedatectl).
+    A polkit rule lets people at the computer switch network time on and
+    administrators change the time zone without a password; setting the
+    clock by hand still asks for it.
+  * LightDM: Edukasaun themes for slick-greeter and lightdm-gtk-greeter in
+    the four styles of the SDDM login screen (Edukasaun-Login GTK themes,
+    gradient backgrounds, logo), configured together in Eduka-Settings →
+    Login & Fingerprint → LightDM: greeter, style, accent, clock,
+    background, logo, "same look as SDDM", hidden account list, typing a
+    name, guest account, automatic login and the display manager used at
+    the next start. Root helper eduka-lightdm-apply with polkit actions;
+    the live account is hidden for LightDM as well.
+  * Accessibility rebuilt as Vision, Hearing and Screen Reader: large
+    text, pointer size, reduce motion, magnifier and on-screen keyboard;
+    status as text and mono sound (made again at every login); Orca with
+    a voice setting (speed, pitch, volume, language, try it) and the keys
+    to know. Eduka-Desktop tiles tell the screen reader what a program is
+    for.
+  * Parental Control: neater cards, recommendations by age (WHO and the
+    Canadian 24-Hour Movement Guidelines), tips and a break reminder that
+    Eduka-Panel shows. Privacy (new): recent files, thumbnails, trash.
+  * Eduka-Quick (new): a round quick launcher inspired by Gnome-Pie by
+    Simon Schneegans, drawn by the Eduka-Desktop daemon (Super+Q, command
+    eduka-quick), with groups, keyboard use, animations, a round window
+    without a compositor and its own settings page.
+  * Fixes: tab labels with "&" lost a letter; the time zone is read from
+    /etc/localtime first (systemd does not update /etc/timezone).
+  * Packaging: recommends accountsservice and systemd-timesyncd |
+    time-daemon; suggests the LightDM greeters, magnus and gufw; manual
+    page for eduka-quick; translations for Portuguese, Indonesian and
+    Tetun.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Wed, 11 Nov 2026 07:32:44 +0000
+
 edukasaun-desktop-menu (0.11.0~rc1) trixie; urgency=medium
 
   * Release candidate 0.11 RC of the final stable version.
