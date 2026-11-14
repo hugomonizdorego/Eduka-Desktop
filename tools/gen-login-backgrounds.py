@@ -2,24 +2,38 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Make the LightDM login backgrounds and the greeter GTK themes.
 
-The backgrounds are the soft gradients the SDDM login screen draws
-(usr/share/sddm/themes/edukasaun/Main.qml), one picture per style; every row
-has one color, so the PNG files stay a few KB. The themes Edukasaun-Login
+The backgrounds are the soft gradients and colored lights the SDDM login
+screen draws (usr/share/sddm/themes/edukasaun/Main.qml, 0.11 RC3), one
+picture per style, at 960 x 540 (soft light scales up smoothly; the
+greeters fit it to the screen). The themes Edukasaun-Login
 (pastel) and Edukasaun-Login-Dark (dark) are the Eduka GTK themes with the
 login card of eduka-lightdm-apply's greeter_css(); Eduka-Settings writes the
 chosen style and accent over them (~lightdm/.config/gtk-3.0/gtk.css).
 
   python3 tools/gen-login-backgrounds.py
 """
-import importlib.machinery, importlib.util, os, struct, zlib
+import importlib.machinery, importlib.util, os
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'usr', 'share', 'edukasaun-desktop', 'login')
-W, H = 1920, 1080
+W, H = 960, 540
 STYLES = {  # top, middle, bottom (Main.qml GradientStop colors)
     'pastel': ('#d6e8f8', '#edf7f2', '#d6efe6'),
     'light': ('#e9f6c9', '#8fcf7a', '#1f6b45'),
     'dark': ('#2f3b39', '#1f2a28', '#121616'),
     'glass': ('#bfe3f5', '#7fb9dc', '#2f6f9a'),
+}
+# The colored lights over the gradient: x, y, radius (share of the longer
+# side), color, strength. The same as the Canvas "lights" of Main.qml.
+LIGHTS = {
+    'pastel': [(0.12, 0.86, 0.42, (63, 166, 132), 0.40), (0.88, 0.12, 0.40, (124, 196, 240), 0.50),
+               (0.92, 0.9, 0.30, (246, 178, 107), 0.32), (0.06, 0.08, 0.28, (185, 167, 240), 0.34),
+               (0.5, 0.5, 0.28, (255, 255, 255), 0.40)],
+    'light': [(0.1, 0.9, 0.45, (0, 168, 121), 0.35), (0.9, 0.12, 0.40, (255, 255, 255), 0.45),
+              (0.88, 0.9, 0.30, (246, 178, 107), 0.26)],
+    'dark': [(0.14, 0.86, 0.42, (38, 166, 154), 0.24), (0.86, 0.14, 0.38, (124, 108, 240), 0.18),
+             (0.9, 0.88, 0.28, (229, 72, 77), 0.10)],
+    'glass': [(0.16, 0.18, 0.4, (255, 255, 255), 0.40), (0.86, 0.82, 0.45, (30, 155, 215), 0.35),
+              (0.82, 0.14, 0.3, (185, 167, 240), 0.28)],
 }
 
 
@@ -27,17 +41,28 @@ def rgb(c):
     return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))
 
 
-def mix(a, b, t):
-    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
-
-
-def png(path, rows):
-    raw = b''.join(b'\x00' + bytes(color) * W for color in rows)
-    def chunk(kind, data):
-        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
-    with open(path, 'wb') as f:
-        f.write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0))
-                + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
+def render(style, deep=None):
+    """The gradient of `style` with its lights; `deep` = (color, amount) mixes
+    the whole picture with a deep color (slick-greeter writes white text)."""
+    from PyQt5.QtGui import QImage, QPainter, QLinearGradient, QRadialGradient, QColor
+    img = QImage(W, H, QImage.Format_RGB32)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    top, mid, bottom = STYLES[style]
+    g = QLinearGradient(0, 0, 0, H)
+    g.setColorAt(0.0, QColor(top)); g.setColorAt(0.5, QColor(mid)); g.setColorAt(1.0, QColor(bottom))
+    p.fillRect(img.rect(), g)
+    m = max(W, H)
+    for x, y, r, (cr, cg, cb), a in LIGHTS[style]:
+        rg = QRadialGradient(x * W, y * H, r * m)
+        rg.setColorAt(0.0, QColor(cr, cg, cb, round(a * 255)))
+        rg.setColorAt(1.0, QColor(cr, cg, cb, 0))
+        p.fillRect(img.rect(), rg)
+    if deep and deep[1] > 0:
+        dr, dg, db = rgb(deep[0])
+        p.fillRect(img.rect(), QColor(dr, dg, db, round(deep[1] * 255)))
+    p.end()
+    return img
 
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
@@ -90,19 +115,11 @@ def main():
     themes()
     os.makedirs(OUT, exist_ok=True)
     small_logo()
-    for name, (top, mid, bottom) in STYLES.items():
-        top, mid, bottom = rgb(top), rgb(mid), rgb(bottom)
-        rows = []
-        for y in range(H):
-            t = y / (H - 1)
-            rows.append(mix(top, mid, t * 2) if t < 0.5 else mix(mid, bottom, (t - 0.5) * 2))
-        path = os.path.join(OUT, name + '.png')
-        png(path, rows)
-        print(path, os.path.getsize(path))
-        deep, amount = SLICK_DEEP[name]
-        path = os.path.join(OUT, 'slick-' + name + '.png')
-        png(path, [mix(c, rgb(deep), amount) for c in rows])
-        print(path, os.path.getsize(path))
+    for name in STYLES:
+        for prefix, deep in (('', None), ('slick-', SLICK_DEEP[name])):
+            path = os.path.join(OUT, prefix + name + '.png')
+            render(name, deep).save(path, 'PNG', 9)
+            print(path, os.path.getsize(path))
 
 
 if __name__ == '__main__':

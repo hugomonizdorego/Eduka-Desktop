@@ -58,13 +58,15 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('Release candidate 2: close to the final stable version.'),
-            _('Eduka-Settings opens on All Settings: every setting in one place, with a search box.'),
-            _('New: user accounts with pictures, fonts, date and time, LightDM, privacy and Eduka-Quick.'),
-            _('Accessibility rebuilt: vision, hearing and the screen reader voice.'),
-            _('Parental Control with recommendations by age and a break reminder.'),
-            _('Action Center: Sync time, the clock follows the internet and the time zone.'),
-            _('Eduka-Quick: a round quick launcher on Super+Q.'),
+            _('Release candidate 3: close to the final stable version.'),
+            _('New login screen: glass cards (sign in, clock, profile, system) with one-click power buttons.'),
+            _('LightDM greeters are optional: install them from Eduka-Settings, then choose them.'),
+            _('Shortcuts of LXQt and Windows together, without clashes (Super+E, Super+D, Super+arrows…).'),
+            _('Display scale from 75 to 200 %, and Num Lock that knows a laptop from a desktop computer.'),
+            _('Fingerprint: every reader is found, the password is asked first, and a forgotten password can be replaced.'),
+            _('Memory saver, memory warnings, zram and earlyoom keep small computers smooth.'),
+            _('Touch: gestures with three and four fingers, long press for the menu, smooth scrolling.'),
+            _('Eduka-Quick: see-through, movable, from 4 to 12 slices; right-click a program to add it.'),
         ]
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [

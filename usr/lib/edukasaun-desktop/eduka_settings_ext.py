@@ -13,11 +13,11 @@ import os, re, json, shutil, subprocess, threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from PyQt5.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog,
+from PyQt5.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QSpinBox,
                              QDateTimeEdit, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
                              QPushButton, QRadioButton, QSlider, QToolButton, QVBoxLayout, QSizePolicy,
-                             QColorDialog)
+                             QColorDialog, QTreeWidget, QTreeWidgetItem, QHeaderView)
 from PyQt5.QtCore import Qt, QSize, QTimer, QRectF, QDateTime, QLocale
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPainterPath, QColor, QFont, QImage, QImageReader
 
@@ -139,7 +139,10 @@ def tool_command(key):
 
 
 def quick_icon(size=48, accent=None):
-    """The Eduka-Quick icon: a small pie with one slice chosen."""
+    """The Eduka-Quick icon (hicolor eduka-quick.svg; drawn when missing)."""
+    svg = '/usr/share/icons/hicolor/scalable/apps/eduka-quick.svg'
+    if os.path.exists(svg):
+        return QIcon(svg)
     import math
     accent = QColor(accent or theme_accent() or '#3fa684')
     pix = QPixmap(size, size); pix.fill(Qt.transparent)
@@ -253,8 +256,10 @@ class AvatarPicker(QDialog):
 
 
 class PasswordDialog(QDialog):
-    """New password (and the current one for your own account)."""
-    def __init__(self, parent, user, own):
+    """New password (and the current one for your own account). With a
+    fingerprint set up, a forgotten current password can be replaced: the
+    finger confirms it is you (0.11 RC3)."""
+    def __init__(self, parent, user, own, fingerprint=False, forgot=False):
         super().__init__(parent)
         self.setWindowTitle(_('Change password')); self.setModal(True); self.setMinimumWidth(380)
         self.own = own
@@ -263,8 +268,12 @@ class PasswordDialog(QDialog):
         self.old = QLineEdit(); self.old.setEchoMode(QLineEdit.Password); self.old.setPlaceholderText(_('Current password'))
         self.new = QLineEdit(); self.new.setEchoMode(QLineEdit.Password); self.new.setPlaceholderText(_('New password'))
         self.again = QLineEdit(); self.again.setEchoMode(QLineEdit.Password); self.again.setPlaceholderText(_('New password again'))
+        self.forgot = QCheckBox(_('I forgot my current password: confirm with my fingerprint'))
+        self.forgot.setVisible(bool(own and fingerprint)); self.forgot.setChecked(bool(own and fingerprint and forgot))
         if own:
-            v.addWidget(self.old)
+            v.addWidget(self.forgot); v.addWidget(self.old)
+        self.forgot.toggled.connect(lambda on: (self.old.setVisible(not on), self.update_hint()))
+        self.old.setVisible(not self.forgot.isChecked())
         v.addWidget(self.new); v.addWidget(self.again)
         self.show_pw = QCheckBox(_('Show the passwords')); v.addWidget(self.show_pw)
         self.show_pw.toggled.connect(lambda on: [w.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password) for w in (self.old, self.new, self.again)])
@@ -287,7 +296,7 @@ class PasswordDialog(QDialog):
         else:
             text = _(ea.password_hint(new)) if ea.password_hint(new) else _('Good password.')
         self.hint.setText(text)
-        self.ok_button.setEnabled(bool(new) and new == again and (not self.own or bool(self.old.text())))
+        self.ok_button.setEnabled(bool(new) and new == again and (not self.own or self.forgot.isChecked() or bool(self.old.text())))
 
     def check(self):
         if self.new.text() == self.again.text() and self.new.text():
@@ -403,8 +412,383 @@ FONT_ROLES = (('default', 'Default font', 'Menus, buttons and windows of Eduka, 
               ('title', 'Window title font', 'The title bar of windows (Openbox and xfwm4).'))
 
 
+class MemoryBar(QFrame):
+    """Used memory as a wide rounded bar: green, orange when low, red when
+    almost full."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.used = 0.0; self.total = 1.0; self.state = 'ok'
+        self.setMinimumHeight(30); self.setAccessibleName(_('Memory in use'))
+
+    def set_values(self, used, total, state):
+        self.used, self.total, self.state = used, max(1.0, total), state
+        self.setAccessibleDescription(f'{int(used * 100 / self.total)} %'); self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(1, 4, -1, -4)
+        p.setPen(Qt.NoPen); p.setBrush(QColor('#dfeee9')); p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        frac = max(0.0, min(1.0, self.used / self.total))
+        color = {'ok': '#3fa684', 'low': '#f08c2e', 'critical': '#e5484d'}.get(self.state, '#3fa684')
+        if frac:
+            p.setBrush(QColor(color)); p.drawRoundedRect(QRectF(r.x(), r.y(), max(r.height(), r.width() * frac), r.height()), r.height() / 2, r.height() / 2)
+        p.setPen(QColor('#ffffff' if frac > 0.12 else '#1f3d36')); f = p.font(); f.setBold(True); p.setFont(f)
+        p.drawText(r.adjusted(12, 0, -12, 0), Qt.AlignVCenter | Qt.AlignLeft, f'{int(frac * 100)} %')
+
+
 class ExtPages:
     """New pages of Eduka-Settings (0.11 RC2)."""
+
+    # ------------------------------------------------------------ memory (0.11 RC3)
+    def page_memory(self):
+        import eduka_memory as em
+        self._em = em
+        p = UI.Page('Memory', 'How much memory this computer has free, and what keeps it running smoothly when it '
+                              'is almost full.')
+        self.mem_bar = MemoryBar(); p.v.addWidget(self.mem_bar)
+        self.mem_text = UI.hint_label(''); p.v.addWidget(self.mem_text)
+        t = p.new_card('Programs using the most memory')
+        self.mem_list = QListWidget(); self.mem_list.setObjectName('layoutList'); self.mem_list.setFixedHeight(190)
+        t.addWidget(self.mem_list)
+        self.mem_list.currentItemChanged.connect(lambda cur, _prev: self.mem_close.setEnabled(bool(cur) and not cur.data(Qt.UserRole + 2)))
+        trow = QHBoxLayout(); trow.setSpacing(8)
+        self.mem_close = QPushButton(get_icon('process-stop', 'window-close'), ' ' + _('Close program'))
+        self.mem_close.clicked.connect(self.memory_close_program)
+        self.mem_free = QPushButton(get_icon('edit-clear', 'view-refresh'), ' ' + _('Free memory of Eduka-Desktop'))
+        self.mem_free.clicked.connect(self.memory_free_now)
+        trow.addWidget(self.mem_close); trow.addStretch(1); trow.addWidget(self.mem_free); t.addLayout(trow)
+        t.addWidget(UI.hint_label('All windows and helpers of a program are counted together. Programs of the desktop '
+                                  'itself cannot be closed here. Save your work before closing a program.'))
+        o = p.new_card('Keep the computer smooth')
+        prefs = em.read_prefs()
+        self.mem_saver = QCheckBox('Memory saver: Eduka-Desktop and Eduka-Panel give memory back when they are not used')
+        self.mem_warn = QCheckBox('Warn me when the memory is almost full')
+        self.mem_saver.setChecked(prefs['saver']); self.mem_warn.setChecked(prefs['warn'])
+        for w in (self.mem_saver, self.mem_warn):
+            o.addWidget(w); w.toggled.connect(self.memory_prefs_changed)
+        self.mem_zram = QCheckBox('Compressed memory (zram): about half again as much memory, without a disk')
+        self.mem_oom = QCheckBox('earlyoom: when the memory is full, close the biggest program instead of freezing')
+        o.addWidget(self.mem_zram); o.addWidget(self.mem_oom)
+        self.mem_zram.clicked.connect(lambda on: self.memory_helper('--zram', 'on' if on else 'off'))
+        self.mem_oom.clicked.connect(lambda on: self.memory_helper('--earlyoom', 'on' if on else 'off'))
+        self.mem_tools_hint = UI.hint_label(''); o.addWidget(self.mem_tools_hint)
+        irow = QHBoxLayout(); irow.addStretch(1)
+        self.mem_install = QPushButton(get_icon('system-software-install', 'list-add'), ' ' + _('Install zram-tools and earlyoom…'))
+        self.mem_install.clicked.connect(self.memory_install); irow.addWidget(self.mem_install); o.addLayout(irow)
+        self.mem_timer = QTimer(self); self.mem_timer.setInterval(2500); self.mem_timer.timeout.connect(self.memory_refresh)
+        self.mem_timer.start()
+        self.memory_refresh(full=True)
+        return p.finish()
+
+    def memory_refresh(self, full=False):
+        em = self._em
+        if not full and not self.mem_bar.isVisible():
+            return
+        s = em.summary(); state = em.pressure(s)
+        self.mem_bar.set_values(s['used'], s['total'], state)
+        gb = lambda mb: f'{mb / 1024:.1f} GB' if mb >= 1024 else f'{int(mb)} MB'
+        text = _('{used} of {total} in use, {free} free.').replace('{used}', gb(s['used'])).replace('{total}', gb(s['total'])).replace('{free}', gb(s['available']))
+        if s['swap_total']:
+            text += ' ' + (_('Compressed memory: {used} of {total} used.') if s['zram'] else _('Swap: {used} of {total} used.')).replace('{used}', gb(s['swap_used'])).replace('{total}', gb(s['swap_total']))
+        text += ' ' + {'ok': _('Memory is fine.'), 'low': _('Memory is getting low.'), 'critical': _('Memory is almost full: close programs you do not use.')}[state]
+        self.mem_text.setText(text)
+        current = self.mem_list.currentItem().data(Qt.UserRole + 1) if self.mem_list.currentItem() else None
+        self.mem_list.clear()
+        for g in em.top_programs(10):
+            it = QListWidgetItem(get_icon(g['name'], 'application-x-executable'), f"{g['name']}  —  {gb(g['mb'])}" + ('  ' + _('(desktop)') if g['protected'] else ''))
+            it.setData(Qt.UserRole, g['pids']); it.setData(Qt.UserRole + 1, g['name']); it.setData(Qt.UserRole + 2, g['protected'])
+            self.mem_list.addItem(it)
+            if g['name'] == current:
+                self.mem_list.setCurrentItem(it)
+        item = self.mem_list.currentItem()
+        self.mem_close.setEnabled(bool(item) and not item.data(Qt.UserRole + 2))
+        if full:
+            zi, ei = em.zram_installed(), em.earlyoom_installed()
+            admin = shutil.which('pkexec') is not None
+            for box, inst, on in ((self.mem_zram, zi, em.zram_active()), (self.mem_oom, ei, em.earlyoom_active())):
+                box.blockSignals(True); box.setChecked(on); box.setEnabled(inst and admin); box.blockSignals(False)
+            missing = [n for n, ok in (('zram-tools', zi), ('earlyoom', ei)) if not ok]
+            self.mem_install.setVisible(bool(missing))
+            self.mem_tools_hint.setText(_('Not installed: {list}.').replace('{list}', ', '.join(missing)) if missing else
+                                        _('These two change the whole computer and ask for an administrator password.'))
+
+    def memory_prefs_changed(self, *_a):
+        self._em.save_prefs({'saver': self.mem_saver.isChecked(), 'warn': self.mem_warn.isChecked()})
+        self.show_status(_('Saved.'))
+
+    def memory_close_program(self):
+        item = self.mem_list.currentItem()
+        if item is None or item.data(Qt.UserRole + 2):
+            return
+        name = item.data(Qt.UserRole + 1)
+        if QMessageBox.question(self, _('Close program'), _('Close {name}? Work that is not saved is lost.').replace('{name}', name),
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        n = self._em.close_program(item.data(Qt.UserRole) or [])
+        self.show_status(_('{name} was asked to close.').replace('{name}', name) if n else _('Nothing was closed.'), error=not n)
+        QTimer.singleShot(1500, self.memory_refresh)
+
+    def memory_free_now(self):
+        from eduka_common import send_menu_command
+        import socket
+        before = self._em.summary()['available']
+        send_menu_command('trim')
+        try:
+            from eduka_common import RUNTIME_DIR
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sk:
+                sk.settimeout(1.0); sk.connect(str(RUNTIME_DIR/'panel.sock')); sk.sendall(b'trim\n')
+        except OSError:
+            pass
+        freed = self._em.trim(qt=True)
+        def report():
+            gained = max(0, self._em.summary()['available'] - before) + freed
+            self.show_status(_('Eduka-Desktop gave back {n} MB of memory.').replace('{n}', str(int(gained))))
+            self.memory_refresh()
+        QTimer.singleShot(1200, report)
+
+    def memory_helper(self, flag, value):
+        def done(result, error):
+            ok, msg = result if result and not error else (False, str(error))
+            self.memory_refresh(full=True)
+            self.show_status(_(msg) if ok else _('Not changed: ') + _(msg), error=not ok)
+        run_in_background(self, lambda: self._em.run_helper(flag, value), done)
+
+    def memory_install(self):
+        from eduka_common import terminal_command
+        if not shutil.which('apt-get'):
+            self.show_status(_('Install zram-tools and earlyoom with the package manager of this system.'), error=True); return
+        try:
+            proc = subprocess.Popen(terminal_command(self._em.install_command()), stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self.show_status(_('Could not open a terminal: ') + str(e), error=True); return
+        timer = QTimer(self); timer.setInterval(1500)
+        def check():
+            if proc.poll() is None: return
+            timer.stop(); timer.deleteLater(); self.memory_refresh(full=True)
+        timer.timeout.connect(check); timer.start()
+
+    # ------------------------------------------------------------ display (0.11 RC3)
+    @staticmethod
+    def scale_preview(scale, accent='#3fa684', w=92, h=58):
+        """A window and a panel drawn at this scale (on 100 % they fill the
+        same share of the picture as on a normal screen)."""
+        pix = QPixmap(w, h); pix.fill(Qt.transparent)
+        p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QColor('#9fb3ad')); p.setBrush(QColor('#eef6f2')); p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 7, 7)
+        k = scale
+        bar = 6 * k
+        p.setPen(Qt.NoPen); p.setBrush(QColor('#ffffff')); p.drawRoundedRect(QRectF(4, h - 4 - bar, w - 8, bar), bar / 2, bar / 2)
+        p.setBrush(QColor(accent)); p.drawEllipse(QRectF(6, h - 4 - bar + 1, bar - 2, bar - 2))
+        ww, wh = 46 * k, 28 * k
+        win = QRectF(8, 6, min(ww, w - 14), min(wh, h - 14 - bar))
+        p.setBrush(QColor('#ffffff')); p.setPen(QColor('#b8c9c3')); p.drawRoundedRect(win, 3 * k, 3 * k)
+        p.setPen(Qt.NoPen); p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(win.x(), win.y(), win.width(), 5 * k), 2, 2)
+        p.setBrush(QColor('#9fb3ad'))
+        y = win.y() + 8 * k
+        while y + 2 * k < win.bottom() - 2:
+            p.drawRoundedRect(QRectF(win.x() + 3 * k, y, win.width() * 0.6, 2 * k), 1, 1); y += 5 * k
+        p.end()
+        return pix
+
+    def page_display(self):
+        import eduka_device as edev
+        self._edev = edev
+        p = UI.Page('Display', 'The kind of computer Eduka-Desktop found, and the size of everything on the screen.')
+        c = p.v
+        try:
+            prof = edev.profile()
+        except Exception:
+            prof = {'kind': 'desktop', 'kind_name': 'Desktop computer', 'icon': 'computer', 'vendor': '', 'model': '',
+                    'batteries': [], 'keyboards': [], 'touchpads': [], 'touchscreens': [], 'screens': [], 'recommended_scale': 1.0, 'vm': ''}
+        self._display_profile = prof
+        row = QHBoxLayout(); row.setSpacing(14)
+        pic = QLabel(); pic.setPixmap(get_icon(prof['icon'], 'computer').pixmap(56, 56)); row.addWidget(pic, 0, Qt.AlignTop)
+        info = QVBoxLayout(); info.setSpacing(3)
+        title = QLabel(_(prof['kind_name'])); title.setObjectName('sectionTitle'); info.addWidget(title)
+        model = ' '.join(x for x in (prof.get('vendor', ''), prof.get('model', '')) if x and x.lower() not in ('to be filled by o.e.m.', 'default string'))
+        facts = []
+        if prof.get('vm'):
+            facts.append(_('Runs in a virtual machine ({name}).').replace('{name}', prof['vm']))
+        if model:
+            facts.append(model)
+        facts += [_(k.split(': ', 1)[0]) + (': ' + k.split(': ', 1)[1] if ': ' in k else '') for k in edev.keyboard_text(prof)]
+        if prof['touchpads']:
+            facts.append(_('Touchpad: ') + prof['touchpads'][0])
+        if prof['touchscreens']:
+            facts.append(_('Touch screen: ') + prof['touchscreens'][0])
+        if prof['batteries']:
+            facts.append(_('Battery: ') + ', '.join(prof['batteries']))
+        for scr in prof['screens']:
+            inches, dpi = edev.screen_facts(scr)
+            line = f"{scr['name']}: {scr['width']} × {scr['height']}"
+            if inches:
+                line += ' · ' + _('{n} inches').replace('{n}', f'{inches:g}') + ' · ' + _('{n} dots per inch').replace('{n}', str(int(dpi)))
+            if scr['built_in']:
+                line += ' · ' + _('built in')
+            facts.append(line)
+        for fact in facts or [_('No details found.')]:
+            lab = QLabel(fact); lab.setWordWrap(True); lab.setTextInteractionFlags(Qt.TextSelectableByMouse); info.addWidget(lab)
+        row.addLayout(info, 1); c.addLayout(row)
+        c.addWidget(UI.hint_label('Eduka-Desktop uses this to set Num Lock, the touchpad key and the recommended scale.'))
+
+        sc = p.new_card('Scale')
+        sc.addWidget(UI.hint_label('Makes text, icons, panels and windows bigger or smaller together. 100 % is the normal size.'))
+        cur = edev.read_display() or {'scale': 1.0, 'auto': False}
+        rec = prof.get('recommended_scale', 1.0)
+        from PyQt5.QtWidgets import QButtonGroup
+        grid = QGridLayout(); grid.setSpacing(10); self.scale_cards = {}; group = QButtonGroup(self)
+        accent = theme_accent() if callable(theme_accent) else '#3fa684'
+        for i, value in enumerate(edev.SCALES):
+            text = f'{int(value * 100)} %' + ('\n' + _('Recommended') if value == rec else '')
+            card = QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(text)
+            card.setIcon(QIcon(self.scale_preview(value, accent))); card.setIconSize(QSize(92, 58))
+            card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); card.setCursor(Qt.PointingHandCursor)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setMinimumHeight(112)
+            card.setAccessibleName(_('Scale {n} percent').replace('{n}', str(int(value * 100))))
+            card.setChecked(abs(value - cur['scale']) < 0.01)
+            card.clicked.connect(lambda _c=False, v=value: self.set_display_scale(v))
+            group.addButton(card); grid.addWidget(card, i // 3, i % 3); self.scale_cards[value] = card
+        sc.addLayout(grid)
+        self.scale_state = UI.hint_label(''); sc.addWidget(self.scale_state)
+        actions = QHBoxLayout(); actions.addStretch(1)
+        out = QPushButton(get_icon('system-log-out'), ' ' + _('Log out now')); out.clicked.connect(self.logout_for_scale)
+        actions.addWidget(out); sc.addLayout(actions)
+        self.update_scale_state(cur['scale'], applied=True)
+        return p.finish()
+
+    def update_scale_state(self, value, applied=False):
+        running = os.environ.get('QT_SCALE_FACTOR', '1') or '1'
+        try:
+            running = float(running)
+        except ValueError:
+            running = 1.0
+        rec = self._display_profile.get('recommended_scale', 1.0)
+        text = _('Recommended for this screen: {n} %.').replace('{n}', str(int(rec * 100)))
+        if abs(running - value) > 0.01:
+            text += ' ' + _('{n} % is used after you log out and in again.').replace('{n}', str(int(value * 100)))
+        self.scale_state.setText(text)
+
+    def set_display_scale(self, value):
+        try:
+            self._edev.apply_scale(value)
+            if value >= 1.5:
+                # A bigger pointer with a big scale (the Accessibility choice wins when it is bigger).
+                import eduka_a11y as ea
+                if ea.pointer_size() < round(24 * value):
+                    ea.set_pointer_size(min(64, round(24 * value)))
+        except Exception as e:
+            self.show_status(_('Not changed: ') + str(e), error=True); return
+        self.update_scale_state(value)
+        self.show_status(_('Scale {n} % saved; log out to use it.').replace('{n}', str(int(value * 100))))
+
+    def logout_for_scale(self):
+        if QMessageBox.question(self, _('Log out'), _('Log out now? Save your work in other programs first.'),
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            safe_popen(['eduka-session-action', '--now', 'logout'])
+
+    # ------------------------------------------------------------ shortcuts (0.11 RC3)
+    SHORTCUT_STATES = {'on': 'On', 'custom': 'Your own key', 'off': 'Off', 'taken': 'Used by: {what}',
+                       'wm': 'Used by the window manager', 'missing': 'No program for it on this computer'}
+
+    def page_shortcuts(self):
+        import eduka_shortcuts as es
+        self._es = es
+        p = UI.Page('Shortcuts', 'The shortcuts of LXQt and the Windows shortcuts people know, in one list. A key that '
+                                 'LXQt, you or the window manager already use is never given a second job.')
+        top = QHBoxLayout(); top.setSpacing(10)
+        self.sc_enabled = QCheckBox('Use the Windows shortcuts and the sound and media keys')
+        self.sc_enabled.setAccessibleDescription(_('Super+E, Super+D, Super+L, Super+arrows, Super+Shift+S and more'))
+        top.addWidget(self.sc_enabled, 1)
+        self.sc_apply = QPushButton(get_icon('view-refresh'), ' ' + _('Apply now'))
+        self.sc_apply.setToolTip(_('Restarts the LXQt shortcut service so the keys work at once'))
+        top.addWidget(self.sc_apply)
+        p.v.addLayout(top)
+        self.sc_state = UI.hint_label(''); p.v.addWidget(self.sc_state)
+        self.sc_tree = QTreeWidget(); self.sc_tree.setObjectName('shortcutTree')
+        self.sc_tree.setColumnCount(3); self.sc_tree.setHeaderLabels([_('Keys'), _('What it does'), _('State')])
+        self.sc_tree.setRootIsDecorated(False); self.sc_tree.setUniformRowHeights(True); self.sc_tree.setAlternatingRowColors(True)
+        self.sc_tree.setSelectionMode(QAbstractItemView.NoSelection); self.sc_tree.setFocusPolicy(Qt.StrongFocus)
+        self.sc_tree.setMinimumHeight(380)
+        hdr = self.sc_tree.header(); hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch); hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        p.v.addWidget(self.sc_tree, 1)
+        p.v.addWidget(UI.hint_label('Untick a line to free its key. Keys you changed with LXQt\'s shortcut editor '
+                                    '(lxqt-config-globalkeyshortcuts) are kept. Super alone opens Eduka-Desktop.'))
+        self.sc_enabled.toggled.connect(self.shortcuts_changed)
+        self.sc_apply.clicked.connect(lambda: self.apply_shortcuts(force=True))
+        self.sc_tree.itemChanged.connect(self.shortcut_item_changed)
+        self.load_shortcuts()
+        return p.finish()
+
+    def load_shortcuts(self):
+        es = self._es
+        prefs = es.read_prefs()
+        self._sc_loading = True
+        self.sc_enabled.blockSignals(True); self.sc_enabled.setChecked(prefs['enabled']); self.sc_enabled.blockSignals(False)
+        try:
+            rows = es.plan(prefs=prefs)
+        except Exception:
+            rows = []
+        self.sc_tree.clear()
+        bold = QFont(); bold.setBold(True)
+        active = 0
+        for g in es.GROUPS:
+            head = QTreeWidgetItem([_(g), '', '']); head.setFont(0, bold); head.setFlags(Qt.ItemIsEnabled)
+            self.sc_tree.addTopLevelItem(head); head.setFirstColumnSpanned(True)
+            for keys, label, group in es.BUILT_IN:
+                if group == g:
+                    it = QTreeWidgetItem(['   ' + _(keys), _(label), _('Built in')]); it.setFlags(Qt.ItemIsEnabled)
+                    self.sc_tree.addTopLevelItem(it)
+            for action, keys, label, group, state, detail in rows:
+                if group != g:
+                    continue
+                text = self.SHORTCUT_STATES.get(state, state)
+                it = QTreeWidgetItem([' ' + ', '.join(_(es.human(k)) for k in keys), _(label),
+                                      _(text).replace('{what}', detail or '?')])
+                it.setData(0, Qt.UserRole, action)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                it.setCheckState(0, Qt.Unchecked if state == 'off' else Qt.Checked)
+                if state in ('taken', 'wm', 'missing'):
+                    for col in range(3):
+                        it.setForeground(col, QColor('#8a9a95'))
+                if state in ('on', 'custom'):
+                    active += 1
+                self.sc_tree.addTopLevelItem(it)
+        wm = es.running_wm()
+        self.sc_state.setText(_('{n} Eduka shortcuts are active.').replace('{n}', str(active)) + ' ' +
+                              (_('Window manager: {wm}.').replace('{wm}', wm) if wm else ''))
+        self.sc_tree.setEnabled(prefs['enabled'])
+        self._sc_loading = False
+
+    def shortcut_item_changed(self, item, column):
+        if getattr(self, '_sc_loading', False) or column != 0 or item.data(0, Qt.UserRole) is None:
+            return
+        prefs = self._es.read_prefs()
+        action = item.data(0, Qt.UserRole)
+        off = set(prefs['off'])
+        (off.discard if item.checkState(0) == Qt.Checked else off.add)(action)
+        prefs['off'] = sorted(off)
+        self._es.save_prefs(prefs)
+        self.apply_shortcuts()
+
+    def shortcuts_changed(self, on):
+        prefs = self._es.read_prefs(); prefs['enabled'] = bool(on)
+        self._es.save_prefs(prefs)
+        self.apply_shortcuts()
+
+    def apply_shortcuts(self, force=False):
+        es = self._es
+        self.sc_apply.setEnabled(False)
+        def done(result, error):
+            self.sc_apply.setEnabled(True)
+            self.load_shortcuts()
+            if error:
+                self.show_status(_('Shortcuts not changed: ') + str(error), error=True)
+            else:
+                self.show_status(_('Shortcuts saved; the keys work now.') if es.daemon_running()
+                                 else _('Shortcuts saved; they work from the next login.'))
+        run_in_background(self, lambda: es.apply_now(), done)
 
     # ------------------------------------------------------------ date and time
     def page_datetime(self):
@@ -741,12 +1125,23 @@ class ExtPages:
         top.addWidget(self.quick_preview, 0, Qt.AlignTop)
         opts = QVBoxLayout(); opts.setSpacing(8)
         self.quick_on = self._own(QCheckBox('Use Eduka-Quick')); opts.addWidget(self.quick_on)
-        krow = QHBoxLayout(); krow.setSpacing(8)
-        lab = QLabel(_('Key:')); krow.addWidget(lab)
-        self.quick_key = self._own(QComboBox()); self.quick_key.setAccessibleName(_('Key for Eduka-Quick'))
-        for key, label in eq.HOTKEYS: self.quick_key.addItem(label, key)
-        krow.addWidget(self.quick_key); krow.addStretch(1); opts.addLayout(krow)
-        self.quick_center = self._own(QCheckBox('Open in the middle of the screen (not at the mouse)')); opts.addWidget(self.quick_center)
+        self.quick_on.setStyleSheet('font-weight:800;font-size:15px;')
+        self.quick_state = UI.hint_label(''); opts.addWidget(self.quick_state)
+        grid = QGridLayout(); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(6)
+        def combo(name, items):
+            c = self._own(QComboBox()); c.setAccessibleName(_(name))
+            for key, label in items: c.addItem(_(label), key)
+            return c
+        self.quick_key = combo('Key for Eduka-Quick', eq.HOTKEYS)
+        self.quick_pos = combo('Where Eduka-Quick opens', eq.POSITIONS)
+        self.quick_look = combo('Look of Eduka-Quick', eq.LOOKS)
+        self.quick_count = self._own(QSpinBox()); self.quick_count.setRange(eq.MIN_SLICES, eq.MAX_SLICES)
+        self.quick_count.setAccessibleName(_('Number of slices')); self.quick_count.setSuffix(' ' + _('slices'))
+        for r, (title, w) in enumerate((('Key:', self.quick_key), ('Opens:', self.quick_pos), ('Look:', self.quick_look),
+                                         ('Size:', self.quick_count))):
+            grid.addWidget(QLabel(_(title)), r, 0); grid.addWidget(w, r, 1)
+        grid.setColumnStretch(2, 1); opts.addLayout(grid)
+        self.quick_auto = self._own(QCheckBox('Fill free slices with the programs I use most')); opts.addWidget(self.quick_auto)
         self.quick_numbers = self._own(QCheckBox('Show numbers for the keyboard (1–9)')); opts.addWidget(self.quick_numbers)
         trow = QHBoxLayout()
         test = QPushButton(quick_icon(20), ' ' + _('Try it now')); test.clicked.connect(lambda: self._eq.send_menu_command('quick'))
@@ -754,8 +1149,10 @@ class ExtPages:
         opts.addStretch(1)
         top.addLayout(opts, 1)
         p.v.addLayout(top)
-        p.v.addWidget(UI.hint_label('Point in a direction and click, or press, drag and release. Keys: arrows, 1–9, Enter; '
-                                    'Esc closes. A dot marks a group: it opens a smaller pie, Esc goes back.'))
+        p.v.addWidget(UI.hint_label('Point at a slice and click. Hold the mouse button (or drag the clear center) to move '
+                                    'Eduka-Quick anywhere; it opens there again. Keys: arrows, 1–9, Enter; Esc closes. '
+                                    'Dots mark a group: it opens a smaller circle, Esc goes back. In Eduka-Desktop, '
+                                    'right-click a program → Add to Eduka-Quick.'))
         c = p.new_card('Slices')
         body = QHBoxLayout(); body.setSpacing(12)
         self.quick_list = QListWidget(); self.quick_list.setIconSize(QSize(28, 28)); self.quick_list.setMinimumHeight(260)
@@ -782,15 +1179,23 @@ class ExtPages:
         side.addStretch(1); side.addWidget(reset)
         body.addLayout(side)
         c.addLayout(body)
-        c.addWidget(UI.hint_label(_('At most {n} slices; programs that are not installed are skipped. Changes are used at once.').replace('{n}', str(eq.MAX_SLICES))))
+        c.addWidget(UI.hint_label(_('At most {n} slices; programs that are not installed are skipped. Changes are used at once.').replace('{n}', str(eq.MAX_SLICES))
+                                  + ' ' + _('Free slices show the programs you use most when that option is on.')))
         self.quick_on.setChecked(bool(self._quick.get('enabled', True)))
         self.quick_key.setCurrentIndex(max(0, self.quick_key.findData(self._quick.get('hotkey'))))
-        self.quick_center.setChecked(bool(self._quick.get('centered')))
+        self.quick_pos.setCurrentIndex(max(0, self.quick_pos.findData(self._quick.get('position', 'mouse'))))
+        self.quick_look.setCurrentIndex(max(0, self.quick_look.findData(self._quick.get('look', 'glass'))))
+        self.quick_count.setValue(int(self._quick.get('count', 8)))
+        self.quick_auto.setChecked(bool(self._quick.get('auto_fill', True)))
         self.quick_numbers.setChecked(bool(self._quick.get('numbers', True)))
         self.quick_on.clicked.connect(lambda *_a: self.quick_save(hotkey=True))
         self.quick_key.activated.connect(lambda *_a: self.quick_save(hotkey=True))
-        self.quick_center.clicked.connect(lambda *_a: self.quick_save())
+        for w in (self.quick_pos, self.quick_look):
+            w.activated.connect(lambda *_a: self.quick_save())
+        self.quick_count.valueChanged.connect(lambda *_a: self.quick_save())
+        self.quick_auto.clicked.connect(lambda *_a: self.quick_save())
         self.quick_numbers.clicked.connect(lambda *_a: self.quick_save())
+        self.quick_show_state()
         self.quick_list.currentRowChanged.connect(lambda *_a: self.quick_update_preview())
         QTimer.singleShot(0, self.quick_fill)
         return p.finish()
@@ -809,10 +1214,18 @@ class ExtPages:
         if self.quick_list.count(): self.quick_list.setCurrentRow(max(0, min(select, self.quick_list.count() - 1)))
         self.quick_update_preview()
 
+    def quick_show_state(self):
+        on = self.quick_on.isChecked()
+        for w in (self.quick_key, self.quick_pos, self.quick_look, self.quick_count, self.quick_auto, self.quick_numbers):
+            w.setEnabled(on)
+        self.quick_state.setText(_('On: {k} opens it.').replace('{k}', self.quick_key.currentText()) if on
+                                 else _('Off: the key does nothing and Eduka-Quick never opens.'))
+
     def quick_update_preview(self):
         try:
             active = sum(1 for sl in self._quick['slices'][:max(0, self.quick_list.currentRow())] if self._eq.resolve(sl))
-            self.quick_preview.setPixmap(self._eq.preview_pixmap(self._quick['slices'], 210, active=active))
+            shown = self._eq.effective_slices(self._quick)
+            self.quick_preview.setPixmap(self._eq.preview_pixmap(shown, 210, active=min(active, max(0, len(shown) - 1))))
         except Exception:
             self.quick_preview.setPixmap(quick_icon(160).pixmap(160, 160))
 
@@ -823,9 +1236,11 @@ class ExtPages:
     def quick_save(self, hotkey=False):
         q = self._quick
         q.update(enabled=self.quick_on.isChecked(), hotkey=self.quick_key.currentData(),
-                 centered=self.quick_center.isChecked(), numbers=self.quick_numbers.isChecked())
+                 position=self.quick_pos.currentData(), look=self.quick_look.currentData(),
+                 count=self.quick_count.value(), auto_fill=self.quick_auto.isChecked(),
+                 numbers=self.quick_numbers.isChecked())
         self._quick = self._eq.save_config(q)
-        self.quick_update_preview()
+        self.quick_update_preview(); self.quick_show_state()
         if hotkey:
             ok = self._eq.apply_hotkey(q['enabled'], q['hotkey'])
             key = self.quick_key.currentText()
@@ -1040,8 +1455,9 @@ class ExtPages:
 
     # ------------------------------------------------------------ LightDM
     def page_lightdm(self):
-        p = UI.Page('LightDM', 'The LightDM login screen. Both greeters, slick-greeter and lightdm-gtk-greeter, get '
-                               'the same Edukasaun look and options as the SDDM login screen.')
+        p = UI.Page('LightDM', 'SDDM is the login screen of Edukasaun OS. LightDM with slick-greeter or '
+                               'lightdm-gtk-greeter is an optional third-party login screen: install it first, then '
+                               'it can be chosen here. Both greeters get the Edukasaun look of the SDDM login screen.')
         self.ldm_state = UI.hint_label(''); p.v.addWidget(self.ldm_state)
         dm_row = QHBoxLayout(); dm_row.setSpacing(8)
         self.ldm_use_lightdm = QPushButton(get_icon('system-reboot', 'view-refresh'), ' ' + _('Use LightDM at the next start'))
@@ -1051,11 +1467,22 @@ class ExtPages:
         dm_row.addWidget(self.ldm_use_lightdm); dm_row.addWidget(self.ldm_use_sddm); dm_row.addStretch(1)
         p.v.addLayout(dm_row)
 
-        g = p.new_card('Greeter')
-        self.ldm_greeter_buttons = {}
+        # 0.11 RC3: the greeters are third-party programs (Debian packages),
+        # not part of Edukasaun OS: each one can be chosen once it is installed.
+        g = p.new_card('Third-party greeters (optional)')
+        self.ldm_greeter_buttons = {}; self.ldm_greeter_status = {}; self.ldm_greeter_install = {}
         for key, name, hint in LIGHTDM_GREETERS:
+            row = QHBoxLayout(); row.setSpacing(8)
             r = QRadioButton(f'{_(name)} ({key})'); r.setAccessibleDescription(_(hint))
-            g.addWidget(r); g.addWidget(UI.hint_label(hint)); self.ldm_greeter_buttons[key] = r
+            state = QLabel(''); state.setObjectName('stateChip')
+            inst = QPushButton(get_icon('system-software-install', 'list-add'), ' ' + _('Install…'))
+            inst.setToolTip(_('Opens a terminal that installs LightDM and this greeter (asks for your password)'))
+            inst.clicked.connect(lambda _c=False, k=key: self.install_lightdm_greeter(k))
+            row.addWidget(r); row.addWidget(state); row.addStretch(1); row.addWidget(inst)
+            g.addLayout(row); g.addWidget(UI.hint_label(hint))
+            self.ldm_greeter_buttons[key] = r; self.ldm_greeter_status[key] = state; self.ldm_greeter_install[key] = inst
+        g.addWidget(UI.hint_label('While LightDM is installed, its own question "Default display manager" may come up '
+                                  'in the terminal: choose sddm to keep the Edukasaun login screen for now.'))
 
         c = p.new_card('Look')
         f = UI.form()
@@ -1119,6 +1546,36 @@ class ExtPages:
     def lightdm_installed(self):
         return os.path.exists('/usr/sbin/lightdm')
 
+    def install_lightdm_greeter(self, key):
+        """Install LightDM and a greeter in a terminal window (apt asks for
+        the password there; nothing is installed behind the user's back).
+        The page is read again when the terminal closes."""
+        if key not in {k for k, _n, _h in LIGHTDM_GREETERS}:
+            return
+        from eduka_common import terminal_command
+        if not shutil.which('apt-get'):
+            self.show_status(_('This computer has no apt-get: install lightdm and {name} with its package manager.').replace('{name}', key), error=True)
+            return
+        script = ('echo "Installing LightDM and %s (third-party login screen)..."; echo; '
+                  'sudo apt-get install lightdm %s; echo; '
+                  'printf "Press Enter to close this window. "; read _answer' % (key, key))
+        try:
+            proc = subprocess.Popen(terminal_command(['sh', '-c', script]), stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self.show_status(_('Could not open a terminal: ') + str(e), error=True); return
+        self.show_status(_('Installing {name} in the terminal…').replace('{name}', key))
+        timer = QTimer(self); timer.setInterval(1500)
+        def check():
+            if proc.poll() is None:
+                return
+            timer.stop(); timer.deleteLater()
+            self.load_lightdm()
+            ok = os.path.exists(f'/usr/share/xgreeters/{key}.desktop') and self.lightdm_installed()
+            self.show_status(_('{name} is installed and can be chosen.').replace('{name}', key) if ok
+                             else _('{name} was not installed.').replace('{name}', key), error=not ok)
+        timer.timeout.connect(check); timer.start()
+
     def load_lightdm(self):
         state = {}
         try:
@@ -1132,17 +1589,24 @@ class ExtPages:
         names = {'sddm': 'SDDM', 'lightdm': 'LightDM'}
         lines = [_('Display manager: {dm}.').replace('{dm}', names.get(dm, dm or _('unknown')))]
         if not installed:
-            lines.append(_('LightDM is not installed. Install it with: sudo apt install lightdm slick-greeter (or lightdm-gtk-greeter).'))
+            lines.append(_('LightDM is not installed: press Install… next to a greeter below.'))
         elif not greeters:
-            lines.append(_('No Edukasaun greeter is installed: sudo apt install slick-greeter (or lightdm-gtk-greeter).'))
+            lines.append(_('No greeter for LightDM is installed: press Install… next to one below.'))
         else:
             lines.append(_('Installed greeters: {list}.').replace('{list}', ', '.join(greeters)))
         self.ldm_state.setText(' '.join(lines))
-        self.ldm_use_lightdm.setVisible(installed and dm != 'lightdm')
+        self.ldm_use_lightdm.setVisible(installed and bool(greeters) and dm != 'lightdm')
         self.ldm_use_sddm.setVisible(dm == 'lightdm' and os.path.exists('/usr/bin/sddm'))
         chosen = seat.get('greeter-session') or state.get('greeter') or (greeters[0] if greeters else '')
         for key, r in self.ldm_greeter_buttons.items():
-            r.setEnabled(key in greeters); r.setChecked(key == chosen)
+            ready = installed and key in greeters
+            r.setEnabled(ready); r.setChecked(ready and key == chosen)
+            chip = self.ldm_greeter_status.get(key)
+            if chip is not None:
+                chip.setText(_('Installed') if ready else _('Not installed'))
+                chip.setProperty('ok', ready); chip.style().unpolish(chip); chip.style().polish(chip)
+            if key in self.ldm_greeter_install:
+                self.ldm_greeter_install[key].setVisible(not ready)
         follow = state.get('follow', True)
         style = 'follow' if follow else state.get('style', 'pastel')
         self.ldm_style.setCurrentIndex(max(0, self.ldm_style.findData(style)))
@@ -1629,10 +2093,13 @@ class ExtPages:
         u = self.selected_user()
         if not u:
             return
-        d = PasswordDialog(self, u, own=u['current'])
+        import eduka_fingerprint as efp
+        d = PasswordDialog(self, u, own=u['current'], fingerprint=efp.pam_mode() != 'off')
         if not d.exec_():
             return
-        if u['current']:
+        if u['current'] and d.forgot.isChecked():
+            ok, msg = self._ea.reset_own_password(d.new.text())
+        elif u['current']:
             ok, msg = self._ea.change_own_password(d.old.text(), d.new.text())
         else:
             ok, msg = self._ea.run_helper({'action': 'password', 'name': u['name'], 'password': d.new.text()})

@@ -2,7 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 """Change user accounts for Eduka-Settings → Users. Runs as root through
-pkexec (polkit action org.edukasaun.desktop.users: administrator password).
+pkexec with one of two first arguments (each has its own polkit action):
+
+  --admin                (org.edukasaun.desktop.users: administrator password)
+                         every action below, for any normal account;
+  --reset-own-password   (org.edukasaun.desktop.reset-own-password, 0.11 RC3:
+                         the user confirms it is them, with a finger on the
+                         fingerprint reader or the current password)
+                         only {"action": "own_password", "password"} for the
+                         account that asks: a forgotten password can be
+                         replaced after logging in with a fingerprint.
 
 Reads one JSON object from standard input:
   {"action": "create",    "name", "full_name", "password", "admin", "hidden"}
@@ -459,14 +468,38 @@ ACTIONS = {'create': act_create, 'delete': act_delete, 'password': act_password,
            'rename': act_rename, 'admin': act_admin, 'lock': act_lock, 'hidden': act_hidden, 'avatar': act_avatar}
 
 
+def act_own_password(req, me):
+    """A new password for the account that asks (and for no other one)."""
+    if not me:
+        fail('Who asks is not known (run through pkexec).')
+    entry = human(me)
+    password = clean_password(req.get('password'))
+    if len(password) < 4:
+        fail('The new password needs at least 4 characters.')
+    run(['chpasswd'], f'{entry.pw_name}:{password}\n')
+    subprocess.run(['logger', '-t', 'eduka-users-apply', f'{entry.pw_name} set a new password for their own account'],
+                   capture_output=True, env=ENV, timeout=10)
+    print('Your new password is saved.')
+
+
 def main():
     if os.geteuid() != 0:
         fail('eduka-users-apply must run as root (pkexec).', 1)
+    mode = sys.argv[1] if len(sys.argv) > 1 else '--admin'
+    if mode not in ('--admin', '--reset-own-password') or len(sys.argv) > 2:
+        fail('Use --admin or --reset-own-password.')
     try:
         req = json.loads(sys.stdin.read(65536))
     except Exception:
         fail('Invalid request.')
-    if not isinstance(req, dict) or req.get('action') not in ACTIONS:
+    if not isinstance(req, dict):
+        fail('Invalid request.')
+    if mode == '--reset-own-password':
+        if req.get('action') != 'own_password':
+            fail('Only a new password for your own account can be set this way.')
+        act_own_password(req, caller())
+        return
+    if req.get('action') not in ACTIONS:
         fail('Unknown action.')
     ACTIONS[req['action']](req, caller())
 

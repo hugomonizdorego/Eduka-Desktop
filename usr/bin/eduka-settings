@@ -109,6 +109,8 @@ QWidget{{color:{c['text']};font-size:12px;}}
 QFrame#sidebar{{background:{c['sidebar']};border:0;border-right:1px solid {c['border']};}}
 QLabel#appTitle{{font-size:16px;font-weight:800;color:{c['title']};}}
 QLabel#versionChip{{background:{c['chip']};color:{c['chip_text']};border-radius:9px;padding:2px 8px;font-size:11px;font-weight:700;}}
+QLabel#stateChip{{background:rgba(229,72,77,0.13);color:#b3261e;border-radius:9px;padding:2px 9px;font-size:11px;font-weight:700;}}
+QLabel#stateChip[ok="true"]{{background:rgba(63,166,132,0.16);color:#1f7a5c;}}
 QListWidget#navList{{background:transparent;border:0;outline:0;padding:0;}}
 QListWidget#navList::item{{padding:10px 10px;border-radius:12px;margin:2px 0;color:{c['text']};font-weight:600;}}
 QListWidget#navList::item:hover{{background:{c['hover']};}}
@@ -525,45 +527,93 @@ class LoginPreview(QWidget):
             self.logo=QPixmap(logo) if logo and os.path.isfile(logo) else QPixmap()
         self.update()
 
+    # The colored lights of the login screen (Main.qml): x, y, radius, color, alpha.
+    LIGHTS={'pastel': ((0.12,0.86,0.42,(63,166,132),0.40), (0.88,0.12,0.40,(124,196,240),0.50), (0.92,0.9,0.30,(246,178,107),0.32),
+                       (0.06,0.08,0.28,(185,167,240),0.34), (0.5,0.5,0.28,(255,255,255),0.40)),
+            'light': ((0.1,0.9,0.45,(0,168,121),0.35), (0.9,0.12,0.40,(255,255,255),0.45), (0.88,0.9,0.30,(246,178,107),0.26)),
+            'dark': ((0.14,0.86,0.42,(38,166,154),0.24), (0.86,0.14,0.38,(124,108,240),0.18), (0.9,0.88,0.28,(229,72,77),0.10)),
+            'glass': ((0.16,0.18,0.4,(255,255,255),0.40), (0.86,0.82,0.45,(30,155,215),0.35), (0.82,0.14,0.3,(185,167,240),0.28))}
+
     def paintEvent(self, e):
+        """The bento login screen of 0.11 RC3 in small: sign in and clock on
+        the left, profile and system on the right, the rail beside them."""
         c=self.cfg; style=c.get('style','light'); accent=QColor(c.get('accent','#00a879'))
-        dark=style == 'dark'; glass=style == 'glass'
+        dark=style == 'dark'; pastel=style == 'pastel'
+        W, H=self.width(), self.height()
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
         r=QRectF(self.rect()); path=QPainterPath(); path.addRoundedRect(r, 14, 14); p.setClipPath(path)
         if not self.bg.isNull():
             pm=self.bg.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            p.drawPixmap(int((self.width()-pm.width())/2), int((self.height()-pm.height())/2), pm)
+            p.drawPixmap(int((W-pm.width())/2), int((H-pm.height())/2), pm)
+            p.fillRect(self.rect(), QColor(0,0,0,90) if dark else QColor(0,0,0,25))
         else:
-            g=QLinearGradient(0, 0, 0, self.height())
+            g=QLinearGradient(0, 0, 0, H)
             stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a'), 'pastel': ('#d6e8f8','#edf7f2','#d6efe6')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
             for pos, col in zip((0.0, 0.5, 1.0), stops): g.setColorAt(pos, QColor(col))
             p.fillRect(self.rect(), g)
-        p.fillRect(self.rect(), QColor(0,0,0,140) if dark else QColor(255,255,255,38) if glass else QColor(0,0,0,20))
-        cx=self.width()/2
-        if c.get('show_clock', True):
-            f=p.font(); f.setPixelSize(22); f.setWeight(QFont.Light); p.setFont(f); p.setPen(QColor('white'))
-            p.drawText(QRectF(0, 10, self.width(), 26), Qt.AlignCenter, format_clock(QTime.currentTime(), '24h'))
-        card=QRectF(cx-62, 44 if c.get('show_clock', True) else 34, 124, 118)
-        p.setPen(QPen(QColor(255,255,255,60) if dark else QColor(255,255,255,230), 1))
-        p.setBrush(QColor(38,38,38,235) if dark else QColor(255,255,255,140) if glass else QColor(255,255,255,245))
-        p.drawRoundedRect(card, 12, 12)
-        p.setBrush(QColor(255,255,255,30) if dark else QColor('white')); p.setPen(QPen(accent, 1.5))
-        p.drawEllipse(QPointF(cx, card.top()+20), 13, 13)
-        if not self.logo.isNull():
-            lg=self.logo.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation); p.drawPixmap(int(cx-lg.width()/2), int(card.top()+20-lg.height()/2), lg)
-        f=p.font(); f.setPixelSize(10); f.setBold(True); p.setFont(f); p.setPen(QColor('white') if dark else QColor('#10231e'))
-        p.drawText(QRectF(card.left(), card.top()+36, card.width(), 14), Qt.AlignCenter, c.get('title') or 'Edukasaun')
-        field=QColor('#383838') if dark else QColor(255,255,255,220)
+            m=max(W, H)
+            for x, y, rad, (cr, cg, cb), a in self.LIGHTS.get(style, self.LIGHTS['light']):
+                rg=QRadialGradient(QPointF(x*W, y*H), rad*m)
+                rg.setColorAt(0, QColor(cr, cg, cb, int(a*255))); rg.setColorAt(1, QColor(cr, cg, cb, 0))
+                p.fillRect(self.rect(), rg)
+        text=QColor('white') if dark else QColor('#1f3d36' if pastel else '#10231e')
+        sub=QColor(255,255,255,180) if dark else QColor('#557069')
+        field=accent.darker(118)
+        def card(rect, radius=9):
+            if not dark:
+                p.setPen(Qt.NoPen); p.setBrush(QColor(16,35,30,26)); p.drawRoundedRect(rect.translated(0, 2), radius, radius)
+            cg=QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            top, bottom={'dark': ((38,46,44,204),(21,27,26,179)), 'glass': ((255,255,255,153),(255,255,255,102)),
+                         'pastel': ((255,255,255,217),(255,255,255,166))}.get(style, ((255,255,255,235),(255,255,255,199)))
+            cg.setColorAt(0, QColor(*top)); cg.setColorAt(1, QColor(*bottom))
+            p.setPen(QPen(QColor(255,255,255,46) if dark else QColor(255,255,255,235), 1)); p.setBrush(cg)
+            p.drawRoundedRect(rect, radius, radius)
+        def label(rect, words, size, color, bold=False, align=Qt.AlignCenter, light=False):
+            f=p.font(); f.setPixelSize(size); f.setBold(bold); f.setWeight(QFont.Light if light else (QFont.Bold if bold else QFont.Normal))
+            p.setFont(f); p.setPen(color); p.drawText(rect, align, words)
+        show_clock=c.get('show_clock', True)
+        colw, gap, railw=104.0, 6.0, 18.0
+        total=colw*2+gap*2+railw; x0=(W-total)/2; h=136.0; y0=(H-h)/2
+        # Sign in
+        sh=74.0 if show_clock else h
+        sr=QRectF(x0, y0, colw, sh); card(sr)
+        fy=sr.top()+(sh-74)/2
+        label(QRectF(sr.left(), fy+5, colw, 12), 'Sign in', 9, text)
         for i in range(2):
-            fr=QRectF(card.left()+12, card.top()+56+i*22, card.width()-24, 16)
-            p.setPen(QPen(accent if i == 1 else QColor(0,0,0,40), 1)); p.setBrush(field); p.drawRoundedRect(fr, 8, 8)
-        p.setPen(Qt.NoPen); p.setBrush(accent); p.drawEllipse(QPointF(card.right()-20, card.top()+86), 6, 6)
-        f.setBold(False); f.setPixelSize(8); p.setFont(f); p.setPen(QColor(255,255,255,200) if dark else QColor('#5b6e69'))
-        if c.get('default_user'):
-            p.drawText(QRectF(card.left()+18, card.top()+56, 80, 16), Qt.AlignVCenter, c.get('default_user'))
-        bar=QRectF(cx-110, self.height()-22, 220, 15)
-        p.setPen(Qt.NoPen); p.setBrush(QColor(38,38,38,220) if dark else QColor(255,255,255,140) if glass else QColor(255,255,255,230)); p.drawRoundedRect(bar, 7.5, 7.5)
-        p.setBrush(accent); p.drawRoundedRect(QRectF(bar.left()+3, bar.top()+2.5, 46, 10), 5, 5)
+            fr=QRectF(sr.left()+8, fy+21+i*24, colw-16, 19)
+            p.setPen(Qt.NoPen); p.setBrush(field); p.drawRoundedRect(fr, 6, 6)
+            if i == 0:
+                p.setBrush(QColor('white')); p.drawEllipse(QPointF(fr.left()+9, fr.center().y()), 5.5, 5.5)
+                label(QRectF(fr.left()+18, fr.top(), fr.width()-24, fr.height()), c.get('default_user') or 'Student', 7, QColor('white'), True, Qt.AlignVCenter | Qt.AlignLeft)
+            else:
+                p.setBrush(QColor('white')); p.drawEllipse(QPointF(fr.right()-9, fr.center().y()), 6, 6)
+        # Clock
+        if show_clock:
+            cr=QRectF(x0, y0+sh+gap, colw, h-sh-gap); card(cr)
+            label(QRectF(cr.left(), cr.top()+6, colw, 26), format_clock(QTime.currentTime(), '24h'), 20, text, light=True)
+            label(QRectF(cr.left(), cr.top()+33, colw, 12), 'Good morning', 6, sub)
+        # Profile
+        px=x0+colw+gap; pr=QRectF(px, y0, colw, 70); card(pr)
+        p.setPen(QPen(accent, 1.6)); p.setBrush(QColor('white')); p.drawEllipse(QPointF(pr.center().x(), pr.top()+22), 13, 13)
+        if not self.logo.isNull():
+            lg=self.logo.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation); p.drawPixmap(int(pr.center().x()-lg.width()/2), int(pr.top()+22-lg.height()/2), lg)
+        label(QRectF(px, pr.top()+37, colw, 14), QDate.currentDate().toString('ddd').upper(), 10, text, True)
+        label(QRectF(px, pr.top()+51, colw, 10), QDate.currentDate().toString('d MMMM yyyy'), 6, sub)
+        # System: title, three power tiles, the session
+        yr=QRectF(px, y0+70+gap, colw, h-70-gap); card(yr)
+        label(QRectF(px, yr.top()+4, colw, 11), c.get('title') or 'Edukasaun', 7, text, True)
+        tw=(colw-16-6)/3
+        for i, tint in enumerate(('#7c6cf0', '#f08c2e', '#e5484d')):
+            t=QColor(tint); fill=QColor(t); fill.setAlpha(64 if dark else 52)
+            tr=QRectF(px+8+i*(tw+3), yr.top()+17, tw, 15)
+            p.setPen(QPen(QColor(t.red(), t.green(), t.blue(), 110), 1)); p.setBrush(fill); p.drawRoundedRect(tr, 4, 4)
+            p.setPen(Qt.NoPen); p.setBrush(t); p.drawEllipse(tr.center(), 2.6, 2.6)
+        sp=QRectF(px+8, yr.top()+36, colw-16, 14); p.setPen(Qt.NoPen); p.setBrush(field); p.drawRoundedRect(sp, 5, 5)
+        label(QRectF(sp.left()+6, sp.top(), sp.width(), sp.height()), 'Eduka-Desktop', 6, QColor('white'), True, Qt.AlignVCenter | Qt.AlignLeft)
+        # The rail beside the cards
+        rr=QRectF(x0+colw*2+gap*2, y0+h/2-30, railw, 60); card(rr, railw/2)
+        p.setPen(Qt.NoPen); p.setBrush(text)
+        for i in range(3): p.drawEllipse(QPointF(rr.center().x(), rr.top()+12+i*18), 3, 3)
 
 
 # Pages added in 0.11 RC2 (users, fonts, date and time, LightDM, Eduka-Quick,
@@ -646,8 +696,11 @@ class Settings(ext.ExtPages, QDialog):
                           [('panel','Panel','preferences-desktop',self.page_icon_name),
                            ('clock','Clock','preferences-system-time',self.page_clock),
                            ('notifications','Notifications','preferences-system-notifications',self.page_notifications)])]),
-            ('DEVICES', [('keyboard','Keyboard','input-keyboard',
-                          [('keyboard','Keyboard','input-keyboard',self.page_keyboard)]),
+            ('DEVICES', [('display','Display','video-display',
+                          [('display','Display','video-display',self.page_display)]),
+                         ('keyboard','Keyboard','input-keyboard',
+                          [('keyboard','Keyboard','input-keyboard',self.page_keyboard),
+                           ('shortcuts','Shortcuts','preferences-desktop-keyboard-shortcuts',self.page_shortcuts)]),
                          ('mouse','Mouse & Touch','input-mouse',
                           [('mouse','Mouse','input-mouse',self.page_mouse),
                            ('touchpad','Touchpad','input-touchpad',self.page_touchpad),
@@ -669,7 +722,8 @@ class Settings(ext.ExtPages, QDialog):
                           ('lightdm','LightDM','system-users',self.page_lightdm),
                           ('fingerprint','Fingerprint','fingerprint',self.page_fingerprint)]),
                         ('maintenance','Maintenance','applications-system',
-                         [('maintenance','Maintenance','applications-system',self.page_advanced)])]),
+                         [('maintenance','Maintenance','applications-system',self.page_advanced),
+                          ('memory','Memory','utilities-system-monitor',self.page_memory)])]),
         ]
         self.pages=[]; self.page_keys=[]; self.nav_rows={}; self.page_nav={}; self.nav_entries=[]; self.tab_entries=[]
         for gi, (group, entries) in enumerate(groups):
@@ -717,7 +771,7 @@ class Settings(ext.ExtPages, QDialog):
         # slider or typing does not restart the panel many times).
         QTimer.singleShot(0, self.enable_live_apply)
 
-    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'keyboard', 'mouse', 'touchpad',
+    LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'display', 'keyboard', 'shortcuts', 'memory', 'mouse', 'touchpad',
                  'touchscreen', 'fingerprint', 'users', 'fonts', 'datetime', 'lightdm', 'quick', 'overview', 'privacy')
 
     def sub_icon(self, key, icon):
@@ -1260,10 +1314,22 @@ class Settings(ext.ExtPages, QDialog):
         f.addRow('Repeat delay:', box)
         self.kb_rate, box=self._input_slider(5, 60, cfg['repeat_rate'], lambda v: _('{n} per second').replace('{n}', str(v)))
         f.addRow('Repeat speed:', box)
-        self.kb_numlock=QCheckBox('Turn on Num Lock when I log in'); self.kb_numlock.setChecked(bool(cfg['numlock'])); f.addRow('', self.kb_numlock)
+        self.kb_numlock=QComboBox(); self.kb_numlock.setAccessibleName('Num Lock at login')
+        for key, label in ei.NUMLOCK_MODES: self.kb_numlock.addItem(label, key)
+        self.kb_numlock.setCurrentIndex(max(0, self.kb_numlock.findData(cfg.get('numlock_mode', 'auto'))))
+        f.addRow('Num Lock at login:', self.kb_numlock)
+        try:
+            import eduka_device as edev
+            prof=edev.profile(); auto_on=edev.numlock_default(prof)
+            kbs=edev.keyboard_text(prof) or [_('No keyboard found (an on-screen keyboard can be used)')]
+            text=_('This computer: {kind}.').replace('{kind}', _(prof['kind_name'])) + ' ' + '; '.join(_(k.split(': ', 1)[0]) + (': ' + k.split(': ', 1)[1] if ': ' in k else '') for k in kbs) + '. ' + \
+                (_('Automatic turns Num Lock on here.') if auto_on else _('Automatic leaves Num Lock off here.'))
+        except Exception:
+            text=''
+        if text: f.addRow('', hint_label(text))
         p.v.addLayout(f)
         test=QLineEdit(); test.setPlaceholderText(_('Type here to test the layout and the repeat speed')); p.v.addWidget(test)
-        for sig in (self.kb_switch.currentIndexChanged, self.kb_delay.valueChanged, self.kb_rate.valueChanged, self.kb_numlock.toggled):
+        for sig in (self.kb_switch.currentIndexChanged, self.kb_delay.valueChanged, self.kb_rate.valueChanged, self.kb_numlock.currentIndexChanged):
             sig.connect(self._input_changed)
         return p.finish()
 
@@ -1364,6 +1430,19 @@ class Settings(ext.ExtPages, QDialog):
             else: self.tp_view.release(ev[1])
 
     # ------------------------------------------------------------ touch screen
+    def touch_gestures_toggled(self, on):
+        ok=self._et.set_gestures(on)
+        self.show_status((_('Gestures are on.') if on else _('Gestures are off.')) if ok else _('Not changed.'), error=not ok)
+
+    def touch_install_touchegg(self):
+        from eduka_common import terminal_command
+        if not shutil.which('apt-get'):
+            self.show_status(_('Install touchegg with the package manager of this system.'), error=True); return
+        try:
+            subprocess.Popen(terminal_command(self._et.install_command()), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self.show_status(_('Could not open a terminal: ')+str(e), error=True)
+
     def page_touchscreen(self):
         ei, cfg=self.input_widgets_ready()
         screens=[d for d in self.pointer_devs() if d.get('touchscreen')]
@@ -1398,6 +1477,26 @@ class Settings(ext.ExtPages, QDialog):
         big=QPushButton(get_icon('zoom-in', 'view-fullscreen'), '  '+_('Bigger buttons for fingers')); big.clicked.connect(self.touch_friendly_sizes)
         c.addWidget(big, 0, Qt.AlignLeft)
         c.addWidget(hint_label('Makes Eduka-Panel taller and the tiles of Eduka-Desktop large. Change them back on the Eduka-Panel and Effects pages.'))
+        # 0.11 RC3: gestures like Windows and macOS (Touchégg).
+        import eduka_touch as et
+        self._et=et
+        g=p.new_card('Gestures with three and four fingers')
+        self.ts_gestures=QCheckBox('Use gestures on the touch screen and the touchpad, like on Windows and macOS')
+        gstate=et.gestures_state(); have_tg=et.touchegg_installed()
+        self.ts_gestures.setChecked(gstate != 'off'); self.ts_gestures.setEnabled(have_tg and gstate != 'own')
+        g.addWidget(self.ts_gestures)
+        glist=QLabel('<br>'.join('<b>{}</b> — {}'.format(
+            (_('{n} fingers').replace('{n}', str(fingers)) + ' ' + _({'UP': 'up', 'DOWN': 'down', 'LEFT': 'left', 'RIGHT': 'right'}[direction])) if kind == 'SWIPE'
+            else _('Tap with {n} fingers').replace('{n}', str(fingers)), _(label)) for kind, fingers, direction, _a, _arg, label in et.GESTURES))
+        glist.setTextFormat(Qt.RichText); glist.setWordWrap(True); g.addWidget(glist)
+        ghint=('Your own Touchégg settings are used (~/.config/touchegg/touchegg.conf).' if gstate == 'own' else
+               'Gestures work in every program, also on a touchpad. Pinch to zoom stays with the programs.' if have_tg else
+               'Gestures need the package "touchegg".')
+        g.addWidget(hint_label(ghint))
+        if not have_tg:
+            ginst=QPushButton(get_icon('system-software-install', 'list-add'), ' '+_('Install Touchégg…'))
+            ginst.clicked.connect(self.touch_install_touchegg); grow=QHBoxLayout(); grow.addStretch(1); grow.addWidget(ginst); g.addLayout(grow)
+        self.ts_gestures.toggled.connect(self.touch_gestures_toggled)
         k=p.new_card('On-screen keyboard')
         have=ei.onboard_installed()
         self.osk_autostart=QCheckBox('Start the on-screen keyboard (Onboard) at login'); self.osk_autostart.setChecked(ei.osk_autostart_enabled()); k.addWidget(self.osk_autostart)
@@ -1434,6 +1533,12 @@ class Settings(ext.ExtPages, QDialog):
         top.addLayout(info, 1)
         again=QPushButton('Check again'); again.clicked.connect(self.fp_refresh); top.addWidget(again, 0, Qt.AlignTop)
         p.v.addLayout(top)
+        # 0.11 RC3: every reader on USB, also the ones libfprint cannot use yet.
+        self.fp_hw=QLabel(''); self.fp_hw.setWordWrap(True); self.fp_hw.setTextFormat(Qt.RichText); p.v.addWidget(self.fp_hw)
+        hw_row=QHBoxLayout(); hw_row.addStretch(1)
+        self.fp_install=QPushButton(get_icon('system-software-install', 'list-add'), ' '+_('Install fingerprint support…'))
+        self.fp_install.setToolTip(_('Opens a terminal that installs fprintd and libpam-fprintd (asks for your password)'))
+        self.fp_install.clicked.connect(self.fp_install_support); hw_row.addWidget(self.fp_install); p.v.addLayout(hw_row)
         c=p.new_card('Saved fingers')
         self.fp_list=QListWidget(); self.fp_list.setObjectName('layoutList'); self.fp_list.setFixedHeight(118); c.addWidget(self.fp_list)
         row=QHBoxLayout(); row.setSpacing(8)
@@ -1448,11 +1553,78 @@ class Settings(ext.ExtPages, QDialog):
         u=p.new_card('Use the fingerprint')
         self.fp_pam=QCheckBox('Accept a finger at the login screen, the screen lock, sudo and administrator password windows')
         self.fp_pam.setChecked(efp.pam_enabled()); u.addWidget(self.fp_pam)
-        self.fp_pam_hint=hint_label('For every account of this computer; needs an administrator password. The login screen waits a few seconds for a finger, then the password works as before.')
+        self.fp_pam_hint=hint_label('For every account of this computer; needs an administrator password. The password '
+                                    'is asked first and works as before. For the finger, leave the password empty and press '
+                                    'Enter (on the login screen: the fingerprint button), then touch the reader.')
         u.addWidget(self.fp_pam_hint)
+        self.fp_order=QPushButton(get_icon('view-refresh'), ' '+_('Ask for the password first (recommended)'))
+        self.fp_order.setToolTip(_('The finger is asked first now, so a typed password waits for the reader at the login screen'))
+        self.fp_order.clicked.connect(lambda: self.fp_pam_toggled(True, force=True))
+        orow=QHBoxLayout(); orow.addWidget(self.fp_order); orow.addStretch(1); u.addLayout(orow)
         self.fp_pam.toggled.connect(self.fp_pam_toggled)
+        r=p.new_card('Forgot your password?')
+        r.addWidget(hint_label('Log in with your finger, then set a new password here: the finger confirms that it is you, '
+                               'the old password is not needed.'))
+        self.fp_reset=QPushButton(get_icon('dialog-password', 'document-encrypt'), ' '+_('Set a new password with my fingerprint…'))
+        self.fp_reset.clicked.connect(self.fp_reset_password)
+        rrow=QHBoxLayout(); rrow.addWidget(self.fp_reset); rrow.addStretch(1); r.addLayout(rrow)
         self.fp_set_buttons(False)
         return p.finish()
+
+    def fp_hardware(self):
+        """The readers found on USB, with what libfprint says about them."""
+        efp=self._fp
+        try:
+            found=efp.readers()
+        except Exception:
+            found=[]
+        states={'supported': _('supported'), 'unsupported': _('not supported yet'), 'unknown': _('not in the list of libfprint')}
+        if not found:
+            self.fp_hw.setText(_('No fingerprint reader was found on USB.'))
+        else:
+            rows=[]
+            for rd in found:
+                rows.append('<b>{}</b> {} ({}) — {}<br><span style="color:#6b7f79">{}</span>'.format(
+                    rd['maker'], rd['name'] if rd['name'] != 'Fingerprint reader' else _('fingerprint reader'), rd['id'],
+                    states.get(rd['state'], rd['state']), _(rd['hint'])))
+            self.fp_hw.setText('<br>'.join(rows))
+        self.fp_install.setVisible(not efp.fprintd_installed() or not efp.pam_profile_installed())
+        mode=efp.pam_mode()
+        self.fp_order.setVisible(mode == 'finger-first' and is_admin_user())
+        self.fp_reset.setEnabled(mode != 'off')
+        self.fp_reset.setToolTip('' if mode != 'off' else _('Switch on "Use the fingerprint" first'))
+        return found
+
+    def fp_install_support(self):
+        from eduka_common import terminal_command
+        if not shutil.which('apt-get'):
+            self.show_status(_('Install fprintd and libpam-fprintd with the package manager of this system.'), error=True); return
+        try:
+            proc=subprocess.Popen(terminal_command(self._fp.install_command()), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self.show_status(_('Could not open a terminal: ')+str(e), error=True); return
+        timer=QTimer(self); timer.setInterval(1500)
+        def check():
+            if proc.poll() is None: return
+            timer.stop(); timer.deleteLater(); self.fp_refresh()
+        timer.timeout.connect(check); timer.start()
+
+    def fp_reset_password(self):
+        import pwd
+        from eduka_settings_ext import PasswordDialog
+        import eduka_accounts as ea
+        try:
+            e=pwd.getpwuid(os.getuid()); user={'name': e.pw_name, 'full_name': e.pw_gecos.split(',')[0]}
+        except KeyError:
+            return
+        d=PasswordDialog(self, user, own=True, fingerprint=True, forgot=True)
+        if not d.exec_():
+            return
+        if d.forgot.isChecked():
+            ok, msg=ea.reset_own_password(d.new.text())
+        else:
+            ok, msg=ea.change_own_password(d.old.text(), d.new.text())
+        self.show_status(_('Your new password is saved.') if ok else _('Not changed: ')+_(msg or ''), error=not ok)
 
     def fp_set_buttons(self, reader, fingers=()):
         for w in (self.fp_add, self.fp_finger):
@@ -1463,6 +1635,7 @@ class Settings(ext.ExtPages, QDialog):
 
     def fp_refresh(self):
         efp=self._fp
+        self.fp_hardware()
         if not efp.fprintd_installed():
             self.fp_reader.setText(_('Fingerprint support is not installed.'))
             self.fp_state.setText(_('Install the packages "fprintd" and "libpam-fprintd".'))
@@ -1478,8 +1651,13 @@ class Settings(ext.ExtPages, QDialog):
         reader, fingers=efp.parse_list(text)
         self.fp_list.clear()
         if not reader:
-            self.fp_reader.setText(_('No fingerprint reader was found.'))
-            self.fp_state.setText(_('Connect a fingerprint reader (or check that it is supported by libfprint) and press "Check again".'))
+            found=self.fp_hardware()
+            if found and not any(r['state'] == 'supported' for r in found):
+                self.fp_reader.setText(_('The fingerprint reader of this computer cannot be used yet.'))
+                self.fp_state.setText(_('fprintd (libfprint) has no driver for it; see the hint below.'))
+            else:
+                self.fp_reader.setText(_('No fingerprint reader was found.'))
+                self.fp_state.setText(_('Connect a fingerprint reader (or check that it is supported by libfprint) and press "Check again".'))
             self.fp_set_buttons(False); return
         self.fp_reader.setText(reader)
         self.fp_state.setText(_('{n} fingers saved for this account.').replace('{n}', str(len(fingers))) if fingers else _('No finger saved yet.'))
@@ -1510,9 +1688,9 @@ class Settings(ext.ExtPages, QDialog):
         self.show_status(_('Fingerprint removed.') if r.returncode == 0 else (r.stderr or r.stdout or _('The fingerprint could not be removed.')).strip(), error=r.returncode != 0)
         self.fp_refresh()
 
-    def fp_pam_toggled(self, on):
+    def fp_pam_toggled(self, on, force=False):
         efp=self._fp
-        if on == efp.pam_enabled():
+        if on == efp.pam_enabled() and not force:
             return
         try:
             r=subprocess.run(['pkexec', efp.HELPER, '--enable' if on else '--disable'], capture_output=True, text=True, timeout=180)
@@ -1521,6 +1699,7 @@ class Settings(ext.ExtPages, QDialog):
         except Exception as e:
             ok=False; message=str(e)
         if ok:
+            self.fp_hardware()
             self.show_status(_('Fingerprint login switched on.') if on else _('Fingerprint login switched off.'))
         else:
             self.fp_pam.blockSignals(True); self.fp_pam.setChecked(efp.pam_enabled()); self.fp_pam.blockSignals(False)
@@ -1529,7 +1708,7 @@ class Settings(ext.ExtPages, QDialog):
     def collect_input(self):
         cfg=dict(self.input_cfg)
         if hasattr(self, 'kb_list'):
-            cfg.update(layouts=self.kb_codes(), switch=self.kb_switch.currentData() or '', repeat_delay=self.kb_delay.value(), repeat_rate=self.kb_rate.value(), numlock=self.kb_numlock.isChecked())
+            cfg.update(layouts=self.kb_codes(), switch=self.kb_switch.currentData() or '', repeat_delay=self.kb_delay.value(), repeat_rate=self.kb_rate.value(), numlock_mode=self.kb_numlock.currentData() or 'auto', numlock=self.kb_numlock.currentData() == 'on')
         if hasattr(self, 'ms_speed'):
             cfg.update(mouse_speed=self.ms_speed.value()/100.0, left_handed=self.ms_left.isChecked(), mouse_natural=self.ms_natural.isChecked(),
                        middle_emulation=self.ms_middle.isChecked(), double_click=self.ms_dclick.value(), wheel_lines=self.ms_wheel.value())
@@ -1648,6 +1827,14 @@ class Settings(ext.ExtPages, QDialog):
         shape.addLayout(srow)
         shape.addWidget(hint_label('Long covers the whole screen edge, Floating is a rounded bar with a little space around it, Short is a smaller centered bar, Dock grows and shrinks with its icons. Right-click Eduka-Panel → Panel Style changes it too.'))
         fs=form()
+        # RC3: the ends of the panel, oval as before, rounded or square.
+        erow=QHBoxLayout(); erow.setSpacing(10); self.corner_cards={}; egroup=QButtonGroup(self)
+        for key, label in PANEL_CORNERS:
+            card=QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(label)
+            card.setIcon(QIcon(panel_corner_preview(key))); card.setIconSize(QSize(96, 40)); card.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            card.setCursor(Qt.PointingHandCursor); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setAccessibleName(label)
+            egroup.addButton(card); erow.addWidget(card); self.corner_cards[key]=card
+        fs.addRow('Panel ends:', erow)
         self.panel_clock_seconds=QCheckBox('Show seconds on the panel clock'); fs.addRow('', self.panel_clock_seconds)
         self.panel_clock_blink=QCheckBox('Blinking colon on the panel clock'); fs.addRow('', self.panel_clock_blink)
         shape.addLayout(fs)
@@ -2212,6 +2399,7 @@ class Settings(ext.ExtPages, QDialog):
         (self.led_swatches.get(str(panel.get('clock_color','') or '').lower()) or self.led_swatches['']).setChecked(True)
         self.pos_cards[panel_position(panel)].setChecked(True)
         self.shape_cards[panel_style(panel)].setChecked(True)
+        self.corner_cards[panel_corners(panel)].setChecked(True)
         self.panel_clock_seconds.setChecked(bool(panel.get('panel_clock_seconds', False))); self.panel_clock_blink.setChecked(bool(panel.get('panel_clock_blink', False)))
         self.effects_on.setChecked(bool(desktop.get('effects_enabled', False)))
         self.effect_hover.setCurrentIndex(max(0, self.effect_hover.findData(desktop.get('effect_hover','wave'))))
@@ -2271,7 +2459,7 @@ class Settings(ext.ExtPages, QDialog):
 
     # ------------------------------------------------------------------ save / apply
     def collect(self):
-        panel={'menu_label':self.label.text().strip() or DEFAULT_MENU_LABEL,'menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
+        panel={'menu_label':self.label.text().strip() or DEFAULT_MENU_LABEL,'menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_corners':next((k for k, c in self.corner_cards.items() if c.isChecked()), 'round'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
         desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
@@ -2387,6 +2575,10 @@ def activate_running_settings(socket_name, page=''):
 
 def run_single_instance():
     ensure_dirs(); app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-settings'); app.setDesktopFileName('eduka-settings'); socket_name=f'eduka-settings-{os.getuid()}'
+    try:
+        import eduka_touch; eduka_touch.enable_long_press(app)   # long press = right click (0.11 RC3)
+    except Exception:
+        pass
     lock_file=open(SETTINGS_LOCK, 'w')
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)

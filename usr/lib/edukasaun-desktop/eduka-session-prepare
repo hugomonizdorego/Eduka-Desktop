@@ -21,6 +21,9 @@ Run by eduka-desktop-session as the user, every login, before startlxqt
   Eduka's compositor settings were not used.
 * The Super (Windows) key opens Eduka-Desktop, the start menu, through
   lxqt-globalkeys (the LXQt shortcut daemon).
+* The Windows shortcuts (Super+E, Super+D, Super+arrows, …) and the sound
+  and media keys are added next to LXQt's own (0.11 RC3, eduka_shortcuts),
+  without taking a key that LXQt, the user or the window manager uses.
 
 Files the user made (without the mark) are never changed.
 """
@@ -125,7 +128,8 @@ def super_key_opens_menu(cfg):
 
 
 QUICK_COMMENT = 'Eduka-Quick'
-QUICK_KEYS = ('Meta+Q', 'Control+Alt+Space', 'Control+Alt+A', 'Meta+Space')
+# Super+Space switches the keyboard layout (0.11 RC3): no longer offered.
+QUICK_KEYS = ('Meta+Q', 'Control+Alt+Space', 'Control+Alt+A')
 
 
 def quick_launcher_key(cfg):
@@ -180,9 +184,66 @@ def quick_launcher_key(cfg):
         write_atomic(path, new)
 
 
+def windows_shortcuts(cfg):
+    """The LXQt and Windows shortcuts of Eduka (0.11 RC3, eduka_shortcuts):
+    written before lxqt-globalkeysd reads the file; keys of LXQt, of the
+    user and of the window manager are never taken."""
+    if not any(os.access(os.path.join(d, 'lxqt-globalkeysd'), os.X_OK)
+               for d in os.environ.get('PATH', '/usr/bin:/bin').split(':') if d):
+        return
+    if '/usr/lib/edukasaun-desktop' not in sys.path:
+        sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+    import eduka_shortcuts
+    # The window manager starts after this script: read the one LXQt will start.
+    wm = ''
+    try:
+        with open(os.path.join(cfg, 'lxqt', 'session.conf'), encoding='utf-8', errors='ignore') as f:
+            m = [l.split('=', 1)[1].strip() for l in f if l.strip().startswith('window_manager=')]
+        wm = os.path.basename(m[-1]) if m else ''
+    except OSError:
+        pass
+    if not wm:                                   # first login: the one lxqt-defaults.sh will pick
+        import shutil
+        wm = next((w for w in ('xfwm4', 'kwin_x11', 'openbox', 'marco', 'fluxbox', 'icewm') if shutil.which(w)), '')
+    eduka_shortcuts.apply(cfg, wm=wm)
+
+
+def display_scale(cfg):
+    """A sharp screen at the first login of an account: the display scale
+    recommended for it (eduka_device, 0.11 RC3), once; Eduka-Settings →
+    Display changes it later."""
+    if not os.environ.get('DISPLAY'):
+        return
+    if '/usr/lib/edukasaun-desktop' not in sys.path:
+        sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+    import eduka_device
+    eduka_device.first_login_scale(cfg)
+
+
+def touch(cfg):
+    """Touch screens and touchpads (eduka_touch, 0.11 RC3): smooth finger
+    scrolling in Firefox for every session, and once per account the
+    gestures (Touchégg) and, on a tablet, the on-screen keyboard."""
+    if '/usr/lib/edukasaun-desktop' not in sys.path:
+        sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+    import eduka_touch, eduka_device
+    conf = os.path.join(cfg, 'lxqt', 'session.conf')
+    try:
+        with open(conf, encoding='utf-8', errors='ignore') as f:
+            have = f.read()
+    except OSError:
+        have = ''
+    missing = {k: v for k, v in eduka_touch.session_environment().items() if f'{k}=' not in have}
+    if missing:
+        from pathlib import Path
+        eduka_device._set_environment(Path(conf), missing)
+    if os.environ.get('DISPLAY'):
+        eduka_touch.first_login(cfg)
+
+
 def main():
     cfg = config_home()
-    for step in (hide_lxqt_modules, super_key_opens_menu, quick_launcher_key):
+    for step in (hide_lxqt_modules, super_key_opens_menu, quick_launcher_key, windows_shortcuts, display_scale, touch):
         try:
             step(cfg)
         except Exception as e:                   # never stop the login

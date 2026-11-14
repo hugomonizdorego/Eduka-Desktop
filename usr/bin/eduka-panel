@@ -13,6 +13,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtDBus import QDBusConnection, QDBusConnectionInterface, QDBusAbstractAdaptor, QDBusMessage
 from PyQt5.QtCore import Q_CLASSINFO
+from PyQt5.QtNetwork import QLocalServer
 sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
 from eduka_common import _
@@ -971,10 +972,23 @@ class NotificationServer(QObject):
             msg.setArguments([_uint(nid), _uint(reason)]); self.bus.send(msg)
 
     def invoke(self, nid, key):
-        if self.registered:
+        local=getattr(self, 'local_actions', {}).pop((nid, key), None)
+        if local is not None:
+            try: local()
+            except Exception: pass
+        elif self.registered:
             msg=QDBusMessage.createSignal(NOTIFY_PATH, NOTIFY_NAME, 'ActionInvoked')
             msg.setArguments([_uint(nid), key]); self.bus.send(msg)
         self.close_bubble(nid, 2)
+
+    def notify_local(self, summary, body, icon, actions=()):
+        """A notice of Eduka-Panel itself; actions: [(key, label, callable)]."""
+        flat=[]
+        for key, label, _cb in actions: flat += [key, label]
+        nid=self.notify('Eduka-Desktop', 0, icon, summary, body, flat, {'urgency': 1}, -1)
+        if not hasattr(self, 'local_actions'): self.local_actions={}
+        for key, _label, cb in actions: self.local_actions[(nid, key)]=cb
+        return nid
 
 
 def notification_age(stamp):
@@ -1818,7 +1832,7 @@ def _ac_qss():
     return f"""
 QToolButton#acChevron{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
 QToolButton#acChevron:hover{{border:1px solid {u['accent']};}}
-QToolButton#acSync{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:11px;padding:0;margin:4px;}}
+QToolButton#acSync{{background:{u['btn_bg']};border:1px solid {u['btn_border']};border-radius:13px;padding:0;}}
 QToolButton#acSync:hover{{border:1px solid {u['accent']};}}
 QFrame#mediaRow{{background:transparent;border:1px solid transparent;border-radius:12px;}}
 QFrame#mediaRow:hover{{background:{u['tile']};border:1px solid {u['btn_border']};}}
@@ -1879,7 +1893,14 @@ class ActionCenter(PopupFrame):
         self.ink='#e0e0e0' if is_dark_theme() else '#2d4a43'
 
         # Handle row: the grip in the middle, the size chevron at the right.
-        top=QHBoxLayout(); top.setContentsMargins(0,0,0,0); top.addSpacing(26)
+        top=QHBoxLayout(); top.setContentsMargins(0,0,0,0)
+        # Sync time (RC3): top left, the twin of the size chevron on the right,
+        # so it never covers the clock card and its weather animation.
+        self.sync_button=QToolButton(); self.sync_button.setObjectName('acSync'); self.sync_button.setFixedSize(26,26)
+        self.sync_button.setIconSize(QSize(14,14)); self.sync_button.setCursor(Qt.PointingHandCursor)
+        self.sync_button.setToolTip(_('Sync time: the clock and the time zone follow the internet'))
+        self.sync_button.setAccessibleName(_('Sync time')); self.sync_button.clicked.connect(self.sync_time)
+        top.addWidget(self.sync_button)
         self.grip=GripBar(); top.addWidget(self.grip, 1)
         self.mode_button=QToolButton(); self.mode_button.setObjectName('acChevron'); self.mode_button.setFixedSize(26,26); self.mode_button.setIconSize(QSize(11,11)); self.mode_button.setCursor(Qt.PointingHandCursor)
         self.mode_button.clicked.connect(lambda: self.set_compact(not self.compact, remember=True)); top.addWidget(self.mode_button)
@@ -1906,13 +1927,6 @@ class ActionCenter(PopupFrame):
         self.zone_map=TimeZoneMap(); self.zone_map.clicked.connect(self.show_clock); zl.addWidget(self.zone_map, 0, Qt.AlignHCenter)
         self.zone_info=QLabel(''); self.zone_info.setObjectName('acDate'); self.zone_info.setAlignment(Qt.AlignCenter); self.zone_info.setWordWrap(True); zl.addWidget(self.zone_info)
         self.clock_stack.addWidget(zone_page)
-        # Sync time (RC2): a small round button in the corner of the clock card
-        # sets the clock from network time and follows the time zone.
-        self.sync_button=QToolButton(); self.sync_button.setObjectName('acSync'); self.sync_button.setFixedSize(30,30)
-        self.sync_button.setIconSize(QSize(16,16)); self.sync_button.setCursor(Qt.PointingHandCursor)
-        self.sync_button.setToolTip(_('Sync time: the clock and the time zone follow the internet'))
-        self.sync_button.setAccessibleName(_('Sync time')); self.sync_button.clicked.connect(self.sync_time)
-        card_lay.addWidget(self.sync_button, 0, 0, Qt.AlignTop | Qt.AlignRight); self.sync_button.raise_()
         self._sync_pix=None; self._sync_angle=0; self._sync_thread=None; self._sync_box={}
         self._sync_timer=QTimer(self); self._sync_timer.timeout.connect(self._spin_sync)
         self.set_sync_icon(0)
@@ -2030,8 +2044,6 @@ class ActionCenter(PopupFrame):
         for w in (self.face, self.greeting, self.date_label):
             self.ck.removeWidget(w)
         self.face.set_options(self.clock_opts, big=not dense)
-        # Room on the right for the Sync time button in the corner.
-        self.ck.setContentsMargins(12, 10, 34 if dense else 12, 12)
         if dense:
             self.ck.addWidget(self.face, 0, 0, 2, 1, Qt.AlignVCenter)
             self.ck.addWidget(self.greeting, 0, 1, Qt.AlignBottom); self.ck.addWidget(self.date_label, 1, 1, Qt.AlignTop)
@@ -2737,6 +2749,57 @@ class InputWorker(QThread):
             self.done.emit(ei.apply_pointers(cfg))
         except Exception:
             self.done.emit([])
+
+
+class OsdBar(QWidget):
+    """The level of the on-screen notice: a soft track, filled with the accent."""
+    def __init__(self, parent=None):
+        super().__init__(parent); self.value=0; self.setFixedHeight(8); self.setMinimumWidth(150)
+    def set_value(self, value):
+        self.value=max(0, min(100, int(value))); self.update()
+    def paintEvent(self, _e):
+        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); u=ui_colors()
+        r=QRectF(self.rect()); p.setPen(Qt.NoPen)
+        p.setBrush(qcolor(u['groove'])); p.drawRoundedRect(r, 4, 4)
+        if self.value:
+            p.setBrush(qcolor(u['accent'])); p.drawRoundedRect(QRectF(r.x(), r.y(), max(8.0, r.width()*self.value/100), r.height()), 4, 4)
+
+
+class OsdBubble(QFrame):
+    """Small notice above Eduka-Panel for the volume, microphone and
+    touchpad keys (0.11 RC3). It never takes the keyboard focus and goes
+    away by itself."""
+    def __init__(self, panel):
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
+        self.panel=panel
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        composited=compositor_running()
+        if composited: self.setAttribute(Qt.WA_TranslucentBackground)
+        self.box=QFrame(self); self.box.setObjectName('popupBox')
+        lay=QVBoxLayout(self); lay.setContentsMargins(*((6,6,6,6) if composited else (0,0,0,0))); lay.addWidget(self.box)
+        row=QHBoxLayout(self.box); row.setContentsMargins(16,12,18,12); row.setSpacing(12)
+        self.pic=QLabel(); row.addWidget(self.pic)
+        col=QVBoxLayout(); col.setSpacing(6)
+        self.title=QLabel(); self.title.setObjectName('popTitle'); col.addWidget(self.title)
+        self.bar=OsdBar(); col.addWidget(self.bar)
+        row.addLayout(col, 1)
+        self.value=QLabel(); self.value.setObjectName('popSub'); self.value.setMinimumWidth(42)
+        self.value.setAlignment(Qt.AlignRight | Qt.AlignVCenter); row.addWidget(self.value)
+        self.setStyleSheet(popup_qss()); self.setFixedWidth(300)
+        if not composited: round_window_shape(self, 18)
+        self.timer=QTimer(self); self.timer.setSingleShot(True); self.timer.timeout.connect(self.hide)
+
+    def show_notice(self, icon, title, value=None):
+        self.setStyleSheet(popup_qss())
+        self.pic.setPixmap(get_icon(icon, 'dialog-information').pixmap(30, 30))
+        self.title.setText(_(title))
+        self.bar.setVisible(value is not None); self.value.setVisible(value is not None)
+        if value is not None:
+            self.bar.set_value(value); self.value.setText(f'{int(value)}%')
+        self.adjustSize()
+        p=self.panel
+        self.move(p.popup_position(self.width(), self.height(), p.mapToGlobal(p.rect().center()), gap=18))
+        self.show(); self.raise_(); self.timer.start(1600)
 
 
 class TouchpadPopup(PopupFrame):
@@ -3643,6 +3706,12 @@ class EdukaPanel(QWidget):
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
         self.build_ui(); translate_tree(self); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
+        self._osd=None; self._cmd_server=None; QTimer.singleShot(400, self.start_command_socket)
+        # Memory (0.11 RC3): a warning before the computer starts to freeze,
+        # and the panel gives freed memory back when the memory saver is on.
+        self._mem_warned=0.0; self.mem_timer=QTimer(self); self.mem_timer.setInterval(30000)
+        self.mem_timer.timeout.connect(self.check_memory); self.mem_timer.start()
+        QTimer.singleShot(60000, self.save_memory)
         QApplication.instance().aboutToQuit.connect(self.notifications.stop)
         # Eduka-Panel shows every notification itself (LXQt's daemon is stopped).
         self.notify_server=NotificationServer(self, self.notifications)
@@ -3852,7 +3921,8 @@ class EdukaPanel(QWidget):
             x=screen.x()+int((screen.width()-w)/2)
             y=screen.y()+gap if edge == 'Top' else screen.y()+screen.height()-h-gap
             self.setGeometry(x,y,w,h); self.setFixedSize(w,h); self.thickness=h
-        radius=0 if shape == 'full' else int(min(self.width(), self.height())/2.3); bg_alpha=int(alpha*255)
+        corners=panel_corners(cfg)
+        radius=0 if shape == 'full' else panel_corner_radius(corners, self.width(), self.height()); bg_alpha=int(alpha*255)
         if self._composited:
             self.clearMask()
         else:
@@ -3860,6 +3930,9 @@ class EdukaPanel(QWidget):
             path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), radius, radius)
             self.setMask(QRegion(path.toFillPolygon().toPolygon()))
         sb=max(13,int(h/2.7)); fs=11 if h < 46 else 12
+        tray_r=max(12,int(h/2.6))
+        if corners == 'soft': sb, tray_r = 9, 9
+        elif corners == 'square': sb, tray_r = 4, 4
         # 0.9.16 look: bright surface, accent start button, flat task buttons
         # with an accent indicator. Plain stylesheets only (no effects), so it
         # stays smooth on 2 GB / 2017 computers.
@@ -3868,7 +3941,7 @@ class EdukaPanel(QWidget):
         QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton{{background:transparent;border:0;border-radius:10px;padding:4px;color:#183c35;}} QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover{{background:rgba(0,168,121,26);}} QPushButton#launcherButton:pressed,QPushButton#trayButton:pressed{{background:rgba(0,168,121,48);}} QPushButton#clockButton:hover{{background:rgba(0,168,121,26);}} QPushButton#clockButton:pressed{{background:rgba(0,168,121,48);}}
         QPushButton#taskButton{{background:transparent;border:1px solid transparent;border-bottom:3px solid transparent;border-radius:11px;padding:5px 10px;color:#183c35;font-weight:600;text-align:left;}} QPushButton#taskButton:hover{{background:rgba(0,168,121,22);border:1px solid rgba(0,168,121,40);border-bottom:3px solid rgba(0,168,121,90);}} QPushButton#taskButton:pressed{{background:rgba(0,168,121,40);}} QPushButton#taskButton[activeTask="true"]{{background:rgba(0,168,121,34);border:1px solid rgba(0,168,121,70);border-bottom:3px solid #00a879;color:#0f2c26;}}
         QPushButton#desktopButton{{background:transparent;border:0;border-left:1px solid rgba(90,130,120,80);border-radius:0;margin:6px 0;}} QPushButton#desktopButton:hover{{background:rgba(0,168,121,60);}}
-        QFrame#trayGroup{{background:rgba(255,255,255,{min(210, bg_alpha+40)});border:1px solid rgba(0,120,90,28);border-radius:{max(12,int(h/2.6))}px;}}
+        QFrame#trayGroup{{background:rgba(255,255,255,{min(210, bg_alpha+40)});border:1px solid rgba(0,120,90,28);border-radius:{tray_r}px;}}
         QPushButton#batteryButton{{background:rgba(0,168,121,38);border:0;border-radius:12px;padding:5px 8px;color:#008f68;font-weight:700;}}
         QPushButton#clockButton{{background:transparent;border:0;border-radius:10px;padding:0px 8px;color:#183c35;font-weight:700;font-size:{fs}px;}} QLabel#langLabel{{color:#183c35;font-weight:700;padding:0 4px;}}''')
         if high_contrast:
@@ -4339,6 +4412,11 @@ class EdukaPanel(QWidget):
         for key, label in PANEL_STYLES:
             act=shape_menu.addAction(QIcon(panel_style_preview(key, 48, 30, theme_accent(), is_dark_theme())), label); act.setCheckable(True); act.setChecked(key == current_shape); group3.addAction(act)
             act.triggered.connect(lambda _=False, k=key: (save_panel_config({'panel_style': k}), self.load_config(), self.update_tasks()))
+        ends_menu=m.addMenu(get_icon('draw-rectangle', ['transform-scale']), 'Panel Ends')
+        group4=QActionGroup(ends_menu); current_ends=panel_corners(self.current_cfg)
+        for key, label in PANEL_CORNERS:
+            act=ends_menu.addAction(label); act.setCheckable(True); act.setChecked(key == current_ends); group4.addAction(act)
+            act.triggered.connect(lambda _=False, k=key: (save_panel_config({'panel_corners': k}), self.load_config(), self.update_tasks()))
         style_menu=m.addMenu(get_icon('view-list-icons'), 'Taskbar Buttons')
         group2=QActionGroup(style_menu)
         for label in ['Icon and Text', 'Icon only', 'Text only']:
@@ -5216,7 +5294,7 @@ class EdukaPanel(QWidget):
         if time.monotonic() - self._action_center_closed_at < 0.3:
             return
         ac=ActionCenter(self); self.action_center=ac
-        ac.destroyed.connect(lambda *_: setattr(self, 'action_center', None))
+        ac.destroyed.connect(lambda *_: (setattr(self, 'action_center', None), QTimer.singleShot(4000, self.save_memory)))
         ac.place(); ac.show(); ac.activateWindow()
         QTimer.singleShot(0, ac.place)   # final size is known once shown
         self.clock.set_ac_open(True); self.clock.setToolTip('Click to close the Action Center')
@@ -5295,6 +5373,99 @@ class EdukaPanel(QWidget):
     def calendar_popup(self):
         self.toggle_action_center()
 
+    # ------------------------------------------------------------ commands (0.11 RC3)
+    def start_command_socket(self):
+        """eduka-shortcut asks Eduka-Panel through a socket in the private
+        runtime folder: action-center, notifications, osd volume | mic |
+        touchpad-on | touchpad-off."""
+        try:
+            path=str(RUNTIME_DIR/'panel.sock')
+            QLocalServer.removeServer(path)
+            srv=QLocalServer(self); srv.setSocketOptions(QLocalServer.UserAccessOption)
+            if not srv.listen(path):
+                return
+            srv.newConnection.connect(lambda: self._command_connection(srv))
+            self._cmd_server=srv
+        except Exception:
+            pass
+
+    def _command_connection(self, srv):
+        while srv.hasPendingConnections():
+            sock=srv.nextPendingConnection()
+            buf={'data': b''}
+            def read(s=sock, b=buf):
+                try:
+                    b['data']+=bytes(s.readAll())
+                except RuntimeError:
+                    return
+                b['data']=b['data'][-400:]
+                while b'\n' in b['data']:
+                    line, b['data']=b['data'].split(b'\n', 1)
+                    cmd=line.decode('utf-8', 'ignore').strip()[:100]
+                    if cmd: QTimer.singleShot(0, lambda c=cmd: self.run_command(c))
+            # Data that came with the connection does not raise readyRead again.
+            sock.readyRead.connect(read)
+            sock.disconnected.connect(lambda s=sock, r=read: (r(), s.deleteLater()))
+            QTimer.singleShot(0, read)
+
+    def run_command(self, cmd):
+        if cmd == 'action-center':
+            self.toggle_action_center()
+        elif cmd == 'notifications':
+            self.notification_popup()
+        elif cmd.startswith('osd '):
+            self.show_osd(cmd[4:].strip())
+        elif cmd == 'trim':
+            self.save_memory(force=True)
+
+    def save_memory(self, force=False):
+        """Memory saver: give freed memory back to the system (and the drawn
+        icons when the computer is short of memory)."""
+        try:
+            import eduka_memory as em
+            if force or em.read_prefs()['saver']:
+                em.trim(qt=force or em.pressure() != 'ok')
+        except Exception:
+            pass
+
+    def check_memory(self):
+        try:
+            import eduka_memory as em
+            s=em.summary(); state=em.pressure(s)
+        except Exception:
+            return
+        if state == 'ok':
+            return
+        self.save_memory(force=True)
+        if state != 'critical' or time.monotonic()-self._mem_warned < 600 or not em.read_prefs()['warn']:
+            return
+        self._mem_warned=time.monotonic()
+        try:
+            top=[g for g in em.top_programs(4) if not g['protected']]
+        except Exception:
+            top=[]
+        body=_('Only {n} MB of memory is free. Close programs you do not use, or the computer may become slow.').replace('{n}', str(int(s['available'])))
+        if top:
+            body+=' '+_('{name} uses the most ({mb} MB).').replace('{name}', top[0]['name']).replace('{mb}', str(int(top[0]['mb'])))
+        self.notify_server.notify_local(_('Memory is almost full'), body, 'dialog-warning',
+                                        [('memory', _('Show memory'), lambda: safe_popen(['eduka-settings', '--page', 'memory']))])
+
+    def show_osd(self, kind):
+        if self._osd is None:
+            self._osd=OsdBubble(self)
+        if kind == 'volume':
+            o=_run_text(['pactl','get-sink-volume','@DEFAULT_SINK@']) or ''
+            m=re.search(r'(\d+)%', o); value=int(m.group(1)) if m else int(self.last_status.get('volume') or 0)
+            muted='yes' in (_run_text(['pactl','get-sink-mute','@DEFAULT_SINK@']) or '').lower()
+            icon='audio-volume-muted' if muted or value == 0 else ('audio-volume-low' if value < 34 else ('audio-volume-medium' if value < 67 else 'audio-volume-high'))
+            self._osd.show_notice(icon, 'Sound off' if muted else 'Volume', None if muted else value)
+            self.last_status['volume']=value; QTimer.singleShot(200, self.update_status_icons)
+        elif kind == 'mic':
+            muted='yes' in (_run_text(['pactl','get-source-mute','@DEFAULT_SOURCE@']) or '').lower()
+            self._osd.show_notice('microphone-sensitivity-muted' if muted else 'audio-input-microphone', 'Microphone off' if muted else 'Microphone on')
+        elif kind in ('touchpad-on', 'touchpad-off'):
+            self._osd.show_notice('input-touchpad', 'Touchpad on' if kind == 'touchpad-on' else 'Touchpad off')
+
 PANEL_LOCK = RUNTIME_DIR/'panel.lock'
 
 def acquire_panel_lock(wait_seconds=3.0):
@@ -5323,7 +5494,15 @@ if __name__ == '__main__':
     if panel_lock is None:
         print('Eduka-Panel is already running.', file=sys.stderr); sys.exit(0)
     install_crash_log('eduka-panel')
+    try:
+        import eduka_memory; eduka_memory.limit_arenas()
+    except Exception:
+        pass
     if in_eduka_session(): wait_for_compositor()
     app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
+    try:
+        import eduka_touch; eduka_touch.enable_long_press(app)   # long press = right click (0.11 RC3)
+    except Exception:
+        pass
     if not panel._fullscreen_hidden: panel.show()
     registry_update('panel', {'pid': os.getpid(), 'running': True}); exit_now(app.exec_())

@@ -5,64 +5,115 @@
 through pkexec (polkit action org.edukasaun.desktop.fingerprint, which always
 asks for an administrator password).
 
-  eduka-fingerprint-apply --enable     pam-auth-update --enable fprintd
-  eduka-fingerprint-apply --disable    pam-auth-update --disable fprintd
-  eduka-fingerprint-apply --status     prints "enabled" or "disabled"
+  eduka-fingerprint-apply --enable     the finger after the password
+  eduka-fingerprint-apply --disable    no fingerprint in the login stack
+  eduka-fingerprint-apply --status     prints password-first, finger-first or off
 
-Only Debian's own PAM profile of libpam-fprintd (/usr/share/pam-configs/fprintd)
-is switched, with Debian's pam-auth-update; nothing else is accepted. The
-login screen, the screen lock, sudo and polkit then accept a finger and still
-accept the password.
+Since 0.11 RC3 Edukasaun OS uses its own PAM profile
+/usr/share/pam-configs/eduka-fingerprint: the password is asked first and
+the finger second. Debian's profile of libpam-fprintd (fprintd) asks for the
+finger first and waits for it, so at the SDDM login screen every typed
+password waited ten seconds on a computer with a reader. Now:
+
+  * type the password: it is checked at once, as always;
+  * leave it empty and press Enter (or the fingerprint button of the login
+    screen): "Place your finger on the reader", then the finger is checked.
+
+The same works for the screen lock, sudo and polkit. Only these two PAM
+profiles are switched, with Debian's pam-auth-update; nothing else is
+accepted. The flag /var/lib/edukasaun-desktop/login/fingerprint tells the
+login screen to show its fingerprint button.
 """
 import os, subprocess, sys
 
-PROFILE = '/usr/share/pam-configs/fprintd'
+DEBIAN_PROFILE = '/usr/share/pam-configs/fprintd'
+EDUKA_PROFILE = '/usr/share/pam-configs/eduka-fingerprint'
 COMMON_AUTH = '/etc/pam.d/common-auth'
 PAM_AUTH_UPDATE = '/usr/sbin/pam-auth-update'
-ACTIONS = {'--enable': '--enable', '--disable': '--disable'}
+FLAG = '/var/lib/edukasaun-desktop/login/fingerprint'
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C.UTF-8', 'DEBIAN_FRONTEND': 'noninteractive'}
 
 
-def enabled():
+def auth_lines():
     try:
         with open(COMMON_AUTH, encoding='utf-8', errors='ignore') as f:
-            return any('pam_fprintd.so' in line and not line.lstrip().startswith('#') for line in f)
+            return [line for line in f if line.strip() and not line.lstrip().startswith('#')]
     except OSError:
-        return False
+        return []
+
+
+def status():
+    """password-first, finger-first or off (common-auth as PAM reads it)."""
+    lines = auth_lines()
+    fp = next((i for i, l in enumerate(lines) if 'pam_fprintd.so' in l), None)
+    if fp is None:
+        return 'off'
+    unix = next((i for i, l in enumerate(lines) if 'pam_unix.so' in l), None)
+    return 'password-first' if unix is not None and unix < fp else 'finger-first'
+
+
+def pam_auth_update(*args):
+    r = subprocess.run([PAM_AUTH_UPDATE, *args], env=ENV, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=120)
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+    if r.returncode != 0 and r.stderr:
+        sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+def write_flag(on):
+    try:
+        if on:
+            os.makedirs(os.path.dirname(FLAG), exist_ok=True)
+            tmp = FLAG + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write('on\n')
+            os.chmod(tmp, 0o644); os.replace(tmp, FLAG)
+        elif os.path.lexists(FLAG):
+            os.remove(FLAG)
+    except OSError:
+        pass
 
 
 def main(argv):
-    if len(argv) != 1 or argv[0] not in (*ACTIONS, '--status'):
+    if len(argv) != 1 or argv[0] not in ('--enable', '--disable', '--status'):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     if argv[0] == '--status':
-        print('enabled' if enabled() else 'disabled')
+        print(status())
         return 0
     if os.geteuid() != 0:
         print('eduka-fingerprint-apply must run as root (pkexec).', file=sys.stderr)
         return 1
-    if not os.path.isfile(PROFILE):
-        print('libpam-fprintd is not installed (no PAM profile fprintd).', file=sys.stderr)
-        return 3
     if not os.access(PAM_AUTH_UPDATE, os.X_OK):
         print('pam-auth-update is not installed.', file=sys.stderr)
         return 3
-    env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C.UTF-8', 'DEBIAN_FRONTEND': 'noninteractive'}
     try:
-        r = subprocess.run([PAM_AUTH_UPDATE, ACTIONS[argv[0]], 'fprintd'], env=env, stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, timeout=120)
+        if argv[0] == '--enable':
+            if not os.path.isfile(DEBIAN_PROFILE):
+                print('libpam-fprintd is not installed (no PAM module for fingerprints).', file=sys.stderr)
+                return 3
+            if not os.path.isfile(EDUKA_PROFILE):
+                print('The Edukasaun PAM profile eduka-fingerprint is missing.', file=sys.stderr)
+                return 3
+            pam_auth_update('--disable', 'fprintd')
+            code = pam_auth_update('--enable', 'eduka-fingerprint')
+            ok = code == 0 and status() == 'password-first'
+        else:
+            for profile, path in (('eduka-fingerprint', EDUKA_PROFILE), ('fprintd', DEBIAN_PROFILE)):
+                if os.path.isfile(path):
+                    pam_auth_update('--disable', profile)
+            ok = status() == 'off'
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f'pam-auth-update failed: {e}', file=sys.stderr)
         return 1
-    if r.stdout:
-        sys.stdout.write(r.stdout)
-    if r.stderr:
-        sys.stderr.write(r.stderr)
-    want = argv[0] == '--enable'
-    if r.returncode == 0 and enabled() != want:
+    if not ok:
         # pam-auth-update keeps files that were changed by hand.
         print('The PAM files were changed by hand; pam-auth-update left them as they are.', file=sys.stderr)
         return 4
-    return r.returncode
+    write_flag(argv[0] == '--enable')
+    return 0
 
 
 if __name__ == '__main__':

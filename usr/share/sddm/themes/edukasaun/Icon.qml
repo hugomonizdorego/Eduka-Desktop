@@ -83,6 +83,32 @@ Canvas {
         } else if (name === "user") {
             c.arc(cx, h * 0.36, w * 0.18, 0, Math.PI * 2, false); c.fill()
             c.beginPath(); c.arc(cx, h * 0.98, w * 0.36, Math.PI, 0, false); c.fill()
+        } else if (name === "updown") {
+            c.moveTo(w * 0.3, h * 0.4); c.lineTo(cx, h * 0.2); c.lineTo(w * 0.7, h * 0.4)
+            c.moveTo(w * 0.3, h * 0.6); c.lineTo(cx, h * 0.8); c.lineTo(w * 0.7, h * 0.6)
+            c.stroke()
+        } else if (name === "osk") {
+            // keyboard that comes up from the bottom (on-screen keyboard)
+            c.lineWidth = Math.max(1.2, w * 0.07)
+            var ox = w * 0.08, oy = h * 0.44, ow = w * 0.84, oh = h * 0.44, orr = w * 0.07
+            c.moveTo(ox + orr, oy); c.lineTo(ox + ow - orr, oy); c.quadraticCurveTo(ox + ow, oy, ox + ow, oy + orr)
+            c.lineTo(ox + ow, oy + oh - orr); c.quadraticCurveTo(ox + ow, oy + oh, ox + ow - orr, oy + oh)
+            c.lineTo(ox + orr, oy + oh); c.quadraticCurveTo(ox, oy + oh, ox, oy + oh - orr)
+            c.lineTo(ox, oy + orr); c.quadraticCurveTo(ox, oy, ox + orr, oy)
+            c.stroke()
+            var od = w * 0.07
+            for (var k = 0; k < 4; k++) { c.fillRect(w * (0.22 + k * 0.186) - od / 2, h * 0.57 - od / 2, od, od) }
+            c.beginPath(); c.moveTo(w * 0.32, h * 0.75); c.lineTo(w * 0.68, h * 0.75)
+            c.moveTo(w * 0.36, h * 0.26); c.lineTo(cx, h * 0.12); c.lineTo(w * 0.64, h * 0.26)
+            c.stroke()
+        } else if (name === "finger") {
+            // fingerprint: arcs around a centre
+            c.lineWidth = Math.max(1.1, w * 0.06)
+            for (var f = 0; f < 4; f++) {
+                var fr = w * (0.1 + f * 0.1)
+                c.beginPath(); c.arc(cx, cy + h * 0.06, fr, Math.PI * (1.05 + f * 0.02), Math.PI * (1.95 - f * 0.02) + (f > 1 ? Math.PI * 0.5 : 0), false); c.stroke()
+            }
+            c.beginPath(); c.moveTo(cx, cy + h * 0.06); c.lineTo(cx, cy + h * 0.3); c.stroke()
         } else if (name === "plus") {
             c.moveTo(cx, h * 0.22); c.lineTo(cx, h * 0.78); c.moveTo(w * 0.22, cy); c.lineTo(w * 0.78, cy)
             c.stroke()

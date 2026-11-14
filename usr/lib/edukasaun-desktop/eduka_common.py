@@ -23,10 +23,10 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.11 RC2"
-# Debian package version: release candidate 1 of 0.11 (a "~" sorts before
-# the final 0.11.0 and after 0.10.0~beta3).
-DEB_VERSION = "0.11.0~rc2"
+VERSION = "0.11 RC3"
+# Debian package version: release candidate 3 of 0.11 (a "~" sorts before
+# the final 0.11.0 and after 0.11.0~rc2).
+DEB_VERSION = "0.11.0~rc3"
 SETTINGS_REVISION = "0.9.6-transparency"
 # 0.11: the official Edukasaun OS logo and "MENU" on the start button.
 BRAND_REVISION = "0.11-official-logo"
@@ -1720,6 +1720,35 @@ def panel_style_preview(style, w=96, h=60, accent='#00a879', dark=False):
     p.end()
     return pix
 
+# The ends of Eduka-Panel (0.11 RC3): oval as before, rounded or square.
+PANEL_CORNERS = [('round', 'Oval'), ('soft', 'Rounded'), ('square', 'Square')]
+
+def panel_corner_preview(corners, w=96, h=40, accent='#00a879', dark=False):
+    """Small picture of a floating panel with oval, rounded or square ends."""
+    from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen
+    from PyQt5.QtCore import Qt, QRectF
+    pix=QPixmap(w, h); pix.fill(Qt.transparent)
+    p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
+    r=QRectF(4, h/2-9, w-8, 18)
+    rad={'round': 9, 'soft': 5, 'square': 0.5}.get(corners, 9)
+    bar=QColor('#ffffff' if not dark else '#505a57')
+    p.setPen(QPen(QColor('#7a8f89'), 1.4)); p.setBrush(bar); p.drawRoundedRect(r, rad, rad)
+    p.setPen(Qt.NoPen); p.setBrush(QColor(accent))
+    srad={'round': 5, 'soft': 3, 'square': 1}.get(corners, 5)
+    p.drawRoundedRect(QRectF(r.x()+4, r.y()+3.5, 20, r.height()-7), srad, srad)
+    p.setBrush(QColor('#7a8f89')); p.drawRoundedRect(QRectF(r.right()-22, r.y()+4, 18, r.height()-8), srad, srad)
+    p.end()
+    return pix
+
+def panel_corners(cfg=None):
+    value=str((cfg or read_panel_config()).get('panel_corners', 'round'))
+    return value if value in dict(PANEL_CORNERS) else 'round'
+
+def panel_corner_radius(corners, width, height):
+    """Radius of the panel ends in pixels."""
+    full=int(min(width, height)/2.3)
+    return {'soft': min(12, full), 'square': 0}.get(corners, full)
+
 def panel_style(cfg=None):
     value=str((cfg or read_panel_config()).get('panel_style', 'floating'))
     return value if value in dict(PANEL_STYLES) else 'floating'
@@ -3054,7 +3083,47 @@ def launch_entry(app):
     """Start an application of the application list (Terminal= and Path=
     of its .desktop file are used)."""
     app=app or {}
+    record_launch(app)
     return launch_app(app.get('exec', ''), app.get('name', ''), bool(app.get('terminal')), app.get('workdir', ''), clean=False)
+
+# How often programs are started from Eduka (0.11 RC3): Eduka-Quick fills its
+# free slices with the programs used most. Only desktop ids and counts are
+# kept, in the cache of the account.
+USAGE_PATH = CACHE_DIR/'app-usage.json'
+
+def read_usage():
+    try:
+        data=json.loads(USAGE_PATH.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def record_launch(app):
+    did=str((app or {}).get('desktop_id') or '')
+    if not did:
+        return
+    try:
+        data=read_usage(); now=time.time()
+        entry=data.get(did) if isinstance(data.get(did), dict) else {}
+        # Older starts count less (half after about a month).
+        age=max(0.0, now-float(entry.get('last', now)))
+        score=float(entry.get('score', 0.0))*(0.5 ** (age/(30*86400)))+1.0
+        data[did]={'score': round(score, 4), 'last': int(now)}
+        if len(data) > 300:
+            for key in sorted(data, key=lambda k: data[k].get('score', 0))[:len(data)-300]:
+                data.pop(key, None)
+        USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp=USAGE_PATH.with_suffix('.tmp'); tmp.write_text(json.dumps(data), encoding='utf-8'); os.replace(tmp, USAGE_PATH)
+    except Exception:
+        pass
+
+def most_used_ids(limit=12):
+    data=read_usage(); now=time.time()
+    def score(item):
+        entry=item[1] if isinstance(item[1], dict) else {}
+        age=max(0.0, now-float(entry.get('last', now)))
+        return float(entry.get('score', 0.0))*(0.5 ** (age/(30*86400)))
+    return [k for k, _v in sorted(data.items(), key=score, reverse=True)[:limit]]
 
 def current_desktops():
     """Desktop names for OnlyShowIn / NotShowIn (Eduka runs on LXQt)."""
@@ -3582,7 +3651,38 @@ SESSION_COMMANDS = {
     'shutdown': [_LXQT_SESSION+['org.lxqt.session.powerOff'], ['systemctl','poweroff']],
     'restart': [_LXQT_SESSION+['org.lxqt.session.reboot'], ['systemctl','reboot']],
     'suspend': [['systemctl','suspend']],
+    'hibernate': [['systemctl','hibernate']],
 }
+
+def _logind_can(method):
+    """'yes', 'no', 'challenge', 'na' … from systemd-logind (CanSuspend,
+    CanHibernate); '' when logind cannot be asked."""
+    if not shutil.which('busctl'):
+        return ''
+    try:
+        out=subprocess.run(['busctl', 'call', 'org.freedesktop.login1', '/org/freedesktop/login1',
+                            'org.freedesktop.login1.Manager', method], capture_output=True, text=True, timeout=3)
+        m=re.search(r'"([a-z-]+)"', out.stdout or '')
+        return m.group(1) if out.returncode == 0 and m else ''
+    except Exception:
+        return ''
+
+def can_suspend():
+    answer=_logind_can('CanSuspend')
+    if answer:
+        return answer in ('yes', 'challenge')
+    try:
+        return 'mem' in Path('/sys/power/state').read_text()
+    except Exception:
+        return False
+
+def can_hibernate():
+    """Hibernate needs a swap space as big as the memory and a resume
+    setting; logind knows whether this computer has both."""
+    answer=_logind_can('CanHibernate')
+    if answer:
+        return answer in ('yes', 'challenge')
+    return False
 
 def session_action(action):
     """Run the first available command for a session action (a missing

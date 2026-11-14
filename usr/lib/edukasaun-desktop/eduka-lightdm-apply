@@ -52,16 +52,20 @@ DM_BINARIES = {'lightdm': '/usr/sbin/lightdm', 'sddm': '/usr/bin/sddm'}
 MAX_IMAGE = 25 * 1024 * 1024
 DEFAULT_ACCENT = {'pastel': '#3fa684', 'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
 
-# The login card of every style: the colors of the SDDM theme (Main.qml).
+# The glass cards of every style: the colors of the SDDM theme (Main.qml,
+# 0.11 RC3). The fields are filled with the accent color, as on SDDM.
 PALETTES = {
-    'pastel': dict(card='rgba(252,254,253,0.96)', card_border='#d9eae3', field='#ffffff', field_border='#cfe3db',
-                   text='#24403a', sub='#5d7671', bar='rgba(237,247,242,0.90)', hover='rgba(63,166,132,0.12)', middle='#edf7f2'),
-    'light': dict(card='rgba(255,255,255,0.95)', card_border='rgba(255,255,255,0.85)', field='#ffffff', field_border='#d3e0db',
-                  text='#10231e', sub='#5b6e69', bar='rgba(255,255,255,0.90)', hover='rgba(0,120,90,0.10)', middle='#8fcf7a'),
-    'dark': dict(card='rgba(32,35,34,0.92)', card_border='rgba(255,255,255,0.20)', field='#2e3432', field_border='rgba(255,255,255,0.25)',
-                 text='#ffffff', sub='rgba(255,255,255,0.70)', bar='rgba(32,35,34,0.85)', hover='rgba(255,255,255,0.10)', middle='#1f2a28'),
-    'glass': dict(card='rgba(255,255,255,0.55)', card_border='rgba(255,255,255,0.90)', field='rgba(255,255,255,0.85)',
-                  field_border='rgba(255,255,255,0.95)', text='#10231e', sub='#4b5e59', bar='rgba(255,255,255,0.50)',
+    'pastel': dict(card_top='rgba(255,255,255,0.86)', card_bottom='rgba(255,255,255,0.66)', card_border='rgba(255,255,255,0.95)',
+                   text='#1f3d36', sub='#557069', chip='rgba(255,255,255,0.74)', chip_border='rgba(255,255,255,0.95)',
+                   hover='rgba(63,166,132,0.16)', middle='#edf7f2'),
+    'light': dict(card_top='rgba(255,255,255,0.92)', card_bottom='rgba(255,255,255,0.78)', card_border='rgba(255,255,255,0.95)',
+                  text='#10231e', sub='#4d625c', chip='rgba(255,255,255,0.80)', chip_border='rgba(255,255,255,0.95)',
+                  hover='rgba(0,120,90,0.12)', middle='#8fcf7a'),
+    'dark': dict(card_top='rgba(38,46,44,0.84)', card_bottom='rgba(21,27,26,0.74)', card_border='rgba(255,255,255,0.18)',
+                 text='#ffffff', sub='rgba(255,255,255,0.70)', chip='rgba(32,38,37,0.80)', chip_border='rgba(255,255,255,0.16)',
+                 hover='rgba(255,255,255,0.10)', middle='#1f2a28'),
+    'glass': dict(card_top='rgba(255,255,255,0.62)', card_bottom='rgba(255,255,255,0.42)', card_border='rgba(255,255,255,0.85)',
+                  text='#10231e', sub='#3f5550', chip='rgba(255,255,255,0.58)', chip_border='rgba(255,255,255,0.88)',
                   hover='rgba(255,255,255,0.35)', middle='#7fb9dc'),
 }
 
@@ -83,43 +87,62 @@ def on_accent(accent):
     return '#10231e' if (0.299 * r + 0.587 * g + 0.114 * b) > 170 else '#ffffff'
 
 
+def field_color(accent):
+    """The accent a little darker (Qt.darker(accent, 1.18) of Main.qml), so
+    white text on the fields stays readable."""
+    r, g, b = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+    return '#%02x%02x%02x' % tuple(max(0, min(255, round(c / 1.18))) for c in (r, g, b))
+
+
 def greeter_css(style, accent):
-    """The login card of lightdm-gtk-greeter (and the menus and entries of
-    slick-greeter) in the colors of the SDDM login screen."""
-    p = dict(PALETTES[style], accent=accent, on_accent=on_accent(accent), style=style)
+    """lightdm-gtk-greeter: a glass card with the fields in the accent color
+    and the panel as glass chips; slick-greeter: the same password field.
+    The colors are those of the SDDM login screen (Main.qml, 0.11 RC3)."""
+    p = dict(PALETTES[style], accent=accent, on_accent=on_accent(accent), field=field_color(accent), style=style)
     return '''/* Edukasaun login (LightDM): {style} style, accent {accent}.
    Written by Eduka-Settings → Login & Fingerprint → LightDM; replaced on every change. */
-#panel_window {{ background-color: {bar}; background-image: none; color: {text}; box-shadow: none; border: none; }}
-#panel_window menubar, #panel_window #menubar {{ background: transparent; background-image: none; box-shadow: none; border: none; padding: 0 6px; }}
-#panel_window menubar > menuitem {{ color: {text}; padding: 4px 10px; border-radius: 8px; }}
-#panel_window menubar > menuitem:hover {{ background-color: {hover}; }}
-#panel_window menubar > menuitem label, #panel_window label {{ color: {text}; font-weight: bold; }}
-#login_window, #power_window {{ background-color: {card}; background-image: none; border: 1px solid {card_border};
-  border-radius: 18px; box-shadow: none; color: {text}; padding: 8px; margin: 0; }}
+/* The panel: no bar, every indicator is a glass chip. */
+#panel_window {{ background-color: transparent; background-image: none; color: {text}; box-shadow: none; border: none; }}
+#panel_window menubar, #panel_window #menubar {{ background: transparent; background-image: none; box-shadow: none; border: none; padding: 8px 12px; }}
+#panel_window menubar > separator {{ background: transparent; border: none; min-height: 0; margin: 0; }}
+#panel_window menubar > menuitem {{ background-color: {chip}; border: 1px solid {chip_border}; border-radius: 999px;
+  padding: 5px 14px; margin: 0 3px; color: {text}; }}
+#panel_window menubar > menuitem:hover {{ background-color: {accent}; border-color: {accent}; }}
+#panel_window menubar > menuitem label, #panel_window menubar > menuitem image {{ color: {text}; font-weight: bold; }}
+#panel_window menubar > menuitem:hover label, #panel_window menubar > menuitem:hover image {{ color: {on_accent}; }}
+/* The login card. */
+#login_window, #power_window {{ background-color: transparent; background-image: linear-gradient(to bottom, {card_top}, {card_bottom});
+  border: 1px solid {card_border}; border-radius: 26px; box-shadow: none; color: {text}; padding: 12px; margin: 0; }}
 #login_window #content_frame, #power_window #content_frame,
 #login_window #buttonbox_frame, #power_window #buttonbox_frame {{ background: transparent; background-image: none; border: none; box-shadow: none; }}
-#login_window #buttonbox_frame, #power_window #buttonbox_frame {{ padding: 4px 12px 14px 12px; }}
+#login_window #content_frame {{ padding: 8px 14px 2px 14px; }}
+#login_window #buttonbox_frame, #power_window #buttonbox_frame {{ padding: 6px 14px 14px 14px; }}
 #login_window label, #power_window label {{ color: {text}; }}
 #login_window #message_label {{ color: {sub}; }}
 #login_window entry, #login_window combobox button, #login_window combobox box {{ background-color: {field}; background-image: none;
-  color: {text}; border: 1px solid {field_border}; border-radius: 10px; min-height: 34px; box-shadow: none; }}
-#login_window entry {{ padding: 0 10px; }}
-#login_window entry:focus {{ border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}
-#login_window button, #power_window button {{ border-radius: 10px; min-height: 32px; padding: 0 16px; background-image: none;
-  background-color: {field}; color: {text}; border: 1px solid {field_border}; box-shadow: none; }}
-#login_window button label, #power_window button label {{ color: {text}; }}
-#login_window #login_button, #power_window #power_ok_button {{ background-color: {accent}; border-color: {accent}; }}
-#login_window #login_button label, #power_window #power_ok_button label {{ color: {on_accent}; font-weight: bold; }}
-#login_window #login_button:hover, #power_window #power_ok_button:hover {{ background-color: shade({accent}, 1.08); }}
+  color: #ffffff; border: none; border-radius: 16px; min-height: 44px; box-shadow: none; }}
+#login_window combobox button label, #login_window combobox arrow, #login_window combobox cellview {{ color: #ffffff; font-weight: bold; }}
+#login_window entry {{ padding: 0 14px; caret-color: #ffffff; font-weight: bold; }}
+#login_window entry:focus {{ box-shadow: inset 0 0 0 2px #ffffff; }}
+#login_window entry selection {{ background-color: #ffffff; color: {field}; }}
+#login_window entry image {{ color: #ffffff; }}
+#login_window button, #power_window button {{ border-radius: 999px; min-height: 38px; padding: 0 20px; background-image: none;
+  background-color: {chip}; color: {text}; border: 1px solid {chip_border}; box-shadow: none; }}
+#login_window button label, #power_window button label {{ color: {text}; font-weight: bold; }}
+#login_window #login_button, #power_window #power_ok_button {{ background-color: {field}; border-color: {field}; }}
+#login_window #login_button label, #power_window #power_ok_button label {{ color: #ffffff; }}
+#login_window #login_button:hover, #power_window #power_ok_button:hover {{ background-color: {accent}; border-color: {accent}; }}
+#login_window #login_button:hover label, #power_window #power_ok_button:hover label {{ color: {on_accent}; }}
 #login_window button:focus {{ box-shadow: 0 0 0 2px alpha({accent}, 0.45); }}
-#user_image {{ border-radius: 50%; padding: 3px; background-color: {field}; border: 2px solid {accent}; }}
+#user_image {{ border-radius: 50%; padding: 4px; background-color: #ffffff; border: 3px solid {accent}; }}
 #user_image_border {{ background: transparent; border: none; }}
-#greeter_infobar {{ border-radius: 10px; }}
-/* slick-greeter draws white names on dark boxes: its prompts are light too. */
-entry.lightdm {{ color: #ffffff; caret-color: #ffffff; background-color: rgba(255,255,255,0.14); background-image: none;
-  border: 1px solid rgba(255,255,255,0.45); border-radius: 8px; box-shadow: none; }}
-entry.lightdm:focus {{ border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}
-entry.lightdm image {{ color: #ffffff; }}
+#greeter_infobar {{ border-radius: 14px; }}
+/* slick-greeter draws its own dark boxes: a white field with the accent
+   around it keeps the grey hint text ("Password") readable. */
+entry.lightdm {{ color: #1f3d36; caret-color: {field}; background-color: rgba(255,255,255,0.94); background-image: none;
+  border: 2px solid {accent}; border-radius: 12px; box-shadow: none; font-weight: bold; }}
+entry.lightdm:focus {{ border-color: {field}; box-shadow: 0 0 0 2px alpha({accent}, 0.45); }}
+entry.lightdm image {{ color: {field}; }}
 entry.lightdm selection {{ background-color: {accent}; color: {on_accent}; }}
 '''.format(**p)
 

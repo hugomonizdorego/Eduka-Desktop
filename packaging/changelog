@@ -1,3 +1,69 @@
+edukasaun-desktop-menu (0.11.0~rc3) trixie; urgency=medium
+
+  * Release candidate 3 of 0.11.
+  * Login screen (SDDM) redesigned: glass "bento" cards in the Eduka
+    colors (sign in, clock and greeting, profile picture and date, system)
+    with a rail for language, keyboard layout, on-screen keyboard and
+    accessibility; sleep, hibernate, restart and shut down are one click.
+    Account pictures, or the first letter of the name in a color. Scales
+    to small laptops, tablets standing up and large monitors; all styles,
+    high contrast and larger text kept. A fingerprint button appears when
+    fingerprint login is on.
+  * LightDM: lightdm-gtk-greeter and slick-greeter get the glass look
+    (accent fields, glass chips in the panel) and new backgrounds with the
+    colored lights of the SDDM theme. In Eduka-Settings they are optional
+    third-party greeters: "Install..." opens a terminal with apt, and a
+    greeter can be chosen once it is installed.
+  * Leave screen: one click on Lock, Log Out, Sleep, Hibernate, Restart or
+    Shut Down runs it; no countdown and no small buttons.
+  * Action Center: Sync time moved to the top bar, away from the clock.
+  * Eduka-Panel: the ends can be oval, rounded or square (Eduka-Settings
+    and the right-click menu "Panel Ends").
+  * Eduka-Quick: see-through glass look like an infographic ring, on or off
+    in Eduka-Settings, hold and drag to move it (it opens there again),
+    4 to 12 slices, free slices filled with the programs used most, and
+    right-click a program in Eduka-Desktop -> Add to Eduka-Quick.
+  * Keyboard shortcuts: the LXQt shortcuts and the Windows shortcuts
+    together without clashes (eduka_shortcuts.py, eduka-shortcut):
+    Super+E/D/M/L/I/A/N/R/S/P/U, Super+arrows (snap, maximize, restore),
+    Super+Shift+arrows (other screen), Ctrl+Super+arrows (workspaces),
+    Super+Shift+S, Alt+Print, Super+Print, Ctrl+Shift+Esc, Ctrl+Alt+Del,
+    Ctrl+Super+Enter/O and the volume, microphone, media, calculator and
+    touchpad keys, with a volume notice above Eduka-Panel. Keys used by
+    LXQt, the user or the window manager are never taken; dead keys of
+    lxqt-panel are turned off. New tab Keyboard -> Shortcuts.
+  * Devices (eduka_device.py): laptop, desktop, tablet, convertible or
+    virtual machine; built-in, USB and Bluetooth keyboards. Num Lock
+    "Automatic": on for desktop computers, off for laptops unless a USB
+    keyboard is connected.
+  * Display scale 75, 100, 125, 150, 175 or 200 % (new page Display) for
+    Qt, LXQt and GTK programs; a sharp screen gets the recommended scale
+    at the first login of an account.
+  * Fingerprint: every reader on USB is found and checked against the
+    list of libfprint, with hints for readers it does not support yet;
+    "Install fingerprint support...". The Edukasaun PAM profile
+    eduka-fingerprint asks for the password first and the finger second,
+    so a typed password no longer waits ten seconds at SDDM; postinst
+    moves computers with Debian's order over once. A forgotten password
+    can be replaced after logging in with a finger (polkit action
+    org.edukasaun.desktop.reset-own-password, auth_self).
+  * Memory (eduka_memory.py, new tab Maintenance -> Memory): memory
+    saver in Eduka-Panel and Eduka-Desktop (two malloc arenas, memory
+    given back after closing), a warning before the memory is full with
+    the biggest program, the programs using the most memory, and zram and
+    earlyoom through the helper eduka-memory-apply (polkit
+    org.edukasaun.desktop.memory).
+  * Touch (eduka_touch.py): gestures with three and four fingers on touch
+    screens and touchpads (Touchegg), a long press opens the context menu
+    in Eduka's programs, smooth finger scrolling in Firefox
+    (MOZ_USE_XINPUT2), and on a tablet without a keyboard the on-screen
+    keyboard at the first login.
+  * Packaging: recommends zram-tools, earlyoom and touchegg; PAM profile
+    /usr/share/pam-configs/eduka-fingerprint; manual page for
+    eduka-shortcut; translations for Portuguese, Indonesian and Tetun.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Sat, 14 Nov 2026 12:00:00 +0000
+
 edukasaun-desktop-menu (0.11.0~rc2) trixie; urgency=medium
 
   * Release candidate 2 of 0.11, close to the final stable version.

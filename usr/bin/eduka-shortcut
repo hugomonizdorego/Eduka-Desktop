@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""eduka-shortcut ACTION: what the keyboard shortcuts of Eduka-Desktop do.
+
+lxqt-globalkeysd runs it for the shortcuts Eduka adds (Eduka-Settings →
+Keyboard → Shortcuts lists them). Window actions use the standard window
+manager hints (wmctrl, xdotool), so they work with xfwm4, Openbox, KWin and
+others; sound uses PipeWire or PulseAudio. Window and sound actions start
+fast: they do not load Qt.
+
+  eduka-shortcut --list    the actions
+"""
+import os, re, shutil, socket, subprocess, sys, tempfile
+from pathlib import Path
+
+LIB = '/usr/lib/edukasaun-desktop'
+if LIB not in sys.path:
+    sys.path.insert(0, LIB)
+
+
+def run(args, timeout=3):
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return r.stdout if r.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def start(args):
+    """Start a program and do not wait for it (no shell)."""
+    if not args or not shutil.which(args[0]):
+        return False
+    try:
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
+def first(names):
+    return next((n for n in names if shutil.which(n)), '')
+
+
+def runtime_dir():
+    base = os.environ.get('XDG_RUNTIME_DIR')
+    if not base or not os.path.isdir(base):
+        base = os.path.join(tempfile.gettempdir(), f'eduka-runtime-{os.getuid()}')
+    return Path(base)/'eduka-desktop'
+
+
+def tell_panel(command):
+    """Ask Eduka-Panel (its command socket, 0.11 RC3). False when it does
+    not run."""
+    path = runtime_dir()/'panel.sock'
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.0)
+            s.connect(str(path))
+            s.sendall((command + '\n').encode('utf-8'))
+        return True
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------- windows
+def active_window():
+    out = run(['xdotool', 'getactivewindow']).strip()
+    return int(out) if out.isdigit() else 0
+
+
+def xprop_ints(wid, prop):
+    out = run(['xprop', '-root', prop] if wid is None else ['xprop', '-id', str(wid), prop])
+    return [int(n) for n in re.findall(r'-?\d+', out.split('=', 1)[1])] if '=' in out else []
+
+
+def normal_window(wid):
+    if not wid:
+        return False
+    out = run(['xprop', '-id', str(wid), '_NET_WM_WINDOW_TYPE'])
+    return not any(t in out for t in ('_NET_WM_WINDOW_TYPE_DESKTOP', '_NET_WM_WINDOW_TYPE_DOCK'))
+
+
+def geometry(wid):
+    out = run(['xdotool', 'getwindowgeometry', '--shell', str(wid)])
+    vals = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+    try:
+        return int(vals['X']), int(vals['Y']), int(vals['WIDTH']), int(vals['HEIGHT'])
+    except (KeyError, ValueError):
+        return None
+
+
+def monitors():
+    """[(x, y, w, h)] of the screens, from left to right."""
+    mons = []
+    for line in run(['xrandr', '--listactivemonitors']).splitlines():
+        m = re.search(r'(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)', line)
+        if m:
+            w, h, x, y = (int(v) for v in m.groups())
+            mons.append((x, y, w, h))
+    if not mons:
+        size = xprop_ints(None, '_NET_DESKTOP_GEOMETRY')
+        mons = [(0, 0, size[0], size[1])] if len(size) >= 2 else [(0, 0, 1366, 768)]
+    return sorted(mons)
+
+
+def work_area(mon):
+    """The part of the screen that panels leave free."""
+    wa = xprop_ints(None, '_NET_WORKAREA')
+    x, y, w, h = mon
+    if len(wa) >= 4:
+        ax, ay, aw, ah = wa[:4]
+        nx, ny = max(x, ax), max(y, ay)
+        nr, nb = min(x + w, ax + aw), min(y + h, ay + ah)
+        if nr - nx > w // 3 and nb - ny > h // 3:
+            return nx, ny, nr - nx, nb - ny
+    return mon
+
+
+def monitor_of(wid, mons):
+    g = geometry(wid)
+    if not g:
+        return 0
+    cx, cy = g[0] + g[2] // 2, g[1] + g[3] // 2
+    for i, (x, y, w, h) in enumerate(mons):
+        if x <= cx < x + w and y <= cy < y + h:
+            return i
+    return min(range(len(mons)), key=lambda i: abs(mons[i][0] + mons[i][2] // 2 - cx))
+
+
+def is_maximized(wid):
+    out = run(['xprop', '-id', str(wid), '_NET_WM_STATE'])
+    return '_NET_WM_STATE_MAXIMIZED_VERT' in out and '_NET_WM_STATE_MAXIMIZED_HORZ' in out
+
+
+def place(wid, x, y, w, h):
+    """Put the window (with its frame) on this rectangle."""
+    fl, fr, ft, fb = (xprop_ints(wid, '_NET_FRAME_EXTENTS') + [0, 0, 0, 0])[:4]
+    run(['wmctrl', '-i', '-r', str(wid), '-b', 'remove,maximized_vert,maximized_horz'])
+    run(['wmctrl', '-i', '-r', str(wid), '-e', f'1,{x},{y},{max(80, w - fl - fr)},{max(60, h - ft - fb)}'])
+
+
+def snap(side):
+    wid = active_window()
+    if not normal_window(wid):
+        return
+    mons = monitors(); i = monitor_of(wid, mons)
+    x, y, w, h = work_area(mons[i])
+    half = w // 2
+    place(wid, x if side == 'left' else x + w - half, y, half, h)
+
+
+def maximize():
+    wid = active_window()
+    if normal_window(wid):
+        run(['wmctrl', '-i', '-r', str(wid), '-b', 'add,maximized_vert,maximized_horz'])
+
+
+def restore():
+    """Super+Down: a maximized window is restored, another one minimized."""
+    wid = active_window()
+    if not normal_window(wid):
+        return
+    if is_maximized(wid):
+        run(['wmctrl', '-i', '-r', str(wid), '-b', 'remove,maximized_vert,maximized_horz'])
+    else:
+        run(['xdotool', 'windowminimize', str(wid)])
+
+
+def to_monitor(step):
+    wid = active_window()
+    mons = monitors()
+    if not normal_window(wid) or len(mons) < 2:
+        return
+    i = monitor_of(wid, mons); j = (i + step) % len(mons)
+    g = geometry(wid)
+    if not g:
+        return
+    was_max = is_maximized(wid)
+    a, b = work_area(mons[i]), work_area(mons[j])
+    rx = (g[0] - a[0]) / max(1, a[2]); ry = (g[1] - a[1]) / max(1, a[3])
+    w, h = min(g[2], b[2]), min(g[3], b[3])
+    x = b[0] + int(rx * b[2]); y = b[1] + int(ry * b[3])
+    x = max(b[0], min(x, b[0] + b[2] - w)); y = max(b[1], min(y, b[1] + b[3] - h))
+    place(wid, x, y, w, h)
+    if was_max:
+        run(['wmctrl', '-i', '-r', str(wid), '-b', 'add,maximized_vert,maximized_horz'])
+
+
+def showing_desktop():
+    return xprop_ints(None, '_NET_SHOWING_DESKTOP')[:1] == [1]
+
+
+def show_desktop(mode='toggle'):
+    on = (not showing_desktop()) if mode == 'toggle' else mode == 'on'
+    run(['wmctrl', '-k', 'on' if on else 'off'])
+
+
+def workspace(step):
+    lines = run(['wmctrl', '-d']).splitlines()
+    if len(lines) < 2:
+        return
+    cur = next((i for i, l in enumerate(lines) if re.match(r'^\s*\d+\s+\*', l)), 0)
+    run(['wmctrl', '-s', str((cur + step) % len(lines))])
+
+
+# ---------------------------------------------------------------- sound
+def sound_tool():
+    return first(('pactl', 'wpctl', 'amixer'))
+
+
+def volume(step=0, mute=None, mic=False):
+    tool = sound_tool()
+    if tool == 'pactl':
+        target = '@DEFAULT_SOURCE@' if mic else '@DEFAULT_SINK@'
+        if mute is not None:
+            run(['pactl', 'set-source-mute' if mic else 'set-sink-mute', target, 'toggle'])
+        else:
+            out = run(['pactl', 'get-sink-volume', target])
+            m = re.search(r'(\d+)%', out)
+            cur = int(m.group(1)) if m else 50
+            run(['pactl', 'set-sink-mute', target, '0'])
+            run(['pactl', 'set-sink-volume', target, f'{max(0, min(100, cur + step))}%'])
+    elif tool == 'wpctl':
+        target = '@DEFAULT_AUDIO_SOURCE@' if mic else '@DEFAULT_AUDIO_SINK@'
+        if mute is not None:
+            run(['wpctl', 'set-mute', target, 'toggle'])
+        else:
+            run(['wpctl', 'set-mute', target, '0'])
+            run(['wpctl', 'set-volume', '-l', '1.0', target, f'{abs(step)}%{"+" if step > 0 else "-"}'])
+    elif tool == 'amixer':
+        ctl = 'Capture' if mic else 'Master'
+        if mute is not None:
+            run(['amixer', '-q', 'set', ctl, 'toggle'])
+        else:
+            run(['amixer', '-q', 'set', ctl, f'{abs(step)}%{"+" if step > 0 else "-"}', 'unmute'])
+    tell_panel('osd mic' if mic else 'osd volume')
+
+
+def media(command):
+    """MPRIS: playerctl when installed, else the first player on the bus."""
+    if shutil.which('playerctl'):
+        run(['playerctl', command]); return
+    method = {'play-pause': 'PlayPause', 'next': 'Next', 'previous': 'Previous', 'stop': 'Stop'}[command]
+    out = run(['dbus-send', '--session', '--print-reply', '--dest=org.freedesktop.DBus', '/org/freedesktop/DBus',
+               'org.freedesktop.DBus.ListNames'])
+    players = re.findall(r'"(org\.mpris\.MediaPlayer2\.[^"]+)"', out)
+    if players:
+        run(['dbus-send', '--session', '--type=method_call', f'--dest={players[0]}', '/org/mpris/MediaPlayer2',
+             f'org.mpris.MediaPlayer2.Player.{method}'])
+
+
+# ---------------------------------------------------------------- programs
+def screenshot(kind):
+    pictures = Path(run(['xdg-user-dir', 'PICTURES']).strip() or Path.home()/'Pictures')/'Screenshots'
+    tool = first(('screengrab', 'flameshot', 'spectacle', 'xfce4-screenshooter', 'gnome-screenshot', 'scrot', 'maim', 'import'))
+    if kind == 'save':
+        pictures.mkdir(parents=True, exist_ok=True)
+        import time
+        target = pictures/time.strftime('Screenshot %Y-%m-%d %H-%M-%S.png')
+        for cmd in ((['scrot', str(target)] if shutil.which('scrot') else None),
+                    (['maim', str(target)] if shutil.which('maim') else None),
+                    (['import', '-window', 'root', str(target)] if shutil.which('import') else None)):
+            if cmd and subprocess.run(cmd, capture_output=True).returncode == 0:
+                try:
+                    import eduka_common
+                    eduka_common.safe_popen(['notify-send', '-i', 'camera-photo', 'Screenshot saved', str(target)])
+                except Exception:
+                    pass
+                return
+        kind = 'full'
+    args = {
+        'screengrab': {'region': ['-r'], 'window': ['-a'], 'full': ['-f']},
+        'flameshot': {'region': ['gui'], 'window': ['gui'], 'full': ['full']},
+        'spectacle': {'region': ['-r'], 'window': ['-a'], 'full': ['-f']},
+        'xfce4-screenshooter': {'region': ['-r'], 'window': ['-w'], 'full': ['-f']},
+        'gnome-screenshot': {'region': ['-a', '-i'], 'window': ['-w', '-i'], 'full': ['-i']},
+        'scrot': {'region': ['-s'], 'window': ['-u'], 'full': []},
+        'maim': {'region': ['-s'], 'window': [], 'full': []},
+        'import': {'region': [], 'window': [], 'full': ['-window', 'root']},
+    }.get(tool, {})
+    if tool in ('scrot', 'maim', 'import'):
+        pictures.mkdir(parents=True, exist_ok=True)
+        import time
+        start([tool, *args.get(kind, []), str(pictures/time.strftime('Screenshot %Y-%m-%d %H-%M-%S.png'))])
+    elif tool:
+        start([tool, *args.get(kind, [])])
+
+
+def files():
+    tool = first(('pcmanfm-qt', 'thunar', 'nautilus', 'caja', 'nemo', 'dolphin'))
+    start([tool] if tool else ['xdg-open', str(Path.home())]) or start(['xdg-open', str(Path.home())])
+
+
+def task_manager():
+    tool = first(('qps', 'lxtask', 'xfce4-taskmanager', 'gnome-system-monitor', 'mate-system-monitor', 'plasma-systemmonitor'))
+    if tool:
+        start([tool]); return
+    from eduka_common import terminal_command
+    start(terminal_command(['htop'] if shutil.which('htop') else ['top']))
+
+
+def touchpad_toggle():
+    """The touchpad key of laptops: on or off, remembered like the switch on
+    Eduka-Settings → Mouse & Touch → Touchpad."""
+    import eduka_input as ei
+    pads = ei.touchpads()
+    if not pads:
+        return
+    on = re.search(r'Device Enabled \(\d+\):\s*1', pads[0].get('props', '')) is not None
+    for pad in pads:
+        run(['xinput', 'set-prop', str(pad['id']), 'Device Enabled', '0' if on else '1'])
+    cfg = ei.input_config(); cfg['tp_enabled'] = not on; ei.save_input_config(cfg)
+    tell_panel('osd touchpad-off' if on else 'osd touchpad-on')
+
+
+def a11y(what):
+    import eduka_a11y as ea
+    if what == 'osk':
+        if subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'onboard'], capture_output=True).returncode == 0:
+            run(['pkill', '-u', str(os.getuid()), '-x', 'onboard'])
+        else:
+            ea.open_onscreen_keyboard()
+    elif what == 'magnifier':
+        ea.open_magnifier()
+    elif what == 'screen-reader':
+        if subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'orca'], capture_output=True).returncode == 0:
+            run(['pkill', '-u', str(os.getuid()), '-x', 'orca'])
+        else:
+            start(['orca', '--replace'])
+
+
+def runner():
+    """Super+R: LXQt's runner (its own key is pressed for it), else the
+    search of Eduka-Desktop."""
+    if shutil.which('lxqt-runner') and shutil.which('xdotool'):
+        conf = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home()/'.config')/'lxqt'/'globalkeyshortcuts.conf'
+        key = 'Alt+F2'
+        try:
+            header = ''
+            for line in conf.read_text(encoding='utf-8', errors='ignore').splitlines():
+                if line.startswith('['):
+                    header = line.strip()[1:-1]
+                elif line.strip() == 'path=/runner/show_hide_dialog' and header:
+                    key = header.rsplit('.', 1)[0].replace('%2B', '+')
+        except OSError:
+            pass
+        mods = {'Shift': 'shift', 'Control': 'ctrl', 'Alt': 'alt', 'Meta': 'super'}
+        parts = key.split('+')
+        combo = '+'.join([mods.get(m, m.lower()) for m in parts[:-1]] + parts[-1:])
+        run(['xdotool', 'key', '--clearmodifiers', combo])
+        return
+    menu('show')
+
+
+def menu(action='toggle'):
+    import time
+    from eduka_common import menu_daemon_alive, send_menu_command, safe_popen
+    if not menu_daemon_alive():
+        safe_popen(['eduka-menu', '--daemon', '--show'] if action != 'hide' else ['eduka-menu', '--daemon'])
+        return
+    send_menu_command(action)
+    time.sleep(0.01)
+
+
+def session(action):
+    from eduka_common import session_action
+    session_action(action)
+
+
+ACTIONS = {
+    'search': lambda: menu('show'),
+    'menu': lambda: menu('toggle'),
+    'run': runner,
+    'show-desktop': lambda: show_desktop('toggle'),
+    'minimize-all': lambda: show_desktop('on'),
+    'restore-all': lambda: show_desktop('off'),
+    'maximize': maximize,
+    'restore': restore,
+    'snap-left': lambda: snap('left'),
+    'snap-right': lambda: snap('right'),
+    'monitor-left': lambda: to_monitor(-1),
+    'monitor-right': lambda: to_monitor(1),
+    'desktop-prev': lambda: workspace(-1),
+    'desktop-next': lambda: workspace(1),
+    'files': files,
+    'browser': lambda: start(['xdg-open', 'about:blank']) if not shutil.which('x-www-browser') else start(['x-www-browser']),
+    'mail': lambda: start([first(('thunderbird', 'evolution', 'claws-mail', 'kmail', 'geary', 'sylpheed'))]),
+    'settings': lambda: start(['eduka-settings']),
+    'accessibility': lambda: start(['eduka-settings', '--page', 'accessibility']),
+    'display': lambda: start([first(('lxqt-config-monitor', 'arandr', 'xfce4-display-settings'))]) or start(['eduka-settings', '--page', 'display']),
+    'action-center': lambda: tell_panel('action-center') or start(['eduka-settings']),
+    'notifications': lambda: tell_panel('notifications'),
+    'emoji': lambda: start([first(('emote', 'gnome-characters', 'kcharselect', 'gucharmap'))]),
+    'calculator': lambda: start([first(('galculator', 'qalculate-gtk', 'qalculate-qt', 'kcalc', 'gnome-calculator', 'mate-calc', 'speedcrunch'))]),
+    'task-manager': task_manager,
+    'leave': lambda: start(['eduka-session-action']),
+    'lock': lambda: session('lock'),
+    'screenshot-region': lambda: screenshot('region'),
+    'screenshot-window': lambda: screenshot('window'),
+    'screenshot-save': lambda: screenshot('save'),
+    'screen-reader': lambda: a11y('screen-reader'),
+    'osk': lambda: a11y('osk'),
+    'magnifier': lambda: a11y('magnifier'),
+    'volume-up': lambda: volume(5),
+    'volume-down': lambda: volume(-5),
+    'volume-mute': lambda: volume(mute=True),
+    'mic-mute': lambda: volume(mute=True, mic=True),
+    'media-play': lambda: media('play-pause'),
+    'media-next': lambda: media('next'),
+    'media-prev': lambda: media('previous'),
+    'media-stop': lambda: media('stop'),
+    'touchpad-toggle': touchpad_toggle,
+}
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ('-h', '--help'):
+        print(__doc__.strip()); return 0
+    if args[0] == '--list':
+        print('\n'.join(sorted(ACTIONS))); return 0
+    action = ACTIONS.get(args[0])
+    if action is None:
+        print(f'eduka-shortcut: unknown action {args[0]!r} (see --list)', file=sys.stderr)
+        return 2
+    try:
+        action()
+    except Exception as e:                       # a shortcut never shows a crash
+        print(f'eduka-shortcut {args[0]}: {e}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

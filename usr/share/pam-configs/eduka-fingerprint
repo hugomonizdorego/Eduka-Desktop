@@ -1,0 +1,8 @@
+Name: Fingerprint after the password (Edukasaun OS)
+Default: no
+Priority: 250
+Auth-Type: Primary
+Auth:
+	[success=end default=ignore]	pam_fprintd.so max-tries=2 timeout=15
+Auth-Initial:
+	[success=end default=ignore]	pam_fprintd.so max-tries=2 timeout=15

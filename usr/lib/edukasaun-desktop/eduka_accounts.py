@@ -179,23 +179,35 @@ def password_hint(password):
 
 
 # ------------------------------------------------------------------ root helper
-def run_helper(request, timeout=180):
-    """Run eduka-users-apply through pkexec. Returns (ok, message)."""
+def run_helper(request, timeout=180, mode='--admin'):
+    """Run eduka-users-apply through pkexec. Returns (ok, message).
+    mode --admin: administrator password; --reset-own-password: the user
+    confirms it is them (fingerprint or password), own account only."""
     if shutil.which('pkexec') is None or not os.path.exists(HELPER):
         return False, 'Accounts can only be changed on Edukasaun OS (pkexec or the Eduka helper is missing).'
+    if mode not in ('--admin', '--reset-own-password'):
+        return False, 'unknown mode'
     try:
-        r = subprocess.run(['pkexec', HELPER], input=json.dumps(request), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(['pkexec', HELPER, mode], input=json.dumps(request), capture_output=True, text=True, timeout=timeout)
     except Exception as e:
         return False, str(e)
     if r.returncode == 0:
         return True, (r.stdout or '').strip().splitlines()[-1] if (r.stdout or '').strip() else ''
     if r.returncode in (126, 127):
-        return False, 'administrator password was not given'
+        return False, ('it was not confirmed that it is you' if mode == '--reset-own-password'
+                       else 'administrator password was not given')
     lines = (r.stderr or r.stdout or '').strip().splitlines()
     return False, lines[-1] if lines else 'unknown error'
 
 
 # ------------------------------------------------------------------ pictures
+def reset_own_password(password):
+    """A new password for this account, confirmed with the fingerprint (or
+    the current password) through polkit: for a forgotten password after a
+    login with the finger (0.11 RC3)."""
+    return run_helper({'action': 'own_password', 'password': password}, mode='--reset-own-password')
+
+
 def make_avatar(source, target, size=256):
     """Square PNG for an account picture: the middle of the picture, scaled
     smoothly. `source` is a path or a QImage. Returns True on success."""

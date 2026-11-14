@@ -60,6 +60,30 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-users-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--admin</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.reset-own-password">
+    <description>Set a new password for your own account</description>
+    <message>Confirm that it is you (touch the fingerprint reader or type your password) to set a new password</message>
+    <icon_name>dialog-password</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-users-apply</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--reset-own-password</annotate>
+  </action>
+  <action id="org.edukasaun.desktop.memory">
+    <description>Change how this computer uses its memory</description>
+    <message>An administrator password is required to switch compressed memory (zram) or earlyoom on or off</message>
+    <icon_name>utilities-system-monitor</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/edukasaun-desktop/eduka-memory-apply</annotate>
   </action>
   <action id="org.edukasaun.desktop.lightdm-config">
     <description>Change the look of the LightDM login screen</description>

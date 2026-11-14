@@ -61,9 +61,9 @@ PAGES = {
          'login screens and fingerprint login ask for an administrator password (pkexec).',
          'When Eduka-Settings is already open, its window is raised and shows the requested page.'],
         [('--page PAGE', 'Open one page or tab: overview, appearance, fonts, effects, wallpaper, desktopicons, '
-          'desktop, quick, panel, clock, notifications, keyboard, mouse, touchpad, touchscreen, users, general, '
-          'datetime, accessibility, hearing, screenreader, parental, privacy, login, lightdm, fingerprint or '
-          'maintenance.')],
+          'desktop, quick, panel, clock, notifications, display, keyboard, shortcuts, mouse, touchpad, touchscreen, '
+          'users, general, datetime, accessibility, hearing, screenreader, parental, privacy, login, lightdm, '
+          'fingerprint, maintenance or memory.')],
         [('~/.config/eduka-desktop/', 'settings of this account'),
          ('/etc/edukasaun-desktop/parental.json', 'Parental Control settings (system-wide)'),
          ('/etc/edukasaun-desktop/hidden-users', 'accounts hidden on the login screens'),
@@ -84,6 +84,26 @@ PAGES = {
         [('~/.config/eduka-desktop/desktop/quick.json', 'on or off, key, options and slices'),
          ('~/.config/lxqt/globalkeyshortcuts.conf', 'the key (entry "Eduka-Quick")')],
         ['eduka-menu', 'eduka-settings', 'lxqt-globalkeysd']),
+    'eduka-shortcut': (
+        'run an action of the keyboard shortcuts of Eduka-Desktop',
+        ['*ACTION*', '**--list**'],
+        ['**eduka-shortcut** does what a keyboard shortcut of Eduka-Desktop asks for. lxqt-globalkeysd runs it for '
+         'the Windows shortcuts and the sound and media keys that Eduka adds next to the shortcuts of LXQt: for '
+         'example Super+E (file manager), Super+D (show the desktop), Super+L (lock), Super+arrows (snap and '
+         'maximize windows), Super+Shift+S (screenshot of an area), Ctrl+Shift+Esc (task manager) and the volume keys.',
+         'A key that LXQt, the user or the window manager (xfwm4, Openbox, KWin) already uses is never taken; '
+         'Eduka-Settings → Keyboard → Shortcuts lists every shortcut and its state. Window actions use the '
+         'standard window manager hints (**wmctrl**, **xdotool**); sound uses PipeWire or PulseAudio and shows '
+         'the volume above Eduka-Panel.'],
+        [('ACTION', 'One of: search, run, menu, show-desktop, minimize-all, restore-all, maximize, restore, '
+          'snap-left, snap-right, monitor-left, monitor-right, desktop-prev, desktop-next, files, browser, mail, '
+          'settings, accessibility, display, action-center, notifications, emoji, calculator, task-manager, leave, '
+          'lock, screenshot-region, screenshot-window, screenshot-save, screen-reader, osk, magnifier, volume-up, '
+          'volume-down, volume-mute, mic-mute, media-play, media-next, media-prev, media-stop, touchpad-toggle.'),
+         ('--list', 'Print the actions.')],
+        [('~/.config/lxqt/globalkeyshortcuts.conf', 'the shortcuts (Eduka\'s entries run eduka-shortcut)'),
+         ('~/.config/eduka-desktop/desktop/shortcuts.json', 'Eduka\'s shortcuts on or off, and the ones turned off')],
+        ['eduka-settings', 'eduka-panel', 'lxqt-globalkeysd', 'wmctrl', 'xdotool']),
     'eduka-menu-settings': (
         'old name of eduka-settings',
         ['[*OPTION*]...'],
@@ -170,12 +190,15 @@ PAGES = {
         [('~/.config/eduka-desktop.backup-*DATE-TIME*', 'copy of the old settings')],
         ['eduka-settings', 'eduka-panel']),
     'eduka-session-action': (
-        'leave screen of Eduka-Desktop: lock, log out, restart, shut down',
-        ['[**lock** | **logout** | **restart** | **shutdown**]', '**--now** *ACTION*'],
-        ['**eduka-session-action** dims the desktop and shows the four actions as large buttons. The chosen '
-         'action runs after a short countdown, so one wrong click in a classroom never powers a computer off; '
-         'Escape or a click on the dim area cancels. With an action as argument that action is preselected.'],
-        [('--now ACTION', 'Run lock, logout, restart or shutdown at once (through lxqt-session, else systemd).')],
+        'leave screen of Eduka-Desktop: lock, log out, sleep, hibernate, restart, shut down',
+        ['[**lock** | **logout** | **suspend** | **hibernate** | **restart** | **shutdown**]', '**--now** *ACTION*'],
+        ['**eduka-session-action** dims the desktop and shows the actions as large buttons: lock, log out, '
+         'sleep and hibernate (when the computer can), restart and shut down. One click on a button runs it '
+         '(since 0.11 RC3 there is no countdown and no second button); Escape or a click on the dim area '
+         'cancels. The keys 1 to 6, the arrows, Tab and Enter work too. With an action as argument that '
+         'action has the keyboard focus. Sleep and hibernate lock the screen first.'],
+        [('--now ACTION', 'Run lock, logout, suspend (or sleep, standby), hibernate, restart or shutdown at once '
+          '(through lxqt-session, else systemd).')],
         [], ['lxqt-leave', 'loginctl', 'eduka-panel']),
     'edukasaun-desktop-menu-open': (
         'open or close the Eduka-Desktop menu',

@@ -72,7 +72,8 @@ case "$1" in
         # The chosen login logo is a copy; Default.png is kept (it may be the
         # administrator's own picture).
         rm -f /usr/share/Edukasaun/SDDM/Logo.png /etc/live/config.conf.d/90-edukasaun.conf \
-            /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user
+            /etc/sddm.conf.d/30-eduka-hide-live-user.conf /var/lib/edukasaun-desktop/default-user \
+            /var/lib/edukasaun-desktop/fingerprint-order
         rm -rf /var/lib/edukasaun-desktop/login
         rm -f /etc/edukasaun-desktop/parental.json /var/lib/edukasaun-desktop/parental-usage.json
         rmdir --ignore-fail-on-non-empty /etc/edukasaun-desktop 2>/dev/null || true

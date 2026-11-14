@@ -8,7 +8,8 @@ applies every change at once; Eduka-Panel applies them again when the session
 starts and whenever a mouse, touchpad or keyboard is plugged in.
 
 * Keyboard: layouts and the key that switches between them (setxkbmap),
-  key repeat delay and speed (xset r rate), Num Lock (numlockx).
+  key repeat delay and speed (xset r rate), Num Lock (numlockx; Automatic
+  follows the kind of computer, eduka_device, 0.11 RC3).
 * Mouse and touchpad: libinput properties set with xinput (speed, left-handed
   buttons, natural scrolling, tap to click, disable while typing, scrolling
   method, touchpad on/off). Without xinput the speed falls back to xset m.
@@ -38,7 +39,7 @@ EVDEV_LST = Path('/usr/share/X11/xkb/rules/evdev.lst')
 DEFAULTS = {
     'layouts': [],            # [] = keep the layout the system set up (installer / keyboard-configuration)
     'switch': 'grp:alt_shift_toggle',
-    'repeat_delay': 500, 'repeat_rate': 30, 'numlock': False,
+    'repeat_delay': 500, 'repeat_rate': 30, 'numlock': False, 'numlock_mode': 'auto',
     'mouse_speed': 0.0, 'left_handed': False, 'mouse_natural': False, 'middle_emulation': False,
     'double_click': 400, 'wheel_lines': 3,
     'tp_enabled': True, 'tp_tap': True, 'tp_natural': True, 'tp_dwt': True, 'tp_speed': 0.0,
@@ -64,12 +65,33 @@ TOUCHPAD_NAME = re.compile(r'touch\s*pad|trackpad|glidepoint|synaptics|alps|elan
 SKIP_POINTER = re.compile(r'XTEST|Virtual core|Video Bus|Power Button|Sleep Button|Lid Switch|\bkeyboard\b|consumer control|system control|wmi hotkeys', re.I)
 
 
+NUMLOCK_MODES = [('auto', 'Automatic (on for desktop computers, off for laptops)'), ('on', 'Always on'), ('off', 'Always off')]
+
+
 def input_config():
     cfg = dict(DEFAULTS)
     data = read_json(INPUT_CONFIG, {})
     if isinstance(data, dict):
         cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
+        # Before 0.11 RC3 only "numlock" (on/off) was saved: on stays on.
+        if 'numlock_mode' not in data:
+            cfg['numlock_mode'] = 'on' if data.get('numlock') else 'auto'
+    if cfg.get('numlock_mode') not in dict(NUMLOCK_MODES):
+        cfg['numlock_mode'] = 'auto'
     return cfg
+
+
+def numlock_wanted(cfg):
+    """Num Lock at login: the user's choice, or what fits this computer
+    (eduka_device: desktop on, laptop off unless a USB keyboard is there)."""
+    mode = cfg.get('numlock_mode', 'auto')
+    if mode in ('on', 'off'):
+        return mode == 'on'
+    try:
+        import eduka_device
+        return eduka_device.numlock_default()
+    except Exception:
+        return bool(cfg.get('numlock', False))
 
 
 def save_input_config(cfg):
@@ -137,13 +159,14 @@ def apply_keyboard(cfg):
     if shutil.which('xset'):
         delay = max(150, min(1000, int(cfg['repeat_delay']))); rate = max(5, min(60, int(cfg['repeat_rate'])))
         ok = _run(['xset', 'r', 'rate', str(delay), str(rate)]) is not None and ok
+    numlock = numlock_wanted(cfg)
     if shutil.which('numlockx'):
-        _run(['numlockx', 'on' if cfg['numlock'] else 'off'])
+        _run(['numlockx', 'on' if numlock else 'off'])
     session = Path.home()/'.config/lxqt/session.conf'
     try:
         _set_ini(session, 'Keyboard', 'delay', str(int(cfg['repeat_delay'])))
         _set_ini(session, 'Keyboard', 'interval', str(max(1, int(1000/max(1, int(cfg['repeat_rate']))))))
-        _set_ini(session, 'Keyboard', 'numlock', 'true' if cfg['numlock'] else 'false')
+        _set_ini(session, 'Keyboard', 'numlock', 'true' if numlock else 'false')
     except Exception:
         pass
     return ok

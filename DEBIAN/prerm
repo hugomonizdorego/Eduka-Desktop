@@ -8,4 +8,9 @@ if [ "$1" = remove ] && [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; t
         deb-systemd-invoke stop eduka-parental.service >/dev/null || true
     fi
 fi
+# The Edukasaun fingerprint PAM profile goes away with the package: take it
+# out of the PAM stack first (Debian policy for packages with a PAM profile).
+if [ "$1" = remove ] && command -v pam-auth-update >/dev/null 2>&1; then
+    pam-auth-update --package --remove eduka-fingerprint >/dev/null 2>&1 || true
+fi
 exit 0

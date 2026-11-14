@@ -315,6 +315,24 @@ class CategoryDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         return QSize(190, self.row_h)
 
+def add_quick_actions(menu, app):
+    """Right-click → Add to / Remove from Eduka-Quick (0.11 RC3)."""
+    try:
+        import eduka_quick
+        if not eduka_quick.read_config().get('enabled', True):
+            return
+        icon=get_icon('eduka-quick', ['view-app-grid', 'applications-other'])
+        if eduka_quick.app_in_quick(app):
+            menu.addAction(icon, _('Remove from Eduka-Quick'), lambda a=app: eduka_quick.remove_app(a))
+        else:
+            def add(a=app):
+                if not eduka_quick.add_app(a):
+                    QMessageBox.information(None, 'Eduka-Quick', _('Eduka-Quick has the most slices already; remove one first.'))
+            menu.addAction(icon, _('Add to Eduka-Quick'), add)
+    except Exception:
+        pass
+
+
 def app_description(app):
     """What a screen reader says after the name of a program: what it is
     for (Comment or GenericName), then that Enter opens it."""
@@ -473,6 +491,7 @@ class AppButton(QToolButton):
             m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda: unpin_app(self.app))
         else:
             m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: pin_app(self.app))
+        add_quick_actions(m, self.app)
         app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
         m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: safe_popen(['pcmanfm-qt', app_dir]))
         m.exec_(self.mapToGlobal(pos))
@@ -579,6 +598,7 @@ class AppListItem(QFrame):
             m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda: (unpin_app(self.app), self.window().refresh_apps()))
         else:
             m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda: (pin_app(self.app), self.window().refresh_apps()))
+        add_quick_actions(m, self.app)
         app_dir = os.path.dirname(self.app.get('path','/usr/share/applications'))
         m.addAction(get_icon('folder-open'), 'Open Containing Folder', lambda: safe_popen(['pcmanfm-qt', app_dir]))
         m.exec_(self.mapToGlobal(pos))
@@ -1171,6 +1191,7 @@ class EdukaMenu(QWidget):
             m.addAction(get_icon('list-remove'), 'Unpin from Taskbar', lambda a=app: unpin_app(a))
         else:
             m.addAction(get_icon('list-add'), 'Pin to Taskbar', lambda a=app: pin_app(a))
+        add_quick_actions(m, app)
         m.exec_(button.mapToGlobal(pos))
 
     def remove_favorite(self, app):
@@ -1295,6 +1316,21 @@ class EdukaMenu(QWidget):
         try: (RUNTIME_DIR/'menu.pid').unlink(missing_ok=True)
         except Exception: pass
         if not self.daemon: self.close()
+        else:
+            # Memory saver (0.11 RC3): give freed memory back a while after closing.
+            if not hasattr(self, '_trim_timer'):
+                self._trim_timer=QTimer(self); self._trim_timer.setSingleShot(True); self._trim_timer.timeout.connect(self.save_memory)
+            self._trim_timer.start(8000)
+
+    def save_memory(self, force=False):
+        if self.isVisible() and not force:
+            return
+        try:
+            import eduka_memory as em
+            if force or em.read_prefs()['saver']:
+                em.trim(qt=force or em.pressure() != 'ok')
+        except Exception:
+            pass
 
     def toggle_menu(self):
         now=time.time()
@@ -1341,6 +1377,8 @@ class EdukaMenu(QWidget):
                 self.show_quick()
             elif action == 'quick-reload':
                 if getattr(self, 'quick', None) is not None and self.quick.isVisible(): self.quick.load()
+            elif action == 'trim':
+                self.save_memory(force=True)
             else: self.toggle_menu()
         except Exception: pass
 
@@ -1440,6 +1478,10 @@ def start_daemon(start_visible=False):
         return 0
     if in_eduka_session(): wait_for_compositor()
     app=QApplication(sys.argv); install_translations(app); app.setStyleSheet(tooltip_qss()); icon_theme_setup()
+    try:
+        import eduka_touch; eduka_touch.enable_long_press(app)   # long press = right click (0.11 RC3)
+    except Exception:
+        pass
     menu=EdukaMenu(daemon=True, start_visible=start_visible)
     ret=app.exec_()
     del menu
@@ -1453,6 +1495,10 @@ if __name__ == '__main__':
         # menu stays, Eduka-Desktop only runs in Eduka-Desktop sessions.
         sys.exit(0)
     ensure_dirs()
+    try:
+        import eduka_memory; eduka_memory.limit_arenas()
+    except Exception:
+        pass
     if '--daemon' in sys.argv:
         install_crash_log('eduka-menu')
         exit_now(start_daemon(start_visible='--show' in sys.argv))

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Edukasaun Desktop 0.11 RC2 (release candidate 2).
+# Edukasaun Desktop 0.11 RC3 (release candidate 3).
 # The programs that run keep running: Eduka-Panel and Eduka-Desktop start
 # again by themselves once dpkg has finished (watch_package_update).
 set -e

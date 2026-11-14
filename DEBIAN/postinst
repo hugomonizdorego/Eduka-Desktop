@@ -104,6 +104,24 @@ if [ -f "$meta" ]; then
     fi
 fi
 
+# --- Fingerprint login (0.11 RC3) ----------------------------------------
+# The Edukasaun PAM profile eduka-fingerprint asks for the password first and
+# for the finger second (Debian's fprintd profile asks for the finger first,
+# so at the SDDM login screen every typed password waited for the reader).
+# Register it (off by default) and, once, move a computer that uses Debian's
+# order over to it; afterwards Eduka-Settings → Fingerprint decides.
+if command -v pam-auth-update >/dev/null 2>&1 && [ -f /usr/share/pam-configs/eduka-fingerprint ]; then
+    pam-auth-update --package >/dev/null 2>&1 || true
+    marker=/var/lib/edukasaun-desktop/fingerprint-order
+    if [ ! -e "$marker" ]; then
+        if [ -f /usr/share/pam-configs/fprintd ] && grep -qs '^[^#]*pam_fprintd\.so' /etc/pam.d/common-auth; then
+            /usr/lib/edukasaun-desktop/eduka-fingerprint-apply --enable >/dev/null 2>&1 || true
+        fi
+        mkdir -p /var/lib/edukasaun-desktop
+        echo "password-first" > "$marker"
+    fi
+fi
+
 # --- Services -------------------------------------------------------------
 # eduka-live-autologin only acts when booted with boot=live; on installed
 # systems it removes any live autologin file so the login screen asks for a

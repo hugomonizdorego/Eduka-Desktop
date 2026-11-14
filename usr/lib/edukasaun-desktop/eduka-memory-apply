@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""Memory helpers of the whole computer (0.11 RC3). Runs as root through
+pkexec (polkit action org.edukasaun.desktop.memory: administrator password).
+
+  eduka-memory-apply --zram on|off        compressed memory (zram-tools:
+                                          zstd, half of the memory, used
+                                          before any swap on disk)
+  eduka-memory-apply --earlyoom on|off    stops the biggest program when the
+                                          memory is almost full, instead of a
+                                          frozen computer; the desktop itself
+                                          (session, panel, window manager) is
+                                          never chosen
+  eduka-memory-apply --swappiness N       10-200 (/etc/sysctl.d/90-eduka-memory.conf)
+  eduka-memory-apply --status             JSON
+
+Only these settings are written; every value is checked here.
+"""
+import json, os, re, shutil, subprocess, sys
+
+ZRAM_DEFAULTS = '/etc/default/zramswap'
+EARLYOOM_DEFAULTS = '/etc/default/earlyoom'
+SYSCTL = '/etc/sysctl.d/90-eduka-memory.conf'
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C.UTF-8'}
+AVOID = ('^(init|systemd|Xorg|Xwayland|sddm|sddm-helper|lightdm|lxqt-session|startlxqt|eduka-panel|eduka-menu|'
+         'eduka-desktop-se|xfwm4|openbox|kwin_x11|labwc|picom|dbus-daemon|dbus-broker|pipewire|wireplumber)$')
+PREFER = '^(chrome|chromium|firefox-esr|firefox|electron|java|code|thunderbird)$'
+
+
+def fail(message, code=2):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def run(args):
+    try:
+        return subprocess.run(args, env=ENV, capture_output=True, text=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def set_keys(path, values, header):
+    """Set KEY=value lines (keeps every other line of the file)."""
+    try:
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = [header]
+    done = set()
+    out = []
+    for line in lines:
+        m = re.match(r'^\s*#?\s*([A-Z_]+)\s*=', line)
+        if m and m.group(1) in values:
+            if m.group(1) not in done:
+                out.append(f'{m.group(1)}={values[m.group(1)]}'); done.add(m.group(1))
+            continue
+        out.append(line)
+    out += [f'{k}={v}' for k, v in values.items() if k not in done]
+    tmp = path + '.eduka-tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(out) + '\n')
+    os.chmod(tmp, 0o644); os.replace(tmp, path)
+
+
+def unit_exists(name):
+    return any(os.path.exists(os.path.join(d, name)) for d in ('/lib/systemd/system', '/usr/lib/systemd/system', '/etc/systemd/system'))
+
+
+def zram(on):
+    if not unit_exists('zramswap.service'):
+        fail('zram-tools is not installed.', 3)
+    if on:
+        set_keys(ZRAM_DEFAULTS, {'ALGO': 'zstd', 'PERCENT': '50', 'PRIORITY': '100'},
+                 '# Compressed memory (zram-tools). Edukasaun OS: Eduka-Settings → Maintenance → Memory.')
+        ok = run(['systemctl', 'enable', 'zramswap.service']) and (run(['systemctl', 'restart', 'zramswap.service']) or True)
+    else:
+        ok = run(['systemctl', 'disable', '--now', 'zramswap.service'])
+    print('Compressed memory (zram) is ' + ('on.' if on else 'off.'))
+    return ok
+
+
+def earlyoom(on):
+    if not unit_exists('earlyoom.service'):
+        fail('earlyoom is not installed.', 3)
+    if on:
+        set_keys(EARLYOOM_DEFAULTS, {'EARLYOOM_ARGS': f'"-r 0 -m 6 -s 10 --avoid {AVOID} --prefer {PREFER}"'},
+                 '# earlyoom. Edukasaun OS: Eduka-Settings → Maintenance → Memory.')
+        ok = run(['systemctl', 'enable', 'earlyoom.service']) and run(['systemctl', 'restart', 'earlyoom.service'])
+    else:
+        ok = run(['systemctl', 'disable', '--now', 'earlyoom.service'])
+    print('earlyoom is ' + ('on.' if on else 'off.'))
+    return ok
+
+
+def swappiness(value):
+    try:
+        n = int(value)
+    except ValueError:
+        fail('Swappiness must be a number.')
+    if not 10 <= n <= 200:
+        fail('Swappiness must be between 10 and 200.')
+    tmp = SYSCTL + '.eduka-tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('# Edukasaun OS: Eduka-Settings → Maintenance → Memory.\nvm.swappiness = %d\n' % n)
+    os.chmod(tmp, 0o644); os.replace(tmp, SYSCTL)
+    run(['sysctl', '-q', '-w', f'vm.swappiness={n}'])
+    print(f'Swappiness is {n}.')
+    return True
+
+
+def status():
+    def active(unit):
+        return run(['systemctl', 'is-active', '--quiet', unit])
+    try:
+        sw = int(open('/proc/sys/vm/swappiness').read().strip())
+    except (OSError, ValueError):
+        sw = 60
+    print(json.dumps({'zram_installed': unit_exists('zramswap.service'), 'zram': active('zramswap.service'),
+                      'earlyoom_installed': unit_exists('earlyoom.service'), 'earlyoom': active('earlyoom.service'),
+                      'swappiness': sw}))
+    return True
+
+
+def main(argv):
+    if argv == ['--status']:
+        return 0 if status() else 1
+    if len(argv) != 2 or argv[0] not in ('--zram', '--earlyoom', '--swappiness'):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        fail('eduka-memory-apply must run as root (pkexec).', 1)
+    if not shutil.which('systemctl') and argv[0] != '--swappiness':
+        fail('systemctl is missing.', 3)
+    if argv[0] in ('--zram', '--earlyoom'):
+        if argv[1] not in ('on', 'off'):
+            fail('Use on or off.')
+        ok = (zram if argv[0] == '--zram' else earlyoom)(argv[1] == 'on')
+    else:
+        ok = swappiness(argv[1])
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

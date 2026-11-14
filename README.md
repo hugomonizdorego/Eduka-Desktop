@@ -2,7 +2,7 @@
 
 Edukasaun Desktop Suite: Eduka-Desktop (start menu), Eduka-Panel and
 Eduka-Settings (formerly Eduka-Menu Settings) for Edukasaun OS (Debian 13 Trixie, LXQt).
-Current version: **0.11 RC2** (release candidate 2, package 0.11.0~rc2).
+Current version: **0.11 RC3** (release candidate 3, package 0.11.0~rc3).
 
 ## Build the .deb
 
@@ -27,14 +27,14 @@ Check the result with `lintian dist/edukasaun-desktop-menu_<version>_all.deb`
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.11.0~rc2_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.11.0~rc3_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.11.0~rc2_all.deb
+   rm ./edukasaun-desktop-menu_0.11.0~rc3_all.deb
    ```
 
 The package scripts never start a program with a window (in the chroot or
@@ -47,7 +47,7 @@ To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
 
 Recommended packages, settings and configuration for the ISO are listed in
-`README_0.11-rc2.txt` (release notes of 0.11 RC2, with those of 0.11 RC).
+`README_0.11-rc3.txt` (release notes of 0.11 RC3, with those of 0.11 RC2 and RC).
 
 ## Login sessions
 
@@ -205,6 +205,44 @@ Eduka-Desktop runs on LXQt (LGPL-2.1+), Openbox or xfwm4 (GPL-2.0+) and picom
 package, so their licenses stay as they are. PyQt5 (GPL-3.0) is the reason
 the whole program is GPL-3.0-or-later. The About window
 (`eduka-about`) lists every project with its license.
+
+## 0.11 RC3: login design, shortcuts, devices, scale, fingerprint, memory, touch
+
+- SDDM theme (`usr/share/sddm/themes/edukasaun/`): `Main.qml` with the
+  bento cards (`Card.qml`), `Avatar.qml`, `PowerTile.qml`, `RailButton.qml`
+  and `PopupMenu.qml` (opens below or beside its anchor). The fingerprint
+  button appears when `/var/lib/edukasaun-desktop/login/fingerprint` says
+  `on` (written by `eduka-fingerprint-apply`). Test with
+  `sddm-greeter --test-mode --theme <folder>`.
+- LightDM: `greeter_css()` in `eduka-lightdm-apply` (glass card, accent
+  fields, panel chips); backgrounds with lights from
+  `tools/gen-login-backgrounds.py` (`LIGHTS`, the same as the QML canvas).
+  Settings: `install_lightdm_greeter()` opens a terminal with apt.
+- Shortcuts: `eduka_shortcuts.py` (`SHORTCUTS`, `plan()`, `render()`,
+  `apply()`, `apply_now()`; key spellings of LXQt, xfwm4, Openbox and KWin
+  normalized; lxqt-panel client actions are "dead" in Eduka sessions) and
+  `/usr/bin/eduka-shortcut ACTION` (wmctrl/xdotool window actions, pactl or
+  wpctl or amixer, MPRIS). `eduka-session-prepare` writes them before
+  lxqt-globalkeysd starts; Eduka-Settings stops the daemon, writes and
+  starts it again (it saves its own list when it stops).
+- Eduka-Panel command socket `$XDG_RUNTIME_DIR/eduka-desktop/panel.sock`
+  (`action-center`, `notifications`, `osd volume|mic|touchpad-on|touchpad-off`,
+  `trim`), `OsdBubble`, `notify_local()` with local action callbacks,
+  `check_memory()` every 30 s.
+- Devices and scale: `eduka_device.py` (`kind()`, `keyboards()`,
+  `screens()`, `recommended_scale()`, `apply_scale()` writes the
+  `[Environment]` of `~/.config/lxqt/session.conf`: `QT_SCALE_FACTOR`,
+  `GDK_SCALE`, `GDK_DPI_SCALE`; `first_login_scale()`), Num Lock mode
+  `numlock_mode` in `eduka_input.py`.
+- Fingerprint: `readers()` in `eduka_fingerprint.py` (USB devices against
+  udev's hwdb of libfprint), PAM profile `usr/share/pam-configs/eduka-fingerprint`
+  (priority 250, after pam_unix), `eduka-users-apply --admin` and
+  `--reset-own-password` with their own polkit actions (`exec.argv1`).
+- Memory: `eduka_memory.py` (`limit_arenas()`, `trim()`, `summary()`,
+  `pressure()`, `top_programs()`), helper `eduka-memory-apply --zram|--earlyoom|--swappiness`.
+- Touch: `eduka_touch.py` (Touchégg gestures in `~/.config/touchegg/touchegg.conf`
+  with a mark, `enable_long_press(app)`, `MOZ_USE_XINPUT2`).
+- `VERSION` "0.11 RC3", `DEB_VERSION` 0.11.0~rc3.
 
 ## 0.11 RC2: users, fonts, time, LightDM, accessibility, Eduka-Quick
 
