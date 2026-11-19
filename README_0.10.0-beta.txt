@@ -24,7 +24,7 @@ Changes in update 3:
   - Checked with Openbox + picom and with xfwm4 and its own compositor.
 - Themes:
   - Liquid Glass: the Action Center and the panel popups use the blue of the theme (they were green); the glass is less see-through over a dark wallpaper, so text stays readable.
-  - Icons: light themes now use Papirus-Light, whose status icons (Wi-Fi, sound, battery) are dark; with plain Papirus they were light grey and hard to see on the light Eduka-Panel. Dark themes keep Papirus-Dark.
+  - Icons: light themes now use Papirus-Light, whose status icons (Wi-Fi, sound, battery) are dark; with plain Papirus they were light gray and hard to see on the light Eduka-Panel. Dark themes keep Papirus-Dark.
   - The "Action Center" label on the panel clock is readable on every theme and wallpaper.
   - Login screen, light styles: the clock, the date and the user names have a deeper shadow, so they stay readable on a light picture.
 - Security:

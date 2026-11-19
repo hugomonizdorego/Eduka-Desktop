@@ -79,7 +79,7 @@ def app_highlight_color(app, selected_category='All', position=None):
     """Color for one application tile.
 
     position comes from the caller: column + row*3 in the Grid and the row in
-    the List. Horizontal neighbours then differ by 1 and vertical neighbours
+    the List. Horizontal neighbors then differ by 1 and vertical neighbors
     by 3, so with 10 colors adjacent tiles never share a color.
     """
     colors=PALETTE['colors']
@@ -642,6 +642,30 @@ class AppListItem(QFrame):
         if e.button() == Qt.LeftButton:
             self._launch_once(); e.accept(); return
         super().mouseReleaseEvent(e)
+
+class SettingsHit(AppListItem):
+    """A page of Eduka-Settings in the search results (0.11 Pre-Stable):
+    "sound" or "workspace" opens that page directly."""
+    def __init__(self, hit, accent=None, parent=None):
+        key, title, icon, group = hit
+        super().__init__({'name': title, 'generic': f'Eduka-Settings · {_(group)}', 'icon': icon or 'preferences-system',
+                          'desktop_id': f'eduka-settings:{key}', 'path': '', 'categories': 'Settings'}, accent, parent)
+        self.page = key
+        self.setAccessibleDescription(_('Opens this page of Eduka-Settings'))
+
+    def ctx(self, pos):
+        m = RoundedMenu(self)
+        m.addAction(get_icon('preferences-system'), 'Open', self._launch_once)
+        m.exec_(self.mapToGlobal(pos))
+
+    def _launch_once(self):
+        win = self.window()
+        if getattr(win, '_launching', False):
+            return
+        registry_update('desktop', {'last_launch': f'eduka-settings --page {self.page}', 'version': VERSION})
+        if hasattr(win, 'hide_menu'):
+            win.hide_menu(force=True)
+        QTimer.singleShot(35, lambda k=self.page: safe_popen(['eduka-settings', '--page', k]))
 
 class EdukaMenu(QWidget):
     def __init__(self, daemon=False, start_visible=False):
@@ -1271,6 +1295,9 @@ class EdukaMenu(QWidget):
         high_contrast=bool(self.desktop_cfg.get('visual_accessibility', False))
         orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
         registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
+        hits=self.settings_hits(query)
+        if not apps and hits:
+            self.add_settings_hits(hits, high_contrast, orca_enabled); self.stack_layout.addStretch(); self.refresh_side(); return
         if not apps:
             if self._loading_apps:
                 text='Loading applications...'
@@ -1308,7 +1335,26 @@ class EdukaMenu(QWidget):
             for i,app in enumerate(apps):
                 accent=app_highlight_color(app, category, i)
                 item=AppListItem(app, accent); item._color_pos=i; item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
+        if hits:
+            self.add_settings_hits(hits, high_contrast, orca_enabled)
         self.stack_layout.addStretch(); self.refresh_side()
+
+    def settings_hits(self, query):
+        """Pages of Eduka-Settings that match the search (0.11 Pre-Stable)."""
+        if len(query) < 3:
+            return []
+        try:
+            import eduka_settings_index
+            return eduka_settings_index.search(query, translate=_, limit=4)
+        except Exception:
+            return []
+
+    def add_settings_hits(self, hits, high_contrast=False, orca_enabled=False):
+        head=QLabel('Settings'); head.setObjectName('mutedText'); head.setStyleSheet('font-weight:800;font-size:12px;padding:10px 4px 2px 4px;')
+        self.stack_layout.addWidget(head)
+        for i, hit in enumerate(hits):
+            item=SettingsHit(hit, app_highlight_color({'categories': 'Settings'}, 'Settings', i)); item._color_pos=i
+            item.set_accessibility_mode(high_contrast, orca_enabled); self.stack_layout.addWidget(item)
 
     def ensure_apps_loaded(self):
         if self._loading_apps: return
@@ -1503,6 +1549,10 @@ class EdukaMenu(QWidget):
         query=self.search.text().strip()
         apps=filter_apps(self.apps, 'All' if query else self.current_category, query)
         if not apps:
+            hits=self.settings_hits(query)
+            if hits:
+                self.hide_menu(force=True)
+                QTimer.singleShot(35, lambda k=hits[0][0]: safe_popen(['eduka-settings', '--page', k]))
             return
         app=apps[0]
         self.hide_menu(force=True)

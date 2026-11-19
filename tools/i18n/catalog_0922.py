@@ -76,7 +76,7 @@ NEW_0922 = [
  'Multicolor: cada categoria do menu, mosaico do Centro de Ações e botão do painel tem a sua própria cor',
  'Multiwarna: setiap kategori menu, ubin Pusat Tindakan dan tombol panel mendapat warnanya sendiri',
  'Kór barak: kategoria menu, kaixa Sentru Asaun no butaun panel ida-idak hetan ninia kór rasik'),
-('Eduka-MultiColor (after Graphite by vinceliuice): calm light grey for applications, and a different color for every menu category, Action Center tile and panel button.',
+('Eduka-MultiColor (after Graphite by vinceliuice): calm light gray for applications, and a different color for every menu category, Action Center tile and panel button.',
  'Eduka-MultiColor (a partir do Graphite de vinceliuice): cinzento claro e calmo para as aplicações, e uma cor diferente para cada categoria do menu, mosaico do Centro de Ações e botão do painel.',
  'Eduka-MultiColor (berdasarkan Graphite oleh vinceliuice): abu-abu terang yang tenang untuk aplikasi, dan warna berbeda untuk setiap kategori menu, ubin Pusat Tindakan dan tombol panel.',
  'Eduka-MultiColor (tuir Graphite husi vinceliuice): kór cinzentu naroman ba aplikasaun, no kór diferente ba kategoria menu, kaixa Sentru Asaun no butaun panel ida-idak.'),

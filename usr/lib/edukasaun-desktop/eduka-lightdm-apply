@@ -138,7 +138,7 @@ def greeter_css(style, accent):
 #user_image_border {{ background: transparent; border: none; }}
 #greeter_infobar {{ border-radius: 14px; }}
 /* slick-greeter draws its own dark boxes: a white field with the accent
-   around it keeps the grey hint text ("Password") readable. */
+   around it keeps the gray hint text ("Password") readable. */
 entry.lightdm {{ color: #1f3d36; caret-color: {field}; background-color: rgba(255,255,255,0.94); background-image: none;
   border: 2px solid {accent}; border-radius: 12px; box-shadow: none; font-weight: bold; }}
 entry.lightdm:focus {{ border-color: {field}; box-shadow: 0 0 0 2px alpha({accent}, 0.45); }}

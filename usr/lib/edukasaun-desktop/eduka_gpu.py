@@ -100,8 +100,8 @@ def wants_dedicated(app):
     return bool((app or {}).get('gpu')) and read_prefs()['auto'] and dedicated() is not None
 
 
-def hints(cards=None):
-    """Advice about drivers: [(level, text)]."""
+def hints(cards=None, tr=lambda s: s):
+    """Advice about drivers: [(level, text)], translated by tr."""
     cards = cards if cards is not None else gpus()
     out = []
     for c in cards:
@@ -110,11 +110,12 @@ def hints(cards=None):
         if not c['driver']:
             pkg = {'0x1002': 'firmware-amd-graphics', '0x10de': 'nvidia-driver (or the free driver nouveau)',
                    '0x8086': 'firmware-misc-nonfree'}.get(c['vendor_id'], 'the firmware of this card')
-            out.append(('warn', f"The {c['vendor']} card has no driver yet: install {pkg}, then restart."))
+            out.append(('warn', tr('The {vendor} card has no driver yet: install {package}, then restart.')
+                        .replace('{vendor}', c['vendor']).replace('{package}', pkg)))
         elif c['vendor_id'] == '0x10de' and c['driver'] == 'nouveau':
-            out.append(('info', 'The NVIDIA card uses the free driver nouveau. For games the NVIDIA driver (nvidia-driver) is faster.'))
+            out.append(('info', tr('The NVIDIA card uses the free driver nouveau. For games the NVIDIA driver (nvidia-driver) is faster.')))
         elif c['vendor_id'] == '0x1002' and c['driver'] == 'radeon':
-            out.append(('info', 'This older AMD card uses the radeon driver; that is right for it.'))
+            out.append(('info', tr('This older AMD card uses the radeon driver; that is right for it.')))
     return out
 
 

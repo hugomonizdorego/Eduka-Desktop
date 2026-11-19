@@ -71,7 +71,7 @@ DARK_THEMES = (THEME_DARK, THEME_TRANSPARENT)
 GLASS_FALLBACK = {THEME_LIQUID: THEME_DEFAULT, THEME_TRANSPARENT: THEME_DARK}
 
 # Edukasaun-Dark: colors from the Orchis dark theme by vinceliuice
-# (github.com/vinceliuice/Orchis-theme, GPL-3.0): grey 900/800 surfaces,
+# (github.com/vinceliuice/Orchis-theme, GPL-3.0): gray 900/800 surfaces,
 # white text at 87 %/60 % and the Orchis teal-300/400 accent.
 DARK = {
     'base': (33, 33, 33),        # Orchis grey-900 #212121
@@ -984,7 +984,7 @@ LOW_PALETTE = {
     'link_color': '#315bef', 'link_visited_color': '#5d5d5d',
 }
 MULTI_PALETTE = {
-    # Graphite light (vinceliuice, GPL-3.0): white and grey surfaces, near-black text.
+    # Graphite light (vinceliuice, GPL-3.0): white and gray surfaces, near-black text.
     'window_color': '#f5f5f5', 'base_color': '#ffffff', 'highlight_color': '#5b6ee1',
     'window_text_color': '#212121', 'text_color': '#212121', 'highlighted_text_color': '#ffffff',
     'link_color': '#1e88e5', 'link_visited_color': '#8e24aa',
@@ -1158,7 +1158,7 @@ def _set_xfwm4_theme(name):
 def follow_icon_theme_name(dark):
     """The Papirus variant that goes with a light or a dark theme. Papirus-
     Light has dark status icons (Wi-Fi, sound, battery) for a light panel;
-    plain Papirus draws them light grey, for dark panels, which made them
+    plain Papirus draws them light gray, for dark panels, which made them
     almost invisible on the light Eduka-Panel."""
     if dark:
         return 'Papirus-Dark'
@@ -2656,7 +2656,7 @@ def autostart_elsewhere():
     """True when the session autostart started an Eduka program outside an
     Eduka-Desktop session (a plain LXQt session): LXQt's own panel, menu and
     notifications stay there. "run_in_lxqt_sessions": true in the desktop
-    settings keeps the old behaviour."""
+    settings keeps the old behavior."""
     return '--autostart' in sys.argv and not in_eduka_session() and not peek_desktop_config().get('run_in_lxqt_sessions', False)
 
 def in_eduka_session():
@@ -2688,7 +2688,7 @@ def lxqt_notify_override_path():
 def restore_lxqt_notifications():
     """Outside Eduka-Desktop (a plain LXQt session) LXQt's own notification
     daemon is used again: the override Eduka-Panel wrote is removed (only
-    Eduka's own file, recognised by its comment)."""
+    Eduka's own file, recognized by its comment)."""
     path=lxqt_notify_override_path()
     try:
         if path.is_file() and not path.is_symlink() and LXQT_NOTIFY_MARK in path.read_text(encoding='utf-8', errors='ignore'):

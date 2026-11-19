@@ -11,13 +11,14 @@
 
 Every part fails on its own: Eduka-Panel keeps running without it.
 """
-import shutil, subprocess, time
+import os, shutil, subprocess, time
 
 from PyQt5.QtCore import Qt, QTimer, QObject, QSize, pyqtSignal
 from PyQt5.QtGui import QCursor, QGuiApplication
 from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QPushButton, QToolButton
 
 import eduka_windows
+from eduka_common import _
 
 
 def _start(cmd):
@@ -47,7 +48,8 @@ class WorkspaceSwitcher(QFrame):
             for i in range(count):
                 b = QToolButton(); b.setObjectName('workspaceButton'); b.setText(str(i + 1)); b.setCheckable(True)
                 b.setFixedSize(QSize(22, 22)); b.setCursor(Qt.PointingHandCursor)
-                b.setAccessibleName(f'Workspace {i + 1}'); b.setToolTip(f'Workspace {i + 1}\nScroll to change; Ctrl+Alt+Left/Right too')
+                name = _('Workspace {n}').replace('{n}', str(i + 1))
+                b.setAccessibleName(name); b.setToolTip(name + '\n' + _('Scroll to change; Ctrl+Alt+Left/Right too'))
                 b.clicked.connect(lambda _c=False, n=i: self.go(n))
                 self.lay.addWidget(b); self.buttons.append(b)
             self.count = count
@@ -83,7 +85,10 @@ class HotCorners(QObject):
         prefs = eduka_windows.read_prefs()
         self.corners = {k: v for k, v in prefs['corners'].items() if v}
         self.delay = prefs['corner_delay'] / 1000.0
-        wayland = QGuiApplication.platformName() not in ('xcb', 'offscreen')
+        # In a Wayland session Eduka-Panel runs through XWayland, which only
+        # sees the pointer over X11 windows: no hot corners there.
+        wayland = QGuiApplication.platformName() not in ('xcb', 'offscreen') or \
+            os.environ.get('XDG_SESSION_TYPE') == 'wayland' or bool(os.environ.get('WAYLAND_DISPLAY'))
         if self.corners and not wayland:
             self.timer.start()
         else:

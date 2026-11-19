@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
 // Round picture of a user (0.11 RC3): the face picture of the account, or,
-// for SDDM's grey default face, the first letter of the name on a color of
+// for SDDM's gray default face, the first letter of the name on a color of
 // the Eduka palette (the same name always gets the same color).
 import QtQuick 2.15
 

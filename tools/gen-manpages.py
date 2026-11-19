@@ -52,7 +52,7 @@ PAGES = {
     'eduka-settings': (
         'settings of Eduka-Desktop',
         ['[**--page** *PAGE*]'],
-        ['**eduka-settings** changes the look and behaviour of Eduka-Desktop: theme, accent color, fonts, icons and '
+        ['**eduka-settings** changes the look and behavior of Eduka-Desktop: theme, accent color, fonts, icons and '
          'cursor, wallpaper, desktop icons, effects, the menu, Eduka-Quick and the panel, clock and weather, '
          'notifications, keyboard, mouse, touchpad and touch screen, user accounts, language, date and time, '
          'accessibility (vision, hearing, screen reader), Parental Control, privacy, the SDDM and LightDM login '

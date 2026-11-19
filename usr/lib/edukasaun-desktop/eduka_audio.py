@@ -668,53 +668,54 @@ def _pci_audio_devices():
     return found
 
 
-def diagnose():
+def diagnose(tr=lambda s: s):
     """[(level, text, fix)] — level 'ok', 'warn' or 'error'; fix a key for
-    fix_problem() or ''."""
+    fix_problem() or ''. tr translates the texts (names stay as they are)."""
     out = []
     if not shutil.which('pactl'):
-        out.append(('error', 'pactl is missing (package pulseaudio-utils): Eduka-Settings cannot see the sound devices.', 'install-pactl'))
+        out.append(('error', tr('pactl is missing (package pulseaudio-utils): Eduka-Settings cannot see the sound devices.'), 'install-pactl'))
         return out
     info = server_info()
     if not info['server']:
-        out.append(('error', 'No sound system answers (PipeWire or PulseAudio).', 'restart'))
+        out.append(('error', tr('No sound system answers (PipeWire or PulseAudio).'), 'restart'))
         return out
-    out.append(('ok', f"Sound system: {info['name']}.", ''))
+    out.append(('ok', tr('Sound system: {name}.').replace('{name}', info['name']), ''))
     outs = sinks(info)
     real = [s for s in outs if s['kind'] not in ('virtual', 'effects')]
     alsa = _alsa_cards()
     if not real:
         if alsa == [] and _pci_audio_devices():
             vendors = {v for _c, v in _pci_audio_devices()}
-            text = 'The computer has a sound chip, but no driver uses it.'
+            text = tr('The computer has a sound chip, but no driver uses it.')
             if '0x8086' in vendors:
-                text += ' Intel laptops need the sound firmware: install firmware-sof-signed and alsa-ucm-conf, then restart.'
+                text += ' ' + tr('Intel laptops need the sound firmware: install firmware-sof-signed and alsa-ucm-conf, then restart.')
             out.append(('error', text, 'install-firmware'))
         elif alsa:
-            out.append(('error', 'The sound card is switched off or has no output. Choose a profile under Sound → Device.', 'profile'))
+            out.append(('error', tr('The sound card is switched off or has no output. Choose a profile under Sound → Device.'), 'profile'))
         else:
-            out.append(('error', 'No speakers or headphones were found ("Dummy Output").', 'restart'))
+            out.append(('error', tr('No speakers or headphones were found ("Dummy Output").'), 'restart'))
     default = next((s for s in outs if s['default']), None)
     if default:
         if default['mute']:
-            out.append(('warn', f"The sound is muted ({default['description']}).", 'unmute'))
+            out.append(('warn', tr('The sound is muted ({device}).').replace('{device}', default['description']), 'unmute'))
         elif default['volume'] is not None and default['volume'] < 15:
-            out.append(('warn', f"The volume is very low ({default['volume']}%).", 'volume'))
+            out.append(('warn', tr('The volume is very low ({percent}%).').replace('{percent}', str(default['volume'])), 'volume'))
         if default['ports'] and default['active_port']:
             port = next((p for p in default['ports'] if p['name'] == default['active_port']), None)
             if port and not port['available']:
-                out.append(('warn', f"Nothing is plugged into {port['description']}.", ''))
+                out.append(('warn', tr('Nothing is plugged into {connector}.').replace('{connector}', port['description']), ''))
     for c in cards():
         if c['bluetooth'] and re.search(r'headset|handsfree|hsp|hfp', c['active'], re.I):
             a2dp = next((p for p in c['profiles'] if 'a2dp' in p['name'] and p['available']), None)
             if a2dp:
-                out.append(('warn', f"{c['description']} uses the phone call mode (low quality).", f"a2dp:{c['name']}:{a2dp['name']}"))
+                out.append(('warn', tr('{device} uses the phone call mode (low quality).').replace('{device}', c['description']),
+                            f"a2dp:{c['name']}:{a2dp['name']}"))
     if not sources(info):
-        out.append(('warn', 'No microphone was found.', ''))
+        out.append(('warn', tr('No microphone was found.'), ''))
     if info['server'] == 'pulseaudio' and shutil.which('pipewire'):
-        out.append(('ok', 'PulseAudio is used; PipeWire is installed too.', ''))
+        out.append(('ok', tr('PulseAudio is used; PipeWire is installed too.'), ''))
     if len(out) == 1:
-        out.append(('ok', 'No problem was found.', ''))
+        out.append(('ok', tr('No problem was found.'), ''))
     return out
 
 

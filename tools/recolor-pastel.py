@@ -25,7 +25,7 @@ LIGHT = {
     '#F2F8F6': '#F2F6FB', '#D7EAE4': '#D7E3F0', '#E9F8F0': '#E9F1FA', '#DDEDE8': '#DDE7F2',
     '#D6F1E4': '#D6E6F6', '#6FCAA8': '#73AEE6',
 }
-# Dark variant (gtk-dark.css): a lighter blue reads well on the dark grey.
+# Dark variant (gtk-dark.css): a lighter blue reads well on the dark gray.
 DARK = {'#3FA684': '#5A9BE0', '#6FCAA8': '#80B4EA', '#2F8F6F': '#3F84CC'}
 RGB = {
     (47, 143, 111): (44, 114, 186), (63, 166, 132): (59, 135, 212), (252, 254, 253): (252, 253, 255),

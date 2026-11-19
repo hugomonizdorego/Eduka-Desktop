@@ -11,7 +11,7 @@ Eduka-Settings → Windows & Workspaces:
 * Hot corners: pushing the pointer into a corner of the screen opens
   Eduka-Desktop, shows the desktop, opens the Action Center…
 * Focus follows the mouse (the window under the pointer gets the keyboard)
-  or click to focus, for xfwm4, Openbox, KWin and Compiz.
+  or click to focus, for xfwm4, Openbox, KWin, Compiz and (Wayland) labwc.
 * Middle-click paste (Linux): the selected text is pasted with the middle
   button or a three-finger tap. It can be switched off for GTK programs.
 * Clipboard history (Super+V, as on Windows), kept in memory only.
@@ -97,6 +97,13 @@ def window_manager():
             continue
         if comm in known:
             return comm
+    try:
+        import eduka_wayland
+        comp = eduka_wayland.compositor()
+        if comp in known:
+            return comp
+    except ImportError:
+        pass
     return ''
 
 
@@ -137,12 +144,33 @@ def set_workspace_count(n):
                 if new != text:
                     path.write_text(new, encoding='utf-8')
             ec.safe_popen(['openbox', '--reconfigure'])
-        elif wm == 'kwin_x11' and shutil.which('kwriteconfig5'):
-            _run(['kwriteconfig5', '--file', 'kwinrc', '--group', 'Desktops', '--key', 'Number', str(n)])
-            _run(['qdbus', 'org.kde.KWin', '/KWin', 'reconfigure'])
+        elif wm in ('kwin_x11', 'kwin_wayland'):
+            import eduka_wayland as wl
+            wl.kwin_write('Desktops', 'Number', n); wl.kwin_reconfigure()
+        elif wm == 'labwc':
+            import eduka_wayland as wl
+            wl.labwc_desktops(n)
     except Exception:
         pass
     return True
+
+
+def configured_workspace_count():
+    """The number of workspaces the window manager keeps: EWMH in X11, the
+    compositor's own setting in a Wayland session (labwc, KWin)."""
+    n = _root_cardinal('_NET_NUMBER_OF_DESKTOPS')
+    if n:
+        return n
+    try:
+        import eduka_wayland as wl
+        comp = wl.compositor()
+        if comp == 'labwc':
+            return max(1, min(8, int(wl.labwc_desktop_count() or 1)))
+        if comp == 'kwin_wayland':
+            return max(1, min(8, int(wl.kwin_read('Desktops', 'Number') or 1)))
+    except (ImportError, ValueError):
+        pass
+    return 1
 
 
 def switch_workspace(index):
@@ -164,9 +192,12 @@ def focus_mode():
                 m = re.search(r'<focus>.*?<followMouse>(\w+)</followMouse>', path.read_text(encoding='utf-8', errors='ignore'), re.S)
                 if m:
                     return 'mouse' if m.group(1).lower() in ('yes', 'true', 'on') else 'click'
-        if wm == 'kwin_x11':
-            out = _run(['kreadconfig5', '--file', 'kwinrc', '--group', 'Windows', '--key', 'FocusPolicy']) or ''
-            return 'mouse' if 'Mouse' in out else 'click'
+        if wm in ('kwin_x11', 'kwin_wayland'):
+            import eduka_wayland as wl
+            return 'mouse' if 'Mouse' in wl.kwin_read('Windows', 'FocusPolicy') else 'click'
+        if wm == 'labwc':
+            import eduka_wayland as wl
+            return 'mouse' if (wl.labwc_read('focus/followMouse') or 'no').lower() in ('yes', 'true', 'on') else 'click'
         if wm == 'compiz':
             out = _run(['gsettings', 'get', 'org.compiz.core:/org/compiz/profiles/Default/plugins/core/', 'click-to-focus']) or 'true'
             return 'click' if 'true' in out else 'mouse'
@@ -202,12 +233,14 @@ def set_focus_mode(mode, delay=250):
                     path.write_text(new, encoding='utf-8')
             ec.safe_popen(['openbox', '--reconfigure'])
             return True
-        if wm == 'kwin_x11' and shutil.which('kwriteconfig5'):
-            _run(['kwriteconfig5', '--file', 'kwinrc', '--group', 'Windows', '--key', 'FocusPolicy',
-                  'FocusFollowsMouse' if mouse else 'ClickToFocus'])
-            _run(['kwriteconfig5', '--file', 'kwinrc', '--group', 'Windows', '--key', 'DelayFocusInterval', str(delay)])
-            _run(['qdbus', 'org.kde.KWin', '/KWin', 'reconfigure'])
-            return True
+        if wm in ('kwin_x11', 'kwin_wayland'):
+            import eduka_wayland as wl
+            ok = wl.kwin_write('Windows', 'FocusPolicy', 'FocusFollowsMouse' if mouse else 'ClickToFocus')
+            wl.kwin_write('Windows', 'DelayFocusInterval', delay); wl.kwin_reconfigure()
+            return ok
+        if wm == 'labwc':
+            import eduka_wayland as wl
+            return bool(wl.labwc_focus(mouse, delay))
         if wm == 'compiz' and shutil.which('gsettings'):
             _run(['gsettings', 'set', 'org.compiz.core:/org/compiz/profiles/Default/plugins/core/', 'click-to-focus',
                   'false' if mouse else 'true'])
@@ -228,14 +261,25 @@ def middle_paste():
 
 
 def set_middle_paste(on):
-    """GTK 3 and 4 programs (Qt programs always paste with the middle button)."""
+    """GTK 3 and 4 programs (Qt programs always paste with the middle button
+    in X11). In a Wayland session the compositor switches it for every
+    program: labwc's primarySelection, KWin's EnablePrimarySelection."""
     try:
         import eduka_common as ec
         for g in ('gtk-3.0', 'gtk-4.0'):
             ec._set_ini_value(CONFIG_HOME/g/'settings.ini', 'Settings', 'gtk-enable-primary-paste', 'true' if on else 'false')
-        return True
     except Exception:
         return False
+    try:
+        import eduka_wayland as wl
+        comp = wl.compositor()
+        if comp == 'labwc':
+            wl.labwc_primary_selection(on)
+        elif comp == 'kwin_wayland':
+            wl.kwin_write('Wayland', 'EnablePrimarySelection', 'true' if on else 'false'); wl.kwin_reconfigure()
+    except Exception:
+        pass
+    return True
 
 
 if __name__ == '__main__':

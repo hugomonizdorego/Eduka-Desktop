@@ -9,7 +9,7 @@ NOTIFY_MARK='Disabled by Edukasaun Desktop'
 # Eduka-Desktop sessions switch off lxqt-panel, LXQt's notification daemon
 # and picom's own autostart (eduka-session-prepare: autostart entries with
 # Hidden=true). Give them back: each local account removes Eduka's own
-# files (recognised by their comment) itself, so nothing in a home folder is
+# files (recognized by their comment) itself, so nothing in a home folder is
 # changed by root.
 restore_lxqt_modules() {
     command -v runuser >/dev/null 2>&1 || return 0

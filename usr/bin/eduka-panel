@@ -1520,7 +1520,7 @@ class GlobeWidget(QWidget):
 
     def _build_lookup(self):
         """For each screen row (a latitude) the map columns of its pixels,
-        relative to the centre longitude."""
+        relative to the center longitude."""
         R=self.d/2.0; self.rows=[]
         W=self.map.width() or 1024; H=self.map.height() or 512; self.W=W; self.H=H
         for y in range(self.d):
@@ -2506,7 +2506,7 @@ class ActionCenter(PopupFrame):
         QTimer.singleShot(700, self.panel.update_status_icons)
 
     def tile_settings(self, key):
-        cmd={'network':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','display':'lxqt-config-monitor','settings':'lxqt-config','dnd':'eduka-settings --page notifications'}.get(key)
+        cmd={'network':'nm-connection-editor','airplane':'nm-connection-editor','bluetooth':'blueman-manager','display':'eduka-settings --page display','settings':'lxqt-config','dnd':'eduka-settings --page notifications'}.get(key)
         if cmd: self.launch(cmd)
 
     def toggle_mute(self, on):
@@ -2832,7 +2832,13 @@ class InputWorker(QThread):
             import eduka_input as ei
             cfg=self.cfg or ei.input_config()
             if self.keyboard: ei.apply_keyboard(cfg)
-            self.done.emit(ei.apply_pointers(cfg))
+            devices=ei.apply_pointers(cfg)
+            if self.cfg is not None and not ei.x11_input():
+                # A change from the touchpad popup in a Wayland session (labwc).
+                import eduka_wayland
+                if eduka_wayland.compositor() == 'labwc':
+                    eduka_wayland.labwc_input(cfg)
+            self.done.emit(devices)
         except Exception:
             self.done.emit([])
 
@@ -2944,7 +2950,7 @@ class ToggleSwitch(QAbstractButton):
 
 
 def switch_row(title, subtitle=''):
-    """A row with a bold title (and grey subtitle) on the left and a switch."""
+    """A row with a bold title (and gray subtitle) on the left and a switch."""
     row=QFrame(); row.setObjectName('switchRow'); lay=QHBoxLayout(row); lay.setContentsMargins(6,4,4,4); lay.setSpacing(8)
     text=QVBoxLayout(); text.setSpacing(0)
     t=QLabel(title); t.setObjectName('popTitle'); t.setStyleSheet('font-size:13px;'); text.addWidget(t)
@@ -4299,7 +4305,7 @@ class EdukaPanel(QWidget):
 
     def popup_position(self, w, h, anchor_global=None, gap=8):
         """Top-left corner for a popup next to the panel (any edge),
-        centred on anchor_global when given, kept on screen."""
+        centered on anchor_global when given, kept on screen."""
         full=QApplication.primaryScreen().geometry()
         a=anchor_global or QPoint(self.x()+self.width()-w//2-4, self.y()+self.height()//2)
         if self.edge == 'Bottom':

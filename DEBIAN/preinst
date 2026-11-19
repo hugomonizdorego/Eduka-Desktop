@@ -7,7 +7,7 @@ set -e
 
 # Since 0.10.0~beta3 the files in /etc are conffiles. Set aside copies
 # nobody changed, so dpkg installs the new versions without asking; postinst
-# deletes them, postrm puts them back when the upgrade is cancelled.
+# deletes them, postrm puts them back when the upgrade is canceled.
 set_aside_unchanged() {
     file=$1; shift
     [ -f "$file" ] && [ ! -L "$file" ] || return 0

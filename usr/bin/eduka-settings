@@ -1770,7 +1770,7 @@ class Settings(ext.ExtPages, QDialog):
         THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',
         THEME_LIQUID: 'Soft milky glass with light rims. Needs a compositor (started automatically); without one the default theme is used.',
         THEME_DARK: 'Edukasaun-Dark (Orchis dark): Eduka-Panel, Eduka-Desktop, GTK and Qt applications and window borders turn dark.',
-        THEME_MULTI: 'Eduka-MultiColor (after Graphite by vinceliuice): calm light grey for applications, and a different color for every menu category, Action Center tile and panel button.',
+        THEME_MULTI: 'Eduka-MultiColor (after Graphite by vinceliuice): calm light gray for applications, and a different color for every menu category, Action Center tile and panel button.',
     }
 
     def update_theme_info(self):
@@ -2300,7 +2300,31 @@ class Settings(ext.ExtPages, QDialog):
         for icon, text, hint, handler in actions:
             b=QPushButton(get_icon(icon), '  '+text); b.setObjectName('maintButton'); b.setIconSize(QSize(22,22)); b.setToolTip(hint); b.setAccessibleDescription(hint); b.clicked.connect(handler); p.v.addWidget(b)
             h=hint_label(hint); h.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); h.setContentsMargins(6,0,0,4); p.v.addWidget(h)
+        self.drivers_card(p)
         return p.finish()
+
+    def drivers_card(self, p):
+        """Drivers and firmware (0.11 Pre-Stable): Wi-Fi, network, sound,
+        graphics and Bluetooth devices that have no driver yet."""
+        try:
+            import eduka_drivers as ed
+            found=ed.problems(); working=ed.summary()
+        except Exception:
+            return
+        c=p.new_card('Drivers and firmware')
+        if not found:
+            kinds=', '.join(_(k) for k in working) if working else ''
+            text=_('Every device has its driver.') + ((' ' + _('Working: {kinds}.').replace('{kinds}', kinds)) if kinds else '')
+            c.addWidget(hint_label(text))
+            return
+        for problem in found:
+            c.addWidget(hint_label(ed.describe(problem, _)))
+        cmd=ed.install_command([x['package'] for x in found if x['package']])
+        if cmd:
+            b=QPushButton(get_icon('system-software-install', 'package-x-generic'), '  '+_('Install the missing firmware…'))
+            b.setObjectName('maintButton'); b.setIconSize(QSize(22,22))
+            b.clicked.connect(lambda _c=False, command=cmd: self._snd_terminal(command))
+            c.addWidget(b)
 
     def rebuild_apps(self):
         safe_popen(['eduka-app-cache','--warm'])

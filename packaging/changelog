@@ -186,7 +186,7 @@ edukasaun-desktop-menu (0.10.0~beta3) trixie; urgency=medium
     over dark wallpapers; readable "Action Center" label; deeper text
     shadow on the light login screen styles.
   * Light themes use Papirus-Light: dark Wi-Fi, sound and battery icons on
-    the light panel (plain Papirus drew them light grey).
+    the light panel (plain Papirus drew them light gray).
   * Bug fixes: Close on the task bar no longer kills windows, the menu no
     longer opens by itself, XDG-correct application list started without a
     shell, task bar names, several wired ports, LUKS/LVM system disks,

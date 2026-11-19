@@ -363,7 +363,7 @@ the whole program is GPL-3.0-or-later. The About window
   a changed `_color-palette-default.scss`), SDDM `style=pastel`.
 - Icons: `_follow_icon_theme()` sets Papirus-Light / Papirus-Dark with the
   theme while `icon_theme_follow` is on (`follow_icon_theme_name()`; plain
-  Papirus has light grey panel icons, made for dark panels).
+  Papirus has light gray panel icons, made for dark panels).
 - `VERSION` is the shown version ("0.10.0 Beta"), `DEB_VERSION` the
   package version (0.10.0~beta3) that `tools/build-deb.sh` compares with
   DEBIAN/control. `theme_applied` stores `DEB_VERSION`, so a package update
@@ -482,7 +482,7 @@ the whole program is GPL-3.0-or-later. The About window
 - `tools/gen-wm-themes.py` writes the xfwm4 and Openbox borders of
   Edukasaun-Dark, Eduka-Low and Eduka-Transparan (fixed colors, no GTK
   symbolic colors).
-- Eduka-Low GTK: Yaru-remix default flavour, built with
+- Eduka-Low GTK: Yaru-remix default flavor, built with
   `meson setup build -Dicons=false -Dgnome-shell=false -Dgresource=false -Dwallpapers=false -Dmetacity=false -Ddark=false -Dlight=false`.
 
 ## Notifications

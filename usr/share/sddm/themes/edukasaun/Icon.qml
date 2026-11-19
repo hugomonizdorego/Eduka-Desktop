@@ -102,7 +102,7 @@ Canvas {
             c.moveTo(w * 0.36, h * 0.26); c.lineTo(cx, h * 0.12); c.lineTo(w * 0.64, h * 0.26)
             c.stroke()
         } else if (name === "finger") {
-            // fingerprint: arcs around a centre
+            // fingerprint: arcs around a center
             c.lineWidth = Math.max(1.1, w * 0.06)
             for (var f = 0; f < 4; f++) {
                 var fr = w * (0.1 + f * 0.1)

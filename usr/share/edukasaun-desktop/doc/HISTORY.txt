@@ -83,7 +83,7 @@ Edukasaun Desktop Suite 0.10.0 Beta (update 3, package 0.10.0~beta3)
   - Checked with Openbox + picom and with xfwm4 and its own compositor.
 - Themes:
   - Liquid Glass: the Action Center and the panel popups use the blue of the theme (they were green); the glass is less see-through over a dark wallpaper, so text stays readable.
-  - Icons: light themes now use Papirus-Light, whose status icons (Wi-Fi, sound, battery) are dark; with plain Papirus they were light grey and hard to see on the light Eduka-Panel. Dark themes keep Papirus-Dark.
+  - Icons: light themes now use Papirus-Light, whose status icons (Wi-Fi, sound, battery) are dark; with plain Papirus they were light gray and hard to see on the light Eduka-Panel. Dark themes keep Papirus-Dark.
   - The "Action Center" label on the panel clock is readable on every theme and wallpaper.
   - Login screen, light styles: the clock, the date and the user names have a deeper shadow, so they stay readable on a light picture.
 - Security:
@@ -170,7 +170,7 @@ Edukasaun Desktop Suite 0.9.23
 - Eduka-Panel no longer closes on an error: a Python error in a button or timer is written to ~/.cache/eduka-desktop/eduka-panel-errors.log and the panel keeps running (the same for Eduka-Desktop and Eduka-Settings); a real crash writes its trace to the same file.
 - Eduka-Desktop that stopped answering is detected (heartbeat): the next click on the start button replaces it, so logging out is no longer needed to open Eduka-Desktop again.
 - Eduka-Panel: the time and date (and the "Action Center" label) are sized to the real height of the panel and the system font, so they are never cut at the top or bottom; the panel items get a little more height.
-- Tetun language pack: with eduka-language-pack-tet installed, choosing Tetun in Eduka-Settings → Language & Startup sets LANGUAGE=tet:pt:en for the LXQt session, so every program with a Tetun translation uses it after logging out and in; a system set to Tetun is recognised by Eduka directly.
+- Tetun language pack: with eduka-language-pack-tet installed, choosing Tetun in Eduka-Settings → Language & Startup sets LANGUAGE=tet:pt:en for the LXQt session, so every program with a Tetun translation uses it after logging out and in; a system set to Tetun is recognized by Eduka directly.
 - Translations for Portuguese, Indonesian and Tetun of the new texts.
 - A welcome screen is planned for 0.10.0 (design concept).
 - Development continues toward 0.10.0 and the final version 1.1.12 (November 2026).
@@ -185,7 +185,7 @@ Edukasaun Desktop Suite 0.9.22
 - Eduka-Settings → Desktop Icons (new): Home, Trash, Computer, Network and plugged-in USB/HDD/SSD drives on the desktop, switched on and off at once.
 - Eduka-Settings → Keyboard, Mouse and Touchpad (new section Devices): keyboard layouts and the switch key, key repeat delay and speed, Num Lock; pointer speed, left-handed, natural scrolling, middle click, double-click time with a test, wheel lines; touchpad on/off, tap to click, natural scrolling, turn off while typing, scrolling method, speed and a live touchpad picture.
 - Eduka-Settings applies every change at once; Apply and Save & Close still work. The login screen and Parental Control keep their own Save button (they need an administrator password).
-- New theme Eduka-MultiColor, built from the Graphite GTK theme (light) by vinceliuice (GPL-3.0): calm light grey for applications, a rainbow start button, and a different color for every menu category, Action Center tile, panel button and window button on the taskbar. The same multi-color look can be switched on for the other themes (Eduka-Settings → Appearance → Multi-color).
+- New theme Eduka-MultiColor, built from the Graphite GTK theme (light) by vinceliuice (GPL-3.0): calm light gray for applications, a rainbow start button, and a different color for every menu category, Action Center tile, panel button and window button on the taskbar. The same multi-color look can be switched on for the other themes (Eduka-Settings → Appearance → Multi-color).
 - Parental Control: emoji now show as pictures (Noto Emoji by Google, Apache-2.0), so they never appear as empty boxes; times from 5 minutes (5, 10, 15, 30 min, 1, 2, 3 hours) and a manual time in hours, minutes and seconds (1 minute to 24 hours). The time service checks more often near the end, so short limits are exact.
 - About: credits for the Liquid Glass look (Ryosuke Watanabe, ryohsuke1231/liquid-glass, MIT), the Graphite GTK theme (vinceliuice, GPL-3.0) and Noto Emoji (Google, Apache-2.0).
 - Translations for Portuguese, Indonesian and Tetun of all new texts.
@@ -236,7 +236,7 @@ Edukasaun Desktop Suite 0.9.19
 
 Edukasaun Desktop Suite 0.9.18
 - Synchronized Eduka-Desktop, Eduka-Panel, Eduka-Menu and Eduka-Settings at version 0.9.18.
-- Fixed (serious): with Eduka-Settings open, the taskbar showed "Eduka-Update-System" with its icon. Eduka's own windows are now recognised by name, and generic words such as "Eduka", "Settings" or "System" no longer decide which application a window belongs to.
+- Fixed (serious): with Eduka-Settings open, the taskbar showed "Eduka-Update-System" with its icon. Eduka's own windows are now recognized by name, and generic words such as "Eduka", "Settings" or "System" no longer decide which application a window belongs to.
 - Eduka-Settings redesigned: the sidebar is split into PERSONALIZE, DESKTOP and SYSTEM groups with dividers; every setting sits on its own row with a thin line between rows; themes are chosen from picture cards.
 - New Eduka-Panel position: Bottom, Top, Left or Right (Eduka-Settings → Eduka-Panel, or right-click the panel → Panel Position). Left and right give a vertical panel with icons; the work area, popups, the Action Center and notification bubbles follow the edge.
 - New Effects page for Eduka-Desktop (off until switched on, only on computers with 4 GB of memory and 4 CPU threads, never with Eduka-Low-Theme): pointer over a category - Wave, Glow or Slide; opening an application - Bubbles, Zoom in, Zoom out, Ripple, Bounce, Confetti or Fade.

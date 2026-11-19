@@ -334,7 +334,17 @@ def apply_pointers(cfg, devices=None):
 def apply_all(cfg=None):
     cfg = cfg or input_config()
     apply_keyboard(cfg)
-    return apply_pointers(cfg)
+    devices = apply_pointers(cfg)
+    if not x11_input():
+        # Wayland: the compositor owns the devices (0.11 Pre-Stable: labwc).
+        try:
+            import eduka_wayland
+            if eduka_wayland.compositor() == 'labwc':
+                eduka_wayland.labwc_keyboard({**cfg, 'numlock': numlock_wanted(cfg)})
+                eduka_wayland.labwc_input(cfg)
+        except Exception:
+            pass
+    return devices
 
 
 def device_signature():

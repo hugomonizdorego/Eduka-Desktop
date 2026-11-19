@@ -59,69 +59,9 @@ def user_picture(user, size):
     return round_pixmap(ea.initials_avatar(user.get('full_name', ''), user.get('name', ''), color), size)
 
 
-# The overview of Eduka-Settings (RC2), like the system settings of a full
-# desktop: Eduka pages by their key, other tools ('@...') by the first of
-# their commands that is installed. Tools that are missing are not shown.
-SETTINGS_SECTIONS = [
-    ('Appearance', [
-        ('appearance', 'Themes', 'preferences-desktop-theme', 'theme style dark light colors accent'),
-        ('wallpaper', 'Backgrounds', 'preferences-desktop-wallpaper', 'wallpaper picture background'),
-        ('fonts', 'Font Selection', 'preferences-desktop-font', 'fonts letters text size scaling hinting'),
-        ('effects', 'Effects', 'applications-graphics', 'effects animation compositor transparency'),
-        ('desktopicons', 'Desktop', 'user-desktop', 'desktop icons home trash computer'),
-    ]),
-    ('Eduka', [
-        ('desktop', 'Eduka-Desktop', 'start-here', 'menu start applications tiles'),
-        ('quick', 'Eduka-Quick', '', 'pie quick launcher round hotkey'),
-        ('panel', 'Eduka-Panel', 'preferences-desktop', 'panel taskbar start button'),
-        ('clock', 'Clock', 'preferences-system-time', 'clock weather action center'),
-        ('notifications', 'Notifications', 'preferences-system-notifications', 'notifications messages do not disturb'),
-        ('windows', 'Windows', 'preferences-system-windows', 'focus follows mouse middle click paste clipboard history force close'),
-        ('workspaces', 'Workspaces & Corners', 'preferences-desktop', 'workspaces virtual desktops hot corners'),
-        ('capture', 'Screenshots & Recording', 'camera-photo', 'screenshot screen recording video record'),
-    ]),
-    ('Preferences', [
-        ('accessibility', 'Accessibility', 'preferences-desktop-accessibility', 'vision contrast large text pointer'),
-        ('users', 'Account details', 'user-info', 'account picture avatar name password'),
-        ('datetime', 'Date & Time', 'preferences-system-time', 'date time zone clock ntp sync'),
-        ('general', 'Languages', 'preferences-desktop-locale', 'language tetun indonesia portugues startup'),
-        ('@input', 'Input Method', 'fcitx', 'input method ime ibus fcitx'),
-        ('parental', 'Parental Control', 'preferences-system-parental-controls', 'parental time limit children break'),
-        ('@startup', 'Startup Applications', 'preferences-system-session', 'startup autostart session'),
-        ('@defaults', 'Preferred Applications', 'preferences-desktop-default-applications', 'default applications file associations browser'),
-        ('privacy', 'Privacy', 'preferences-system-privacy', 'privacy recent files history thumbnails trash'),
-        ('screenreader', 'Screen Reader', 'orca', 'orca screen reader voice speech'),
-        ('@screensaver', 'Screensaver', 'preferences-desktop-screensaver', 'screensaver lock idle'),
-        ('@windows', 'Windows', 'preferences-system-windows', 'windows window manager openbox xfwm4 borders'),
-    ]),
-    ('Hardware', [
-        ('@bluetooth', 'Bluetooth', 'bluetooth', 'bluetooth wireless devices'),
-        ('@disks', 'Disks', 'drive-harddisk', 'disks drives partitions usb'),
-        ('display', 'Display', 'preferences-desktop-display', 'display monitor screen resolution projector scale size'),
-        ('@display', 'Screens and Resolution', 'video-display', 'monitor resolution arrange screens projector'),
-        ('keyboard', 'Keyboard', 'input-keyboard', 'keyboard layout num lock'),
-        ('shortcuts', 'Keyboard Shortcuts', 'preferences-desktop-keyboard-shortcuts', 'shortcuts hotkeys keys windows super'),
-        ('mouse', 'Mouse and Touchpad', 'input-mouse', 'mouse touchpad pointer speed gestures'),
-        ('touchscreen', 'Touch Screen', 'input-tablet', 'touch screen tablet on-screen keyboard'),
-        ('@network', 'Network', 'preferences-system-network', 'network wifi wired vpn internet'),
-        ('@power', 'Power Management', 'preferences-system-power-management', 'power battery suspend sleep'),
-        ('@printers', 'Printers', 'printer', 'printers printing scanner'),
-        ('sound', 'Sound', 'audio-volume-high', 'sound volume speakers headphones microphone test hdmi bluetooth'),
-        ('soundfx', 'Clear Sound', 'audio-x-generic', 'easyeffects equalizer voice music noise clear sound presets'),
-        ('soundfix', 'Sound Quality & Fixes', 'preferences-desktop-sound', 'crackling no sound fix pipewire pulseaudio firmware'),
-        ('@sysinfo', 'System Information', 'computer', 'system information about version memory'),
-    ]),
-    ('Administration', [
-        ('fingerprint', 'Fingerprints', 'fingerprint', 'fingerprint login reader'),
-        ('@firewall', 'Firewall', 'gufw', 'firewall security ports'),
-        ('login', 'Login Window', 'system-users', 'login screen sddm autologin'),
-        ('lightdm', 'LightDM', 'system-users', 'lightdm greeter slick login'),
-        ('@software', 'Software Sources', 'software-properties', 'software sources repositories apt updates'),
-        ('maintenance', 'System Maintenance', 'applications-system', 'maintenance repair reset'),
-        ('memory', 'Memory', 'utilities-system-monitor', 'memory ram zram earlyoom slow freeze'),
-        ('users', 'Users and Groups', 'system-users', 'users accounts administrator groups'),
-    ]),
-]
+# The overview of Eduka-Settings: the pages and their search words are in
+# eduka_settings_index.py (Eduka-Desktop searches them too).
+from eduka_settings_index import SETTINGS_SECTIONS
 TOOLS = {
     '@input': (['fcitx5-configtool', 'im-config', 'ibus-setup'], False),
     '@startup': (['lxqt-config-session'], False),
@@ -681,7 +621,7 @@ class ExtPages:
             if c['boot'] and len(cards) > 1:
                 text += ' (' + _('built in, shows the screen') + ')'
             lab = QLabel(text); lab.setTextFormat(Qt.PlainText); g.addWidget(lab)
-        for _level, hint in eg.hints(cards):
+        for _level, hint in eg.hints(cards, _):
             g.addWidget(UI.hint_label(hint))
         dedicated = eg.dedicated(cards)
         if dedicated:
@@ -1497,7 +1437,7 @@ class ExtPages:
         p.v.addWidget(self._snd_title('Workspaces'))
         row = QHBoxLayout(); row.setSpacing(10)
         row.addWidget(QLabel(_('Number of workspaces')))
-        self.ws_count = QSpinBox(); self.ws_count.setRange(1, 8); self.ws_count.setValue(ew.workspace_count())
+        self.ws_count = QSpinBox(); self.ws_count.setRange(1, 8); self.ws_count.setValue(ew.configured_workspace_count())
         self.ws_count.setAccessibleName(_('Number of workspaces'))
         apply = QPushButton(_('Apply')); apply.clicked.connect(lambda: (ew.set_workspace_count(self.ws_count.value()),
                                                                          self._tell_panel('reload-windows'), self.show_status(_('Saved.'))))
@@ -1958,14 +1898,14 @@ class ExtPages:
                 row = QWidget(); r = QHBoxLayout(row); r.setContentsMargins(0, 0, 0, 0); r.setSpacing(8)
                 ic = QLabel(); ic.setPixmap(get_icon({'ok': 'emblem-ok', 'warn': 'dialog-warning', 'error': 'dialog-error'}[level],
                                                      'dialog-information').pixmap(20, 20))
-                lab = QLabel(_(text)); lab.setWordWrap(True); lab.setTextFormat(Qt.PlainText)
+                lab = QLabel(text); lab.setWordWrap(True); lab.setTextFormat(Qt.PlainText)
                 r.addWidget(ic); r.addWidget(lab, 1)
                 if fix:
                     label = {'restart': 'Restart', 'unmute': 'Unmute', 'volume': 'Set 60%', 'profile': 'Choose…',
                              'install-pactl': 'Install…', 'install-firmware': 'Install…'}.get(fix.split(':')[0], 'Fix')
                     b = QPushButton(_(label)); b.clicked.connect(lambda _c=False, f=fix: self.sound_fix(f)); r.addWidget(b)
                 self.snd_checks.addWidget(row)
-        run_in_background(self, self._au.diagnose, done)
+        run_in_background(self, lambda: self._au.diagnose(_), done)
 
     def sound_fix(self, key):
         au = self._au
