@@ -17,21 +17,21 @@ SDDM_HELPER = '/usr/lib/edukasaun-desktop/eduka-sddm-apply'
 PARENTAL_HELPER = '/usr/lib/edukasaun-desktop/eduka-parental-apply'
 PARENTAL_CONF = '/etc/edukasaun-desktop/parental.json'
 SDDM_STYLES = [('follow', 'Follow Eduka-Desktop theme'), ('pastel', 'Pastel'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass')]
-SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7', 'pastel': '#3fa684'}
+SDDM_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7', 'pastel': '#3b87d4'}
 
 # Colors of the Settings window for each Eduka theme. The window itself is
 # opaque (it is a normal application window); Liquid Glass uses a cool,
 # milky palette and Edukasaun-Dark the Orchis dark colors.
 SETTINGS_PALETTES = {
-    # Eduka-Pastel: soft mint page and sidebar, white rounded cards, mint pills;
+    # Eduka-Pastel: faintly blue page and sidebar, white rounded cards, blue pills;
     # the chosen page is a white pill with a soft outline.
     THEME_PASTEL: {
-        'bg': '#edf7f2', 'sidebar': '#d6efe6', 'card': '#fcfefd', 'border': '#dcebe5',
-        'text': '#24403a', 'title': '#1b332e', 'sub': '#5d7671', 'accent': '#3fa684', 'accent_hover': '#5bbf9c',
-        'field': '#fcfefd', 'field_border': '#cfe3db', 'hover': 'rgba(255,255,255,150)', 'button': '#f8fcfa',
-        'chip': '#d6efe5', 'chip_text': '#2a7d61', 'reset': '#fdeec8', 'reset_text': '#7a5200',
-        'groove': '#e1eee9', 'ok': '#3f8f7b', 'error': '#c8473c',
-        'nav_sel_bg': '#fcfefd', 'nav_sel_text': '#1b332e', 'radius': 22, 'pill': 16, 'shadow': '#c4dbd2',
+        'bg': '#eef4fa', 'sidebar': '#dce9f7', 'card': '#fcfdff', 'border': '#dbe5f0',
+        'text': '#22364a', 'title': '#192c3f', 'sub': '#5b6c7d', 'accent': '#3b87d4', 'accent_hover': '#5d9fe0',
+        'field': '#fcfdff', 'field_border': '#cddced', 'hover': 'rgba(255,255,255,150)', 'button': '#f8fafd',
+        'chip': '#dbe8f7', 'chip_text': '#25659f', 'reset': '#fdeec8', 'reset_text': '#7a5200',
+        'groove': '#e1e9f3', 'ok': '#3a78b5', 'error': '#c8473c',
+        'nav_sel_bg': '#fcfdff', 'nav_sel_text': '#192c3f', 'radius': 22, 'pill': 16, 'shadow': '#c3d5e7',
     },
     THEME_DEFAULT: {
         'bg': '#eef3f1', 'sidebar': '#e4ece8', 'card': '#ffffff', 'border': '#dfe8e4',
@@ -79,7 +79,7 @@ SETTINGS_PALETTES = {
 }
 # Small previews of the themes (surface, panel, accent, text) for the theme cards.
 THEME_SWATCHES = {
-    THEME_PASTEL: ('#fcfefd', '#d6efe6', '#3fa684', '#24403a'),
+    THEME_PASTEL: ('#fcfdff', '#dce9f7', '#3b87d4', '#22364a'),
     THEME_DEFAULT: ('#f4faf7', '#ffffff', '#00a879', '#1f2d2a'),
     THEME_LOW: ('#f7f7f7', '#323030', '#315bef', '#3d3d3d'),
     THEME_LIQUID: ('#dcecf6', '#ffffff', '#1e9bd7', '#1c2b33'),
@@ -163,7 +163,7 @@ QPushButton:disabled{{color:{c['sub']};}}
 QPushButton{{background:{c['button']};color:{c['text']};border:1px solid {c['field_border']};border-radius:{c.get('pill', 10)}px;padding:8px 14px;font-weight:700;}}
 QPushButton:hover{{border:1px solid {c['accent']};}}
 QPushButton:focus{{border:1px solid {c['accent']};}}
-QPushButton#primary{{background:{('qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6fcaa8,stop:1 #3fa684)' if c.get('shadow') else c['accent'])};color:#ffffff;border:1px solid {c['accent']};}}
+QPushButton#primary{{background:{('qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #73aee6,stop:1 #3b87d4)' if c.get('shadow') else c['accent'])};color:#ffffff;border:1px solid {c['accent']};}}
 QPushButton#chip{{border-radius:15px;padding:6px 16px;font-weight:700;}}
 QPushButton#chip:checked{{background:{c['accent']};color:#ffffff;border:1px solid {c['accent']};}}
 QToolButton#emojiChip{{font-size:18px;border-radius:17px;border:1px solid {c['field_border']};background:{c['field']};}}
@@ -449,7 +449,7 @@ def theme_preview(theme, w=132, h=78):
     p=QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
     g=QLinearGradient(0, 0, w, h); g.setColorAt(0, QColor('#9fd2b4')); g.setColorAt(1, QColor('#3f8f6a'))
     if theme in (THEME_DARK, THEME_TRANSPARENT): g.setColorAt(0, QColor('#3a4a46')); g.setColorAt(1, QColor('#101413'))
-    if theme == THEME_PASTEL: g.setColorAt(0, QColor('#d6e8f8')); g.setColorAt(1, QColor('#d6efe6'))
+    if theme == THEME_PASTEL: g.setColorAt(0, QColor('#d6e8f8')); g.setColorAt(1, QColor('#dce9f7'))
     path=QPainterPath(); path.addRoundedRect(QRectF(0, 0, w, h), 10, 10); p.setClipPath(path); p.fillRect(pix.rect(), g)
     win=QColor(surface)
     if theme in (THEME_LIQUID, THEME_TRANSPARENT): win.setAlpha(190)
@@ -459,7 +459,7 @@ def theme_preview(theme, w=132, h=78):
     tc=QColor(text); tc.setAlpha(110); p.setBrush(tc)
     for i in range(3):
         if theme == THEME_MULTI: p.setBrush(QColor(MULTI_COLORS[i*3]))
-        if theme == THEME_PASTEL: p.setBrush(QColor(('#d6efe6', '#d8e9f9', '#fdf0c9')[i]))
+        if theme == THEME_PASTEL: p.setBrush(QColor(('#dce9f7', '#d8e9f9', '#fdf0c9')[i]))
         p.drawRoundedRect(QRectF(16+i*30, 26, 24, 16), 3, 3)
     pc=QColor(panel)
     if theme in (THEME_LIQUID, THEME_TRANSPARENT): pc.setAlpha(200)
@@ -528,7 +528,7 @@ class LoginPreview(QWidget):
         self.update()
 
     # The colored lights of the login screen (Main.qml): x, y, radius, color, alpha.
-    LIGHTS={'pastel': ((0.12,0.86,0.42,(63,166,132),0.40), (0.88,0.12,0.40,(124,196,240),0.50), (0.92,0.9,0.30,(246,178,107),0.32),
+    LIGHTS={'pastel': ((0.12,0.86,0.42,(59,135,212),0.40), (0.88,0.12,0.40,(124,196,240),0.50), (0.92,0.9,0.30,(246,178,107),0.32),
                        (0.06,0.08,0.28,(185,167,240),0.34), (0.5,0.5,0.28,(255,255,255),0.40)),
             'light': ((0.1,0.9,0.45,(0,168,121),0.35), (0.9,0.12,0.40,(255,255,255),0.45), (0.88,0.9,0.30,(246,178,107),0.26)),
             'dark': ((0.14,0.86,0.42,(38,166,154),0.24), (0.86,0.14,0.38,(124,108,240),0.18), (0.9,0.88,0.28,(229,72,77),0.10)),
@@ -548,7 +548,7 @@ class LoginPreview(QWidget):
             p.fillRect(self.rect(), QColor(0,0,0,90) if dark else QColor(0,0,0,25))
         else:
             g=QLinearGradient(0, 0, 0, H)
-            stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a'), 'pastel': ('#d6e8f8','#edf7f2','#d6efe6')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
+            stops={'dark': ('#2f3b39','#1f2a28','#121616'), 'glass': ('#bfe3f5','#7fb9dc','#2f6f9a'), 'pastel': ('#d6e8f8','#eef4fa','#dce9f7')}.get(style, ('#e9f6c9','#8fcf7a','#1f6b45'))
             for pos, col in zip((0.0, 0.5, 1.0), stops): g.setColorAt(pos, QColor(col))
             p.fillRect(self.rect(), g)
             m=max(W, H)
@@ -1728,7 +1728,7 @@ class Settings(ext.ExtPages, QDialog):
         self.show_status(_('Keyboard, mouse, touchpad and touch screen settings applied.'))
 
     THEME_INFO = {
-        THEME_PASTEL: 'Eduka-Pastel (the default): soft mint green and sky blue with cute colored badges, big raised round cards and pill buttons; light and friendly for school.',
+        THEME_PASTEL: 'Eduka-Pastel (the default): the soft blue of the Edukasaun OS logo with cute colored badges, big raised round cards and pill buttons; light and friendly for school.',
         THEME_DEFAULT: 'Light and lightweight; recommended for older computers.',
         THEME_LOW: 'Eduka-Low-Theme (after Yaru-remix): flat and fully opaque. Transparency, the compositor and all effects are switched off — for very low spec computers.',
         THEME_TRANSPARENT: 'Eduka-Transparan (after Transparent-Shell-Theme): smoky dark glass. Needs a compositor; without one Edukasaun-Dark is used.',

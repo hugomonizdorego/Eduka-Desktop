@@ -144,7 +144,7 @@ def quick_icon(size=48, accent=None):
     if os.path.exists(svg):
         return QIcon(svg)
     import math
-    accent = QColor(accent or theme_accent() or '#3fa684')
+    accent = QColor(accent or theme_accent() or '#3b87d4')
     pix = QPixmap(size, size); pix.fill(Qt.transparent)
     p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
     c = size / 2; r = size * 0.44
@@ -227,7 +227,7 @@ class AvatarPicker(QDialog):
         for path in sorted(EMOJI_DIR.glob('emoji_u*.png')):
             img = QImage(str(path))
             if not img.isNull():
-                canvas = QImage(256, 256, QImage.Format_ARGB32_Premultiplied); canvas.fill(QColor('#eaf6f1'))
+                canvas = QImage(256, 256, QImage.Format_ARGB32_Premultiplied); canvas.fill(QColor('#eaf2fb'))
                 p = QPainter(canvas); p.setRenderHint(QPainter.SmoothPixmapTransform)
                 p.drawImage(QRectF(40, 40, 176, 176), img); p.end()
                 options.append(('emoji', str(path), canvas))
@@ -380,7 +380,7 @@ LIGHTDM_AUTOLOGIN = Path('/etc/lightdm/lightdm.conf.d/50-eduka-autologin.conf')
 LIGHTDM_GREETERS = (('slick-greeter', 'Slick greeter', 'Big account names over the background, with the logo in the corner.'),
                     ('lightdm-gtk-greeter', 'GTK greeter', 'A login card in the middle, like the SDDM login screen.'))
 LOGIN_STYLES = (('follow', 'Follow Eduka-Desktop theme'), ('pastel', 'Pastel'), ('light', 'Light'), ('dark', 'Dark'), ('glass', 'Glass'))
-LOGIN_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7', 'pastel': '#3fa684'}
+LOGIN_ACCENTS = {'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7', 'pastel': '#3b87d4'}
 
 
 def current_display_manager():
@@ -570,7 +570,7 @@ class ExtPages:
 
     # ------------------------------------------------------------ display (0.11 RC3)
     @staticmethod
-    def scale_preview(scale, accent='#3fa684', w=92, h=58):
+    def scale_preview(scale, accent='#3b87d4', w=92, h=58):
         """A window and a panel drawn at this scale (on 100 % they fill the
         same share of the picture as on a normal screen)."""
         pix = QPixmap(w, h); pix.fill(Qt.transparent)
@@ -638,7 +638,7 @@ class ExtPages:
         rec = prof.get('recommended_scale', 1.0)
         from PyQt5.QtWidgets import QButtonGroup
         grid = QGridLayout(); grid.setSpacing(10); self.scale_cards = {}; group = QButtonGroup(self)
-        accent = theme_accent() if callable(theme_accent) else '#3fa684'
+        accent = theme_accent() if callable(theme_accent) else '#3b87d4'
         for i, value in enumerate(edev.SCALES):
             text = f'{int(value * 100)} %' + ('\n' + _('Recommended') if value == rec else '')
             card = QToolButton(); card.setObjectName('posCard'); card.setCheckable(True); card.setText(text)
@@ -1489,7 +1489,7 @@ class ExtPages:
         self.ldm_style = QComboBox(); self.ldm_style.setAccessibleName('Style')
         for key, label in LOGIN_STYLES: self.ldm_style.addItem(_(label), key)
         f.addRow('Style', self.ldm_style)
-        self.ldm_accent_value = '#3fa684'
+        self.ldm_accent_value = '#3b87d4'
         self.ldm_accent = QPushButton(''); self.ldm_accent.setObjectName('swatch'); self.ldm_accent.setAccessibleName('Accent color')
         self.ldm_accent.setToolTip(_('Accent color of the login button')); self.ldm_accent.clicked.connect(self.pick_lightdm_accent)
         arow = QHBoxLayout(); arow.addWidget(self.ldm_accent); arow.addStretch(1); f.addRow('Accent color', arow)
@@ -1611,7 +1611,7 @@ class ExtPages:
         style = 'follow' if follow else state.get('style', 'pastel')
         self.ldm_style.setCurrentIndex(max(0, self.ldm_style.findData(style)))
         self.ldm_accent.setEnabled(style != 'follow')
-        self.set_lightdm_accent(state.get('accent', LOGIN_ACCENTS.get(state.get('style', 'pastel'), '#3fa684')))
+        self.set_lightdm_accent(state.get('accent', LOGIN_ACCENTS.get(state.get('style', 'pastel'), '#3b87d4')))
         self.ldm_clock.setChecked(bool(state.get('show_clock', True)))
         self.ldm_clock_format.setCurrentIndex(max(0, self.ldm_clock_format.findData(state.get('clock_format', '24h'))))
         self.ldm_clock_format.setEnabled(self.ldm_clock.isChecked())

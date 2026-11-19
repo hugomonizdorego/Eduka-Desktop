@@ -50,14 +50,14 @@ SESSION = 'edukasaun-desktop'
 XGREETERS = '/usr/share/xgreeters'
 DM_BINARIES = {'lightdm': '/usr/sbin/lightdm', 'sddm': '/usr/bin/sddm'}
 MAX_IMAGE = 25 * 1024 * 1024
-DEFAULT_ACCENT = {'pastel': '#3fa684', 'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
+DEFAULT_ACCENT = {'pastel': '#3b87d4', 'light': '#00a879', 'dark': '#26a69a', 'glass': '#1e9bd7'}
 
 # The glass cards of every style: the colors of the SDDM theme (Main.qml,
 # 0.11 RC3). The fields are filled with the accent color, as on SDDM.
 PALETTES = {
     'pastel': dict(card_top='rgba(255,255,255,0.86)', card_bottom='rgba(255,255,255,0.66)', card_border='rgba(255,255,255,0.95)',
                    text='#1f3d36', sub='#557069', chip='rgba(255,255,255,0.74)', chip_border='rgba(255,255,255,0.95)',
-                   hover='rgba(63,166,132,0.16)', middle='#edf7f2'),
+                   hover='rgba(59,135,212,0.16)', middle='#eef4fa'),
     'light': dict(card_top='rgba(255,255,255,0.92)', card_bottom='rgba(255,255,255,0.78)', card_border='rgba(255,255,255,0.95)',
                   text='#10231e', sub='#4d625c', chip='rgba(255,255,255,0.80)', chip_border='rgba(255,255,255,0.95)',
                   hover='rgba(0,120,90,0.12)', middle='#8fcf7a'),
@@ -287,7 +287,7 @@ def apply_look(req, uid):
         fail('Unknown style.')
     accent = str(req.get('accent', '') or DEFAULT_ACCENT[style])
     if not re.fullmatch(r'#[0-9a-fA-F]{6}', accent):
-        fail('Accent must look like #3fa684.')
+        fail('Accent must look like #3b87d4.')
     show_clock = bool(req.get('show_clock', True))
     clock_24 = str(req.get('clock_format', '24h')) != '12h'
     show_host = bool(req.get('show_hostname', True))

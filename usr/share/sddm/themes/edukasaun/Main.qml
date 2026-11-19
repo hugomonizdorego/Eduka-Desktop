@@ -42,7 +42,7 @@ Rectangle {
     property bool dark: style === "dark"
     property bool glass: style === "glass"
     property bool pastel: style === "pastel"
-    property color accent: contrast ? "#ffd400" : (/^#[0-9a-fA-F]{6}$/.test(String(config.accent)) ? String(config.accent) : (dark ? "#26a69a" : (glass ? "#1e9bd7" : (pastel ? "#3fa684" : "#00a879"))))
+    property color accent: contrast ? "#ffd400" : (/^#[0-9a-fA-F]{6}$/.test(String(config.accent)) ? String(config.accent) : (dark ? "#26a69a" : (glass ? "#1e9bd7" : (pastel ? "#3b87d4" : "#00a879"))))
     property bool showClock: String(config.showClock) !== "false"
     property bool busy: false
     property bool menuOpen: menus.open !== ""
@@ -330,8 +330,8 @@ Rectangle {
         anchors.fill: parent
         gradient: Gradient {
             GradientStop { position: 0.0; color: root.dark ? "#2f3b39" : (root.glass ? "#bfe3f5" : (root.pastel ? "#d6e8f8" : "#e9f6c9")) }
-            GradientStop { position: 0.5; color: root.dark ? "#1f2a28" : (root.glass ? "#7fb9dc" : (root.pastel ? "#edf7f2" : "#8fcf7a")) }
-            GradientStop { position: 1.0; color: root.dark ? "#121616" : (root.glass ? "#2f6f9a" : (root.pastel ? "#d6efe6" : "#1f6b45")) }
+            GradientStop { position: 0.5; color: root.dark ? "#1f2a28" : (root.glass ? "#7fb9dc" : (root.pastel ? "#eef4fa" : "#8fcf7a")) }
+            GradientStop { position: 1.0; color: root.dark ? "#121616" : (root.glass ? "#2f6f9a" : (root.pastel ? "#dce9f7" : "#1f6b45")) }
         }
     }
     // Soft lights in the colors of Eduka-Desktop behind the glass (only
@@ -349,7 +349,7 @@ Rectangle {
             var w = width, h = height, m = Math.max(w, h)
             var set = root.dark ? [[0.14, 0.86, 0.42, "38,166,154", 0.24], [0.86, 0.14, 0.38, "124,108,240", 0.18], [0.9, 0.88, 0.28, "229,72,77", 0.10]]
                     : root.glass ? [[0.16, 0.18, 0.4, "255,255,255", 0.40], [0.86, 0.82, 0.45, "30,155,215", 0.35], [0.82, 0.14, 0.3, "185,167,240", 0.28]]
-                    : root.pastel ? [[0.12, 0.86, 0.42, "63,166,132", 0.40], [0.88, 0.12, 0.40, "124,196,240", 0.50], [0.92, 0.9, 0.30, "246,178,107", 0.32], [0.06, 0.08, 0.28, "185,167,240", 0.34], [0.5, 0.5, 0.28, "255,255,255", 0.40]]
+                    : root.pastel ? [[0.12, 0.86, 0.42, "59,135,212", 0.40], [0.88, 0.12, 0.40, "124,196,240", 0.50], [0.92, 0.9, 0.30, "246,178,107", 0.32], [0.06, 0.08, 0.28, "185,167,240", 0.34], [0.5, 0.5, 0.28, "255,255,255", 0.40]]
                     : [[0.1, 0.9, 0.45, "0,168,121", 0.35], [0.9, 0.12, 0.40, "255,255,255", 0.45], [0.88, 0.9, 0.30, "246,178,107", 0.26]]
             for (var i = 0; i < set.length; i++) {
                 var b = set[i], x = b[0] * w, y = b[1] * h, r = b[2] * m

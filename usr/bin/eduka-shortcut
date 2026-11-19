@@ -354,13 +354,9 @@ def runner():
 
 
 def menu(action='toggle'):
-    import time
-    from eduka_common import menu_daemon_alive, send_menu_command, safe_popen
-    if not menu_daemon_alive():
-        safe_popen(['eduka-menu', '--daemon', '--show'] if action != 'hide' else ['eduka-menu', '--daemon'])
-        return
-    send_menu_command(action)
-    time.sleep(0.01)
+    # eduka_ipc needs no Qt: the menu opens without loading it (Pre-Stable).
+    import eduka_ipc
+    eduka_ipc.menu_client(action)
 
 
 def session(action):

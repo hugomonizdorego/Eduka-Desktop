@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
-import sys, os, time, json, fcntl, random, math
+import sys, os
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+if __name__ == '__main__' and not any(a in sys.argv for a in ('--daemon', '--autostart')):
+    # eduka-menu --toggle | --show | --hide (the Super key, the MENU button of
+    # other panels): only a message to the resident Eduka-Desktop, without
+    # loading Qt first (that took a second or more on old computers).
+    import eduka_ipc
+    _action = 'show' if '--show' in sys.argv else ('hide' if '--hide' in sys.argv else 'toggle')
+    sys.exit(0 if eduka_ipc.menu_client(_action) else 1)
+import time, json, fcntl, random, math
 # Screen readers (Orca) see Eduka-Desktop also when started without the
 # environment of the launcher (must be set before Qt starts).
 os.environ.setdefault('QT_LINUX_ACCESSIBILITY_ALWAYS_ON', '1')
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-sys.path.insert(0, '/usr/lib/edukasaun-desktop')
 from eduka_common import *
 from eduka_common import _
 
@@ -216,9 +224,11 @@ class CategoryDelegate(QStyledItemDelegate):
         if selected and UI['low'] and not high_contrast:
             bg = QColor('#315bef'); border = QColor('#315bef'); text_color = QColor('#ffffff')
         elif selected and UI['pastel'] and not high_contrast:
-            # The chosen category: a raised pill tinted with its own pastel color.
-            bg = QColor(*_mix((accent.red(), accent.green(), accent.blue()), 0.24)); border = QColor(accent.red(), accent.green(), accent.blue(), 150)
-            text_color = QColor(27, 51, 46)
+            # The chosen category: a raised pill in the soft blue of the logo
+            # (the theme accent, Pre-Stable); the other rows keep their colors.
+            pill = QColor(theme_accent() or PASTEL['accent'])
+            bg = QColor(*_mix((pill.red(), pill.green(), pill.blue()), 0.24)); border = QColor(pill.red(), pill.green(), pill.blue(), 150)
+            text_color = QColor(25, 44, 63)
         elif selected:
             bg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             bg.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue()))
@@ -245,10 +255,10 @@ class CategoryDelegate(QStyledItemDelegate):
                 border = QColor(accent.red(), accent.green(), accent.blue(), 230)
                 text_color = QColor(255, 255, 255)
         elif UI['pastel'] and not high_contrast and not selected:
-            # Eduka-Pastel: rows sit on the mint sidebar; hover is a soft white pill.
+            # Eduka-Pastel: rows sit on the soft blue sidebar; hover is a white pill.
             bg = QColor(255, 255, 255, 170 if hover else 0)
             border = QColor(255, 255, 255, 0)
-            text_color = QColor(36, 64, 58)
+            text_color = QColor(34, 54, 74)
         elif UI['multi'] and not high_contrast:
             # Eduka-MultiColor: every category is a soft block of its own color
             # with a colored edge; hover makes the color stronger.
@@ -394,8 +404,8 @@ class AppButton(QToolButton):
             # pastel color; the pointer makes the color stronger.
             sr,sg,sb=_mix(self._accent, 0.20)
             self.setStyleSheet(f"""
-            QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{max(a, 235)}),stop:1 rgba({sr},{sg},{sb},{max(a, 235)}));border:1px solid rgba({r},{g},{b},85);border-radius:22px;padding:8px;color:#24403a;font-weight:800;}}
-            QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgb({tr},{tg},{tb}),stop:1 rgb({lr},{lg},{lb}));border:1px solid rgb({r},{g},{b});color:#1b332e;}}
+            QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{max(a, 235)}),stop:1 rgba({sr},{sg},{sb},{max(a, 235)}));border:1px solid rgba({r},{g},{b},85);border-radius:22px;padding:8px;color:#22364a;font-weight:800;}}
+            QToolButton:hover,QToolButton:focus{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgb({tr},{tg},{tb}),stop:1 rgb({lr},{lg},{lb}));border:1px solid rgb({r},{g},{b});color:#192c3f;}}
             QToolButton:pressed{{background:rgb({pr},{pg},{pb});border:1px solid rgb({r},{g},{b});}}
             """)
             return
@@ -713,9 +723,43 @@ class EdukaMenu(QWidget):
         self.hide_menu(force=True)
         open_website(EDUKASAUN_WEBSITE)
 
+    # Narrower than this (an 800x600 screen, a large scale), Eduka-Desktop
+    # hides its right column and shows the favorites as a category, so the
+    # applications get the room (Pre-Stable).
+    COMPACT_WIDTH = 900
+
     def category_entries(self):
-        # Favorites are shown only in the right-side Favorites panel, not as a duplicated category.
-        return [(name, icon, needles) for name, icon, needles in CATEGORY_ORDER if name != 'Favorites']
+        # Favorites are shown in the right-side Favorites panel; only when that
+        # column is hidden (a narrow screen) they are a category of their own.
+        entries=[(name, icon, needles) for name, icon, needles in CATEGORY_ORDER if name != 'Favorites']
+        if getattr(self, '_compact', False):
+            entries.insert(1, ('Favorites', 'emblem-favorite', []))
+        return entries
+
+    def apply_compact(self):
+        side=getattr(self, 'side', None)
+        if side is None:
+            return
+        compact=self.width() < self.COMPACT_WIDTH
+        if compact == getattr(self, '_compact', None):
+            return
+        self._compact=compact
+        side.setVisible(not compact)
+        self.cats.setFixedWidth(196 if compact else 224)
+        self.rebuild_categories(preserve=True)
+        QTimer.singleShot(0, self.fit_categories)
+        if getattr(self, '_built', False):
+            self.refresh_timer.start(30)
+
+    def favorite_apps(self):
+        apps_by_key={}
+        for a in getattr(self, 'apps', []) or []:
+            apps_by_key[pin_app_key(a)] = a
+            if a.get('path'): apps_by_key[a.get('path')] = a
+            if a.get('desktop_id'): apps_by_key[a.get('desktop_id')] = a
+            if a.get('name'): apps_by_key[a.get('name')] = a
+        fav_apps=[apps_by_key.get(k) or app_by_pin_key(k) for k in read_favorites()]
+        return [a for a in fav_apps if a]
 
     def build(self):
         root=QVBoxLayout(self); m=8 if getattr(self, '_composited', True) else 0; root.setContentsMargins(m,m,m,m)
@@ -846,7 +890,7 @@ class EdukaMenu(QWidget):
         elif liquid and not accessibility:
             self.bg.setStyleSheet('QFrame#menuBg{'+liquid_glass_surface(alpha/0.51, 28, 2)+'} QLabel{color:#132a2f;}')
         elif pastel:
-            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(237,247,242,{max(bg_alpha, 246)});border:1px solid #c4dbd2;border-radius:{max(radius, 28) if composited else 0}px;}} QLabel{{color:#24403a;}}')
+            self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(238,244,250,{max(bg_alpha, 246)});border:1px solid #c3d5e7;border-radius:{max(radius, 28) if composited else 0}px;}} QLabel{{color:#22364a;}}')
         elif theme == THEME_MULTI and not accessibility:
             # Graphite light: neutral greys, the colors come from the categories.
             self.bg.setStyleSheet(f'QFrame#menuBg{{background:rgba(250,250,250,{bg_alpha});border:1px solid rgba(0,0,0,28);border-radius:{radius}px;}} QLabel{{color:#212121;}}')
@@ -923,20 +967,20 @@ class EdukaMenu(QWidget):
             if app is not None and app.styleSheet() != tooltip_qss():
                 app.setStyleSheet(tooltip_qss())
             pastel_qss = (
-                'QLineEdit{background:#fcfefd;border:1px solid #cfe3db;border-radius:20px;padding:8px 14px;color:#24403a;selection-background-color:#3fa684;}'
-                'QLineEdit:focus{border:1px solid #3fa684;}'
-                'QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #eaf5f0);border:1px solid #cfe3db;border-radius:16px;color:#24403a;font-weight:800;}'
-                'QPushButton:hover{background:#eaf6f1;border:1px solid #6fcaa8;}'
-                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6fcaa8,stop:1 #3fa684);color:white;border:1px solid #3fa684;}'
-                'QPushButton#closeButton{background:#d6efe5;color:#2f8f6f;border:0;}'
-                'QFrame#contentCard{background:rgba(252,254,253,245);border:1px solid #cfe3db;border-radius:26px;}'
-                'QFrame#sideCard{background:rgba(252,254,253,245);border:1px solid #cfe3db;border-radius:26px;}'
-                'QListWidget#categoryList{background:#d6efe6;border:0;border-radius:26px;}'
-                'QFrame#sysInfoCard{background:#edf7f2;border:1px solid #dcebe5;border-radius:16px;}'
+                'QLineEdit{background:#fcfdff;border:1px solid #cddced;border-radius:20px;padding:8px 14px;color:#22364a;selection-background-color:#3b87d4;}'
+                'QLineEdit:focus{border:1px solid #3b87d4;}'
+                'QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #eaf1fa);border:1px solid #cddced;border-radius:16px;color:#22364a;font-weight:800;}'
+                'QPushButton:hover{background:#eaf2fb;border:1px solid #73aee6;}'
+                'QPushButton#segLeft:checked,QPushButton#segRight:checked{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #73aee6,stop:1 #3b87d4);color:white;border:1px solid #3b87d4;}'
+                'QPushButton#closeButton{background:#dbe8f7;color:#2c72ba;border:0;}'
+                'QFrame#contentCard{background:rgba(252,253,255,245);border:1px solid #cddced;border-radius:26px;}'
+                'QFrame#sideCard{background:rgba(252,253,255,245);border:1px solid #cddced;border-radius:26px;}'
+                'QListWidget#categoryList{background:#dce9f7;border:0;border-radius:26px;}'
+                'QFrame#sysInfoCard{background:#eef4fa;border:1px solid #dbe5f0;border-radius:16px;}'
                 'QScrollBar:vertical{background:transparent;}'
-                'QScrollBar::handle:vertical{background:rgba(63,166,132,110);border-radius:4px;}'
-                'QLabel#sectionTitle,QLabel#infoTitle{color:#1b332e;}'
-                'QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#5d7671;}'
+                'QScrollBar::handle:vertical{background:rgba(59,135,212,110);border-radius:4px;}'
+                'QLabel#sectionTitle,QLabel#infoTitle{color:#192c3f;}'
+                'QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#5b6c7d;}'
             ) if pastel else ''
             self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + pastel_qss + accessibility_qss)
         self.apply_blur_hint(liquid and not accessibility)
@@ -1101,7 +1145,9 @@ class EdukaMenu(QWidget):
             item=self.stack_layout.takeAt(0)
             w=item.widget(); lay=item.layout()
             if w:
-                w.setParent(None); w.deleteLater()
+                # Hidden and deleted later, never orphaned: a tile whose own
+                # right-click menu refreshed the list was freed under its feet.
+                w.hide(); w.deleteLater()
             elif lay:
                 while lay.count():
                     child=lay.takeAt(0)
@@ -1119,14 +1165,7 @@ class EdukaMenu(QWidget):
         fav_title=QLabel('★  Favorites')
         fav_title.setStyleSheet('font-weight:900;color:#d49a00;font-size:14px;')
         self.side_layout.addWidget(fav_title)
-        apps_by_key={}
-        for a in getattr(self, 'apps', []) or []:
-            apps_by_key[pin_app_key(a)] = a
-            if a.get('path'): apps_by_key[a.get('path')] = a
-            if a.get('desktop_id'): apps_by_key[a.get('desktop_id')] = a
-            if a.get('name'): apps_by_key[a.get('name')] = a
-        fav_apps=[apps_by_key.get(k) or app_by_pin_key(k) for k in read_favorites()]
-        fav_apps=[a for a in fav_apps if a]
+        fav_apps=self.favorite_apps()
         if not fav_apps:
             lab=QLabel('No favorites yet. Right-click an app and choose Add to Favorites.')
             lab.setWordWrap(True); lab.setObjectName('mutedText')
@@ -1210,7 +1249,7 @@ class EdukaMenu(QWidget):
         category='All' if query else self.current_category
         self.category_title.setText(f'Search results for “{query}”' if query else self.current_category)
         self.grid_btn.setChecked(self.layout_mode=='Grid'); self.list_btn.setChecked(self.layout_mode=='List')
-        apps=filter_apps(self.apps, category, query)
+        apps=self.favorite_apps() if category == 'Favorites' else filter_apps(self.apps, category, query)
         high_contrast=bool(self.desktop_cfg.get('visual_accessibility', False))
         orca_enabled=bool(self.desktop_cfg.get('orca_enabled', False))
         registry_update('desktop', {'visible_apps': len(apps), 'category': self.current_category, 'layout': self.layout_mode, 'version': VERSION})
@@ -1221,6 +1260,8 @@ class EdukaMenu(QWidget):
                 text='No applications found'
             elif category == 'Edukasaun':
                 text='No learning, science or game applications are installed yet.'
+            elif category == 'Favorites':
+                text='No favorites yet. Right-click an app and choose Add to Favorites.'
             else:
                 text='No applications in this category yet.'
             # Word wrap with room for four lines (a narrow 1024x600 screen).
@@ -1267,6 +1308,7 @@ class EdukaMenu(QWidget):
 
     def resizeEvent(self,e):
         super().resizeEvent(e)
+        QTimer.singleShot(0, self.apply_compact)
         QTimer.singleShot(0, self.fit_categories)
         if getattr(self,'layout_mode','Grid')=='Grid' and hasattr(self,'refresh_timer'):
             self.refresh_timer.start(150)
@@ -1278,7 +1320,7 @@ class EdukaMenu(QWidget):
         if cats is None or cats.count() == 0: return
         d=cats.itemDelegate()
         room=cats.viewport().height()-14
-        h=max(34, min(46, room//cats.count()))
+        h=max(30, min(46, room//cats.count()))
         if getattr(d, 'row_h', h) != h:
             d.row_h=h; cats.doItemsLayout(); cats.viewport().update()
 
@@ -1286,10 +1328,17 @@ class EdukaMenu(QWidget):
         now=time.time()
         if self.isVisible() and now - self._last_toggle_time < 0.20: return
         self._last_toggle_time=now
+        # An open popup of Eduka-Panel (the Action Center, sound, network…)
+        # holds the keyboard and the mouse: it closes first, so Eduka-Desktop
+        # gets the focus and typing searches at once (Pre-Stable).
+        if self.daemon:
+            try: panel_command('close-popups', timeout=0.2)
+            except Exception: pass
         icon_theme_setup()
         self.panel_cfg=read_panel_config(); self.desktop_cfg=read_desktop_config()
         self._show_guard_until = time.time() + 0.35
-        self.position(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow(); QTimer.singleShot(0, self.fit_categories)
+        self._reactivated = False
+        self.position(); self.apply_compact(); self.apply_visual_settings(); self.show(); self.raise_(); self.activateWindow(); QTimer.singleShot(0, self.fit_categories)
         # A short, soft fade-in (0.11), like the popups of Eduka-Panel: the
         # compositor changes only the window opacity (cheap). Eduka-Low-Theme
         # opens at once.
@@ -1338,10 +1387,10 @@ class EdukaMenu(QWidget):
         if self.isVisible(): self.hide_menu(force=True)
         else: self.show_menu()
 
-    def beat(self):
+    def beat(self, force=False):
         """Heartbeat for Eduka-Panel: a daemon that stops answering is replaced."""
         now=time.monotonic()
-        if now-self._beat < 2.0: return
+        if now-self._beat < 2.0 and not force: return
         self._beat=now
         try:
             MENU_DAEMON_BEAT.touch()
@@ -1379,7 +1428,12 @@ class EdukaMenu(QWidget):
                 if getattr(self, 'quick', None) is not None and self.quick.isVisible(): self.quick.load()
             elif action == 'trim':
                 self.save_memory(force=True)
-            else: self.toggle_menu()
+            elif action == 'ping':
+                self.beat(force=True)       # "still here" (eduka_ipc.menu_daemon_alive)
+            elif action == 'toggle':
+                self.toggle_menu()
+            # Unknown commands (a newer or older program) are ignored: they
+            # opened the menu by themselves before.
         except Exception: pass
 
     def show_quick(self):
@@ -1454,9 +1508,17 @@ class EdukaMenu(QWidget):
 
     def maybe_hide_after_deactivate(self):
         if not self.isVisible() or self._launching: return
-        if time.time() < self._show_guard_until: return
         if QApplication.activePopupWidget() is not None: return
         if QApplication.activeWindow() is self: return
+        if time.time() < self._show_guard_until:
+            # The focus went elsewhere right after opening (a closing popup
+            # gave it back to its window): take it back once instead of
+            # staying open without the keyboard.
+            if not getattr(self, '_reactivated', False):
+                self._reactivated=True
+                self.raise_(); self.activateWindow()
+                QTimer.singleShot(60, lambda: self.search.setFocus(Qt.PopupFocusReason) if self.isVisible() else None)
+            return
         self.hide_menu(force=True)
 
     def changeEvent(self,e):

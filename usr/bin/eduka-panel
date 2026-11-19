@@ -54,13 +54,13 @@ LOW_UI = dict(LIGHT_UI, **{
     'text': '#3d3d3d', 'title': '#181818', 'sub': '#666666', 'btn_bg': '#f2f2f2', 'btn_border': '#d6d6d6', 'btn_hover': '#e9e9e9',
     'accent': '#315bef', 'accent_hover': '#4a6ff2', 'accent_border': '#2a4fd6', 'row_active': '#e3e9fd', 'field': '#ffffff',
     'groove': '#dcdcdc', 'tile': '#f2f2f2', 'tile_off': '#f7f7f7', 'cal': '#ffffff', 'cal_hover': '#eef2fe', 'weekend': '#c7162b', 'scroll': '#aea79f'})
-# Eduka-Pastel: soft mint surfaces, mint green and sky blue (see eduka_common.PASTEL).
+# Eduka-Pastel: faintly blue surfaces and the soft blue of the logo (see eduka_common.PASTEL).
 PASTEL_UI = dict(LIGHT_UI, **{
-    'text': '#24403a', 'title': '#1b332e', 'sub': '#5d7671', 'btn_bg': '#fcfefd', 'btn_border': '#d9eae3', 'btn_hover': '#ffffff',
-    'accent': '#3fa684', 'accent_hover': '#5bbf9c', 'accent_border': '#2f8f6f', 'switch_off': '#d9eae3', 'switch_off_text': '#3f5a54',
-    'row_hover': '#eaf6f1', 'row_active': '#d6efe5', 'field': '#fcfefd', 'groove': '#e1eee9', 'groove_off': '#dbe7e2',
-    'tile': '#fcfefd', 'tile_off': '#eef5f2', 'tile_off_text': '#9bb0aa', 'cal': '#fcfefd', 'cal_hover': '#e4f3ed', 'muted': '#a9bcb6',
-    'weekend': '#d9668f', 'scroll': 'rgba(63,166,132,120)'})
+    'text': '#22364a', 'title': '#192c3f', 'sub': '#5b6c7d', 'btn_bg': '#fcfdff', 'btn_border': '#d8e4f0', 'btn_hover': '#ffffff',
+    'accent': '#3b87d4', 'accent_hover': '#5d9fe0', 'accent_border': '#2c72ba', 'switch_off': '#d8e4f0', 'switch_off_text': '#3d5166',
+    'row_hover': '#eaf2fb', 'row_active': '#dbe8f7', 'field': '#fcfdff', 'groove': '#e1e9f3', 'groove_off': '#dbe3ec',
+    'tile': '#fcfdff', 'tile_off': '#eef3f8', 'tile_off_text': '#9aa9b8', 'cal': '#fcfdff', 'cal_hover': '#e4eefa', 'muted': '#a8b7c5',
+    'weekend': '#d9668f', 'scroll': 'rgba(59,135,212,120)'})
 # Eduka-MultiColor: Graphite light greys; the colors come from MULTI_COLORS.
 MULTI_UI = dict(LIGHT_UI, **{
     'text': '#212121', 'title': '#111111', 'sub': '#616161', 'btn_bg': 'rgba(255,255,255,215)', 'btn_border': 'rgba(0,0,0,30)', 'btn_hover': '#ffffff',
@@ -121,8 +121,8 @@ def popup_qss():
         box=f'background:rgba(44,44,44,{a});border:1px solid rgba(255,255,255,40);'
         card=f'background:rgba(56,56,56,{c});border:1px solid rgba(255,255,255,22);'
     elif theme == THEME_PASTEL:
-        box=f'background:rgba(237,247,242,{max(a, 240)});border:1px solid #c4dbd2;'
-        card=f'background:rgba(252,254,253,{max(c, 245)});border:1px solid #cfe3db;'
+        box=f'background:rgba(238,244,250,{max(a, 240)});border:1px solid #c3d5e7;'
+        card=f'background:rgba(252,253,255,{max(c, 245)});border:1px solid #cddced;'
     elif theme == THEME_MULTI:
         box=(f'background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,{a}),stop:1 rgba(244,244,244,{a}));'
              'border:1px solid rgba(0,0,0,30);')
@@ -192,9 +192,31 @@ def popup_header(icon, title, subtitle=''):
     return row, pic, sub
 
 
+PANEL_REF = {'panel': None}
+
+def panel_fast_command(command):
+    """Global shortcuts pressed in a popup that Eduka-Panel runs itself at
+    once (opening Eduka-Desktop must not wait for a new program)."""
+    panel=PANEL_REF.get('panel')
+    if panel is None or not command:
+        return False
+    prog=os.path.basename(command[0]); arg=command[1] if len(command) > 1 else ''
+    if (prog == 'eduka-menu' and arg in ('--toggle', '')) or (prog == 'eduka-shortcut' and arg == 'menu') \
+            or prog == 'edukasaun-desktop-menu-open':
+        panel.toggle_menu(); return True
+    if (prog == 'eduka-menu' and arg == '--show') or (prog == 'eduka-shortcut' and arg == 'search'):
+        panel.show_menu(); return True
+    if prog == 'eduka-shortcut' and arg == 'action-center':
+        panel.toggle_action_center(); return True
+    return False
+
+
 class PopupFrame(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint); self.setAttribute(Qt.WA_DeleteOnClose)
+        # Global shortcuts (the Super key, Ctrl+Alt+T, Print…) keep working
+        # while the popup holds the keyboard (Pre-Stable).
+        self._keys=PopupKeys(self, fast=panel_fast_command); self._opener=None
         composited=compositor_running()
         if composited: self.setAttribute(Qt.WA_TranslucentBackground)
         self.box=QFrame(self); self.box.setObjectName('popupBox'); lay=QVBoxLayout(self); lay.setContentsMargins(*((6,6,6,6) if composited else (0,0,0,0))); lay.addWidget(self.box)
@@ -225,6 +247,19 @@ class PopupFrame(QFrame):
         # A short fade makes popups feel smooth; without a compositor Qt
         # simply shows the popup at full opacity.
         self._fade=fade_in(self, 130)
+        self._keys.start()
+
+    def hideEvent(self, e):
+        self._keys.stop()
+        super().hideEvent(e)
+
+    def mousePressEvent(self, e):
+        # A click outside closes the popup and reaches the button under the
+        # pointer: the MENU button opens Eduka-Desktop with one click while
+        # the Action Center is open (it needed two before, Pre-Stable).
+        if replay_outside_press(self, e, self._opener):
+            return
+        super().mousePressEvent(e)
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
@@ -1067,7 +1102,7 @@ class NotificationPopup(PopupFrame):
     def fill(self):
         while self.list_layout.count():
             item=self.list_layout.takeAt(0); w=item.widget()
-            if w: w.setParent(None); w.deleteLater()
+            if w: w.hide(); w.deleteLater()
         items=self.center.items
         self.sub.setText(f'{len(items)} notification{"s" if len(items) != 1 else ""}' if items else tr('no_notif'))
         self.clear_button.setEnabled(bool(items))
@@ -1808,10 +1843,10 @@ def multicolor_ac_qss():
             f'QToolButton#acTile[mc="{i}"][on="true"]{{background:{c};border:1px solid {col.darker(115).name()};color:#ffffff;}}')
     return q
 
-PASTEL_TILES = [('#d6efe6', '#3fa684'), ('#d8e9f9', '#5b9bd5'), ('#fdf0c9', '#e0a42e'), ('#ebe3f8', '#9b7fd2'), ('#fbe1ea', '#e2729a'), ('#d3eff1', '#36a3ad')]
+PASTEL_TILES = [('#dce9f7', '#3b87d4'), ('#d6efe6', '#3fa684'), ('#fdf0c9', '#e0a42e'), ('#ebe3f8', '#9b7fd2'), ('#fbe1ea', '#e2729a'), ('#d3eff1', '#36a3ad')]
 
 def pastel_ac_qss():
-    """Eduka-Pastel: every tile is a soft colored card (mint, sky blue,
+    """Eduka-Pastel: every tile is a soft colored card (blue, mint,
     butter, lilac, rose, aqua) like the cards of the pastel dashboard; when it is on
     it takes the deeper color of its card."""
     if current_theme() != THEME_PASTEL or multicolor_on(): return ''
@@ -1819,7 +1854,7 @@ def pastel_ac_qss():
     for i, (soft, deep) in enumerate(PASTEL_TILES*2):
         d=QColor(deep); r, g, b=d.red(), d.green(), d.blue()
         top=QColor(soft).lighter(104).name(); low=QColor(soft).darker(104).name()
-        q+=(f'QToolButton#acTile[mc="{i}"]{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {top},stop:1 {soft});color:#24403a;border:1px solid rgba({r},{g},{b},90);}}'
+        q+=(f'QToolButton#acTile[mc="{i}"]{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {top},stop:1 {soft});color:#22364a;border:1px solid rgba({r},{g},{b},90);}}'
             f'QToolButton#acTile[mc="{i}"]:hover{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {soft},stop:1 {low});border:1px solid {deep};}}'
             f'QToolButton#acTile[mc="{i}"][on="true"]{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {d.lighter(112).name()},stop:1 {deep});color:#ffffff;border:1px solid {d.darker(115).name()};}}')
     return q
@@ -2665,7 +2700,7 @@ class DrivesPopup(PopupFrame):
     """USB sticks, memory cards and external disks: name, size and free
     space, Open, Eject and Safely remove."""
     def __init__(self, panel):
-        super().__init__(panel); self.panel=panel; self.actions=[]
+        super().__init__(panel); self.panel=panel
         self.box.setFixedWidth(420); self.setAccessibleName('Removable drives')
         head, _icon, self.subtitle=popup_header('drive-removable-media', 'Removable drives', '')
         self.v.addLayout(head)
@@ -2711,8 +2746,19 @@ class DrivesPopup(PopupFrame):
 
     def run(self, action, drive):
         self.status.show(); self.status.setText({'open': _('Opening…'), 'eject': _('Ejecting… wait a moment.'), 'remove': _('Ejecting and switching off…')}[action])
-        t=DriveAction(self, action, drive); self.actions.append(t)
-        t.done.connect(lambda ok, msg, opened, a=action, d=drive: self.finished_action(a, d, ok, msg, opened)); t.start()
+        # The thread belongs to Eduka-Panel, not to this popup: a popup closed
+        # while a drive was still ejecting took its running thread with it
+        # and Qt stopped Eduka-Panel ("QThread destroyed while running").
+        panel=self.panel
+        t=DriveAction(panel, action, drive); panel._drive_actions.append(t)
+        def done(ok, msg, opened, a=action, d=drive, popup=self):
+            if sip_deleted(popup) or not popup.isVisible():
+                drive_action_finished_quietly(panel, a, d, ok, msg, opened)
+            else:
+                popup.finished_action(a, d, ok, msg, opened)
+        t.done.connect(done)
+        t.finished.connect(lambda t=t: (panel._drive_actions.remove(t) if t in panel._drive_actions else None, t.deleteLater()))
+        t.start()
 
     def finished_action(self, action, drive, ok, msg, opened):
         if not ok:
@@ -2733,6 +2779,27 @@ class DrivesPopup(PopupFrame):
         except Exception:
             pass
         QTimer.singleShot(400, self.panel.update_drives)
+
+
+def drive_action_finished_quietly(panel, action, drive, ok, msg, opened):
+    """A drive action ended after its popup closed: tell it in a notification."""
+    try:
+        if action == 'open':
+            if ok and opened:
+                subprocess.Popen(['pcmanfm-qt', opened], env=child_env(), start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        if ok:
+            text=_('{d} can be pulled out now.').replace('{d}', drive['label'])
+            panel.notify_server.notify(_('Removable drives'), 0, drive['icon'], '✓ '+_('Safe to remove'), text, [], {}, -1)
+        else:
+            busy='busy' in msg.lower()
+            text=_('Close the files and windows that use this drive, then try again.') if busy else \
+                _('Could not do this: {m}').replace('{m}', msg[:160])
+            panel.notify_server.notify(_('Removable drives'), 0, drive['icon'], _('Removable drives'), text, [], {}, -1)
+        QTimer.singleShot(400, panel.update_drives)
+    except Exception:
+        pass
 
 
 class InputWorker(QThread):
@@ -3702,7 +3769,7 @@ class EdukaPanel(QWidget):
         self.tasks={}; self.buttons={}; self.pinned_buttons={}; self.quick_launchers={}; self.icon_geometry_cache={}; self.current_cfg={}; self._last_active_wid=''; self._fullscreen_hidden=False; self._fullscreen_wid=''; self._hidden_reason=''; self.hearing_accessibility=False; self.eus_status={}; self._ewmh_cache={}
         self._tray_compact=False; self._showing_desktop=False; self._spy=None
         self.edge='Bottom'; self.vertical=False; self.thickness=42
-        self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0
+        self.last_status={}; self._status_worker=None; self._status_again=False; self.action_center=None; self._action_center_closed_at=0.0; self._drive_actions=[]
         self._app_match_cache={}; self._app_match_stamp=None; self._task_order=[]; self._button_seq=0
         self.notifications=NotificationCenter(self); self.notifications.changed.connect(self.update_notification_badge)
         self.build_ui(); translate_tree(self); self.load_config(); self.setup_watcher(); self.setup_screen_tracking()
@@ -3991,18 +4058,18 @@ class EdukaPanel(QWidget):
             QFrame#trayGroup{{background:rgba(217,217,217,20);border:1px solid rgba(255,255,255,18);}}
             QPushButton#batteryButton{{background:rgba(217,217,217,30);color:#f2f2f2;}}''')
         if theme == THEME_PASTEL and not high_contrast:
-            # Eduka-Pastel: a soft mint bar with a clean outline, a sky blue
-            # pill start button and mint highlights.
+            # Eduka-Pastel: a faintly blue bar with a clean outline, a sky blue
+            # pill start button and soft blue highlights.
             pa=max(235, bg_alpha)
-            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:rgba(237,247,242,{pa});border:1px solid #c4dbd2;border-radius:{radius}px;}}
+            self.bg.setStyleSheet(self.bg.styleSheet()+f'''QFrame#panelBg{{background:rgba(238,244,250,{pa});border:1px solid #c3d5e7;border-radius:{radius}px;}}
             QPushButton#startButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #8cc4ee,stop:1 #5b9bd5);border:1px solid #4f8fca;color:#ffffff;}}
             QPushButton#startButton:hover{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #a3d0f2,stop:1 #6fa8dc);}}
-            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton,QPushButton#taskButton,QLabel#langLabel{{color:#24403a;}}
-            QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:#d6efe5;}}
-            QPushButton#taskButton:hover{{background:#eaf6f1;border:1px solid #c6e6da;border-bottom:3px solid #6fcaa8;}}
-            QPushButton#taskButton[activeTask="true"]{{background:#d6efe5;border:1px solid #b5dfcf;border-bottom:3px solid #3fa684;color:#1b332e;}}
-            QPushButton#batteryButton{{color:#3f8f7b;}}
-            QPushButton#desktopButton{{border-left:1px solid #cfe3db;}} QPushButton#desktopButton:hover{{background:#d6efe5;}}''')
+            QPushButton#launcherButton,QPushButton#trayButton,QPushButton#updateButton,QPushButton#clockButton,QPushButton#taskButton,QLabel#langLabel{{color:#22364a;}}
+            QPushButton#launcherButton:hover,QPushButton#trayButton:hover,QPushButton#updateButton:hover,QPushButton#clockButton:hover{{background:#dbe8f7;}}
+            QPushButton#taskButton:hover{{background:#eaf2fb;border:1px solid #c6dcf0;border-bottom:3px solid #73aee6;}}
+            QPushButton#taskButton[activeTask="true"]{{background:#dbe8f7;border:1px solid #b5cfe9;border-bottom:3px solid #3b87d4;color:#192c3f;}}
+            QPushButton#batteryButton{{color:#3a78b5;}}
+            QPushButton#desktopButton{{border-left:1px solid #cddced;}} QPushButton#desktopButton:hover{{background:#dbe8f7;}}''')
         if multicolor_on(desktop_cfg) and not high_contrast and not low:
             self.bg.setStyleSheet(self.bg.styleSheet()+self.multicolor_qss(theme, dark or trans, radius, bg_alpha))
             for i, w in enumerate([self.start, *self.quick_launchers.values(), self.drives_button, self.touchpad_button, self.net, self.bt, self.printer, self.battery, self.vol, self.eus, self.notif]):
@@ -4333,6 +4400,12 @@ class EdukaPanel(QWidget):
         wid=getattr(self.hover, 'wid', None); self.hide_hover()
         if wid:
             self.restore_window(wid)
+
+    def show_menu(self):
+        if not menu_daemon_alive():
+            safe_popen(['eduka-menu','--daemon','--show'])
+        else:
+            send_menu_command('show')
 
     def toggle_menu(self):
         # 0.9.7: direct in-process command with the resident menu daemon for normal response time.
@@ -5293,7 +5366,7 @@ class EdukaPanel(QWidget):
         # (Qt.Popup); do not reopen it from that same click.
         if time.monotonic() - self._action_center_closed_at < 0.3:
             return
-        ac=ActionCenter(self); self.action_center=ac
+        ac=ActionCenter(self); self.action_center=ac; ac._opener=self.clock
         ac.destroyed.connect(lambda *_: (setattr(self, 'action_center', None), QTimer.singleShot(4000, self.save_memory)))
         ac.place(); ac.show(); ac.activateWindow()
         QTimer.singleShot(0, ac.place)   # final size is known once shown
@@ -5313,7 +5386,7 @@ class EdukaPanel(QWidget):
         safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(250, self.update_status_icons)
     def show_popup_above(self,popup,anchor):
         popup.adjustSize(); g=anchor.mapToGlobal(QPoint(anchor.width()//2, anchor.height()//2))
-        popup._anchor=(self, g)
+        popup._anchor=(self, g); popup._opener=anchor
         popup.move(self.popup_position(popup.width(), popup.height(), g)); popup.show()
     def volume_popup(self):
         self.show_popup_above(SoundPopup(self), self.vol)
@@ -5417,6 +5490,19 @@ class EdukaPanel(QWidget):
             self.show_osd(cmd[4:].strip())
         elif cmd == 'trim':
             self.save_memory(force=True)
+        elif cmd == 'close-popups':
+            self.close_popups()
+
+    def close_popups(self):
+        """Eduka-Desktop opens: an open popup (it holds the keyboard and the
+        mouse) closes first."""
+        for _i in range(8):
+            w=QApplication.activePopupWidget()
+            if w is None:
+                break
+            w.close()
+            if QApplication.activePopupWidget() is w:
+                w.hide()
 
     def save_memory(self, force=False):
         """Memory saver: give freed memory back to the system (and the drawn
@@ -5499,7 +5585,7 @@ if __name__ == '__main__':
     except Exception:
         pass
     if in_eduka_session(): wait_for_compositor()
-    app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel()
+    app=QApplication(sys.argv); install_translations(app); app.setApplicationName('eduka-panel'); app.setStyleSheet(tooltip_qss()); icon_theme_setup(); panel=EdukaPanel(); PANEL_REF['panel']=panel
     try:
         import eduka_touch; eduka_touch.enable_long_press(app)   # long press = right click (0.11 RC3)
     except Exception:

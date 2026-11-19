@@ -17,7 +17,7 @@ import importlib.machinery, importlib.util, os
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'usr', 'share', 'edukasaun-desktop', 'login')
 W, H = 960, 540
 STYLES = {  # top, middle, bottom (Main.qml GradientStop colors)
-    'pastel': ('#d6e8f8', '#edf7f2', '#d6efe6'),
+    'pastel': ('#d6e8f8', '#eef4fa', '#dce9f7'),
     'light': ('#e9f6c9', '#8fcf7a', '#1f6b45'),
     'dark': ('#2f3b39', '#1f2a28', '#121616'),
     'glass': ('#bfe3f5', '#7fb9dc', '#2f6f9a'),
@@ -25,7 +25,7 @@ STYLES = {  # top, middle, bottom (Main.qml GradientStop colors)
 # The colored lights over the gradient: x, y, radius (share of the longer
 # side), color, strength. The same as the Canvas "lights" of Main.qml.
 LIGHTS = {
-    'pastel': [(0.12, 0.86, 0.42, (63, 166, 132), 0.40), (0.88, 0.12, 0.40, (124, 196, 240), 0.50),
+    'pastel': [(0.12, 0.86, 0.42, (59, 135, 212), 0.40), (0.88, 0.12, 0.40, (124, 196, 240), 0.50),
                (0.92, 0.9, 0.30, (246, 178, 107), 0.32), (0.06, 0.08, 0.28, (185, 167, 240), 0.34),
                (0.5, 0.5, 0.28, (255, 255, 255), 0.40)],
     'light': [(0.1, 0.9, 0.45, (0, 168, 121), 0.35), (0.9, 0.12, 0.40, (255, 255, 255), 0.45),
@@ -66,7 +66,7 @@ def render(style, deep=None):
 
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-THEMES = {'Edukasaun-Login': ('Eduka-Pastel', 'pastel', '#3fa684', 'Edukasaun login screen (LightDM), light'),
+THEMES = {'Edukasaun-Login': ('Eduka-Pastel', 'pastel', '#3b87d4', 'Edukasaun login screen (LightDM), light'),
           'Edukasaun-Login-Dark': ('Edukasaun-Dark', 'dark', '#26a69a', 'Edukasaun login screen (LightDM), dark')}
 
 

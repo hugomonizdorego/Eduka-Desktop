@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
-import os, sys, json, glob, configparser, subprocess, shlex, time, re, shutil, stat, tempfile, fcntl
+import os, sys, json, glob, configparser, subprocess, shlex, time, re, shutil, fcntl
 from pathlib import Path
 from PyQt5.QtGui import QIcon, QPainterPath, QRegion
 from PyQt5.QtCore import QSize, Qt, QObject, QEvent, QRectF
@@ -33,7 +33,7 @@ BRAND_REVISION = "0.11-official-logo"
 MAX_FAVORITES = 5
 APP_ID = "eduka-desktop"
 THEME_DEFAULT = "Eduka-Default-Theme"
-THEME_PASTEL = "Eduka-Pastel"          # 0.10.0 default: soft mint green and sky blue, round and raised
+THEME_PASTEL = "Eduka-Pastel"          # the default: the soft blue of the logo (Pre-Stable; mint before), round and raised
 THEME_LIQUID = "Liquid Glass"
 THEME_DARK = "Edukasaun-Dark"
 THEME_LOW = "Eduka-Low-Theme"          # after Yaru-remix: flat, opaque, no effects
@@ -41,11 +41,14 @@ THEME_TRANSPARENT = "Eduka-Transparan" # after Transparent-Shell-Theme: dark gla
 THEME_MULTI = "Eduka-MultiColor"      # after Graphite (light): a color for every menu
 THEMES = [THEME_PASTEL, THEME_DEFAULT, THEME_LOW, THEME_LIQUID, THEME_DARK, THEME_TRANSPARENT, THEME_MULTI]
 DEFAULT_THEME = THEME_PASTEL
-# Eduka-Pastel: the soft colors of the cards, badges and category icons.
-PASTEL = {'surface': '#edf7f2', 'card': '#fcfefd', 'mint': '#d6efe6', 'mint_deep': '#3f9a7e', 'accent': '#3fa684', 'accent_deep': '#2f8f6f',
-          'blue': '#5b9bd5', 'blue_soft': '#d8e9f9', 'peach': '#fde3d6', 'butter': '#fdeec8', 'sky': '#dce8f7', 'lilac': '#ece3f7', 'text': '#24403a', 'sub': '#5d7671',
-          'border': '#d9eae3', 'shadow': '#cfe3db'}
-PASTEL_COLORS = ['#3fa684', '#5b9bd5', '#e0a42e', '#9b7fd2', '#e2729a', '#36a3ad', '#6cb85c', '#4fa3d9', '#6f8fe0', '#c084d6']
+# Eduka-Pastel: the soft colors of the cards, badges and category icons. Since
+# 0.11 Pre-Stable they follow the blue of the Edukasaun OS logo (#1E88E5),
+# calmer (#3B87D4) and only as a faint tint on the surfaces. The 'mint' keys
+# keep their old names for the code that reads them.
+PASTEL = {'surface': '#eef4fa', 'card': '#fcfdff', 'mint': '#dce9f7', 'mint_deep': '#3a7cc0', 'accent': '#3b87d4', 'accent_deep': '#2c72ba',
+          'blue': '#5b9bd5', 'blue_soft': '#d8e9f9', 'peach': '#fde3d6', 'butter': '#fdeec8', 'sky': '#dce8f7', 'lilac': '#ece3f7', 'text': '#22364a', 'sub': '#5b6c7d',
+          'border': '#d8e4f0', 'shadow': '#cddced'}
+PASTEL_COLORS = ['#3b87d4', '#3fa684', '#e0a42e', '#9b7fd2', '#e2729a', '#36a3ad', '#6cb85c', '#5b9bd5', '#6f8fe0', '#c084d6']
 # Colors of Eduka-MultiColor (and of the "Multi-color" switch in Eduka-Settings):
 # every category, Action Center tile and panel button group gets its own.
 MULTI_COLORS = ['#ef5350', '#ff9800', '#f9a825', '#43a047', '#00acc1', '#1e88e5', '#5b6ee1', '#8e24aa', '#d81b60', '#00897b']
@@ -88,36 +91,20 @@ PANEL_CONFIG_DIR = BASE_CONFIG/"panel"
 MENU_CONFIG_DIR = BASE_CONFIG/"menu"
 DESKTOP_CONFIG_DIR = BASE_CONFIG/"desktop"
 
-def _runtime_base():
-    """$XDG_RUNTIME_DIR (private to the user, made by logind at login).
-    Without it a private folder of this user is used, never a folder that
-    other accounts could prepare (a shared /tmp/eduka-desktop allowed one
-    account to take over the lock and state files of another)."""
-    base=os.environ.get('XDG_RUNTIME_DIR')
-    if base and os.path.isdir(base):
-        return Path(base)
-    private=Path(tempfile.gettempdir())/f'eduka-runtime-{os.getuid()}'
-    try:
-        private.mkdir(mode=0o700, exist_ok=True)
-        st=os.lstat(private)
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
-            raise OSError('not our own folder')
-        if st.st_mode & 0o077:
-            os.chmod(private, 0o700)
-        return private
-    except OSError:
-        return Path.home()/'.cache'/'eduka-desktop'/'runtime'
-
-RUNTIME_BASE = _runtime_base()
-RUNTIME_DIR = RUNTIME_BASE/"eduka-desktop"
+# The private runtime folder and the messages between Eduka-Panel and
+# Eduka-Desktop live in eduka_ipc (no Qt, so a key press opens the menu fast).
+import eduka_ipc
+from eduka_ipc import _runtime_base, RUNTIME_BASE, RUNTIME_DIR, MENU_COMMAND_PATH, MENU_DAEMON_PID, \
+    MENU_DAEMON_LOCK, MENU_DAEMON_BEAT, send_menu_command, _pid_alive, _is_eduka_menu, menu_daemon_alive, \
+    panel_command
+# Programs that import everything from eduka_common use these names too.
+_FROM_IPC = (_runtime_base, MENU_COMMAND_PATH, MENU_DAEMON_PID, MENU_DAEMON_LOCK, MENU_DAEMON_BEAT, send_menu_command,
+             _pid_alive, _is_eduka_menu, panel_command)
 LEGACY_RUNTIME_DIR = RUNTIME_BASE/"edukasaun-desktop"
 CACHE_DIR = Path.home()/'.cache'/'eduka-desktop'
 LEGACY_CACHE_DIR = Path.home()/'.cache'/'edukasaun-desktop'
 APP_REGISTRY_PATH = CACHE_DIR/'app-registry.json'
 STATE_REGISTRY_PATH = RUNTIME_DIR/'state-registry.json'
-MENU_COMMAND_PATH = RUNTIME_DIR/'menu-command.json'
-MENU_DAEMON_PID = RUNTIME_DIR/'menu-daemon.pid'
-MENU_DAEMON_LOCK = RUNTIME_DIR/'menu-daemon.lock'
 SETTINGS_LOCK = RUNTIME_DIR/'menu-settings.lock'
 EUS_RUNTIME_DIR = Path(os.environ.get('XDG_RUNTIME_DIR','/tmp'))/'eduka-update-system'
 EUS_PANEL_STATUS_PATH = EUS_RUNTIME_DIR/'panel-status.json'
@@ -777,7 +764,7 @@ TOOLTIP_QSS_DARK = 'QToolTip{background:#383838;color:#ffffff;border:1px solid r
 # Colors of every Eduka theme for menus, tooltips and dialog boxes, so a
 # message box or a right-click menu looks like the rest of the theme.
 THEME_TOKENS = {
-    THEME_PASTEL: dict(bg='#edf7f2', card='#fcfefd', text='#24403a', sub='#5d7671', border='#d9eae3', field='#fcfefd', hover='#e4f3ed'),
+    THEME_PASTEL: dict(bg='#eef4fa', card='#fcfdff', text='#22364a', sub='#5b6c7d', border='#d8e4f0', field='#fcfdff', hover='#e4eefa'),
     THEME_DEFAULT: dict(bg='#f4f8f6', card='#ffffff', text='#1f2d2a', sub='#5b6e69', border='#d3e0db', field='#ffffff', hover='#e7f3ee'),
     THEME_LOW: dict(bg='#f7f7f7', card='#ffffff', text='#3d3d3d', sub='#666666', border='#d6d6d6', field='#ffffff', hover='#e9e9e9'),
     THEME_LIQUID: dict(bg='#f0f5f9', card='#ffffff', text='#1c2b33', sub='#5a6b75', border='#d3e3ec', field='#ffffff', hover='#e4f1f8'),
@@ -1001,9 +988,9 @@ LIGHT_PALETTE = {
     'link_color': '#00785a', 'link_visited_color': '#5b6e69',
 }
 PASTEL_PALETTE = {
-    'window_color': '#edf7f2', 'base_color': '#fcfefd', 'highlight_color': '#3fa684',
-    'window_text_color': '#24403a', 'text_color': '#24403a', 'highlighted_text_color': '#ffffff',
-    'link_color': '#2f8f6f', 'link_visited_color': '#5d7671',
+    'window_color': '#eef4fa', 'base_color': '#fcfdff', 'highlight_color': '#3b87d4',
+    'window_text_color': '#22364a', 'text_color': '#22364a', 'highlighted_text_color': '#ffffff',
+    'link_color': '#2c72ba', 'link_visited_color': '#5b6c7d',
 }
 LIQUID_PALETTE = {
     'window_color': '#eef3f7', 'base_color': '#ffffff', 'highlight_color': '#1e9bd7',
@@ -1846,7 +1833,7 @@ def set_icon_theme(name):
     icon_theme_setup(force=True); touch_reload()
     return True
 
-THEME_ACCENTS = {THEME_PASTEL: '#3fa684', THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
+THEME_ACCENTS = {THEME_PASTEL: '#3b87d4', THEME_DEFAULT: '#00a879', THEME_LOW: '#315bef', THEME_LIQUID: '#1e9bd7', THEME_DARK: '#26a69a', THEME_TRANSPARENT: '#6c6c6c', THEME_MULTI: '#5b6ee1'}
 
 # ---------------------------------------------------------------------------
 # Accent color. Eduka-Settings → Appearance → Accent color replaces the green
@@ -1860,10 +1847,12 @@ ACCENT_CHOICES = [
     ('#ea580c', 'Orange'), ('#d97706', 'Amber'), ('#65a30d', 'Lime'), ('#92400e', 'Brown'),
     ('#475569', 'Slate'),
 ]
-# Eduka-Pastel's mint (#3fa684 and its shades) follows the chosen accent too.
-_ACCENT_PRIMARY = ('#00a879', '#26a69a', '#1e9bd7', '#315bef', '#3fa684')
-_ACCENT_LIGHT = ('#00b683', '#4db6ac', '#14bd8e', '#3fbfa0', '#35aee6', '#4a6ff2', '#5bbf9c', '#6fcaa8')
-_ACCENT_DARK = ('#00946b', '#00966c', '#00916a', '#008f68', '#00785a', '#00805f', '#126f9c', '#2a4fd6', '#2f8f6f', '#3f9a7e', '#2a7d61')
+# Eduka-Pastel's blue (#3b87d4 and its shades; the mint of older versions
+# too) follows the chosen accent as well.
+_ACCENT_PRIMARY = ('#00a879', '#26a69a', '#1e9bd7', '#315bef', '#3fa684', '#3b87d4')
+_ACCENT_LIGHT = ('#00b683', '#4db6ac', '#14bd8e', '#3fbfa0', '#35aee6', '#4a6ff2', '#5bbf9c', '#6fcaa8', '#5d9fe0', '#73aee6')
+_ACCENT_DARK = ('#00946b', '#00966c', '#00916a', '#008f68', '#00785a', '#00805f', '#126f9c', '#2a4fd6', '#2f8f6f', '#3f9a7e', '#2a7d61',
+                '#2c72ba', '#3a7cc0', '#25659f')
 _ACCENT_STATE = {'stamp': None, 'accent': '', 'rx': None, 'map': {}}
 
 def custom_accent():
@@ -1909,7 +1898,7 @@ def accentize(text):
         m['0,168,121']=f'{c.red()},{c.green()},{c.blue()}'
         m['0, 168, 121']=f'{c.red()}, {c.green()}, {c.blue()}'
         m['0,120,90']=f'{d.red()},{d.green()},{d.blue()}'
-        for rgb in ('30,155,215', '38,166,154', '49,91,239', '63,166,132'):
+        for rgb in ('30,155,215', '38,166,154', '49,91,239', '63,166,132', '59,135,212'):
             m[rgb]=m['0,168,121']
         m['77,182,172']=','.join(str(x) for x in (lambda q: (q.red(), q.green(), q.blue()))(QColor(light)))
         _ACCENT_STATE['map']=m
@@ -2158,6 +2147,221 @@ class RoundedMenu(QMenu):
         super().addMenu(sub)
         return sub
 
+# --- Popups and global shortcuts (0.11 Pre-Stable) --------------------------
+# A Qt popup (the Action Center, the sound and network popups of Eduka-Panel)
+# grabs the keyboard and the mouse while it is open. On X11 that hid every
+# global shortcut from lxqt-globalkeysd (the Super key did nothing while the
+# Action Center was open), and a click outside only closed the popup (Qt does
+# not pass it on there), so the MENU button needed a second click.
+# PopupKeys runs the global shortcut of a key pressed in a popup, and
+# replay_outside_press() passes the click on to the button under the pointer.
+_GLOBAL_KEYS = {'mtime': None, 'map': {}}
+# Window manager keys: the popup closes, the next press reaches the manager.
+_WM_KEYS = frozenset({'alt+tab', 'shift+alt+tab', 'alt+f4', 'meta+tab', 'alt+escape'})
+# Media keys change the sound or the brightness and leave the popup open.
+_KEEP_OPEN = ('xf86audio', 'xf86monbrightness', 'xf86kbdbrightness')
+_XKS = {'fn': None}
+
+def sip_deleted(obj):
+    """True when the C++ side of a Qt object is gone."""
+    try:
+        return _sip.isdeleted(obj)
+    except Exception:
+        return False
+
+def _qsettings_list(value):
+    """Split a QSettings string list (a, "b,c", d) into its items."""
+    out=[]; cur=''; quoted=False; had=False; i=0
+    while i < len(value):
+        c=value[i]
+        if c == '\\' and i+1 < len(value):
+            cur+=value[i+1]; had=True; i+=2; continue
+        if c == '"':
+            quoted=not quoted; had=True
+        elif c == ',' and not quoted:
+            out.append(cur.strip()); cur=''; had=False
+        else:
+            cur+=c
+        i+=1
+    if cur.strip() or had:
+        out.append(cur.strip())
+    return [a for a in out if a]
+
+def global_shortcuts():
+    """{key name in lower case: command} of lxqt-globalkeysd
+    (~/.config/lxqt/globalkeyshortcuts.conf); D-Bus actions (path=) and
+    switched off shortcuts are left out."""
+    path=Path(os.environ.get('XDG_CONFIG_HOME') or Path.home()/'.config')/'lxqt'/'globalkeyshortcuts.conf'
+    try:
+        mtime=path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _GLOBAL_KEYS['mtime'] == mtime:
+        return _GLOBAL_KEYS['map']
+    from urllib.parse import unquote
+    cp=configparser.RawConfigParser(strict=False, interpolation=None); cp.optionxform=str
+    try:
+        cp.read(path, encoding='utf-8')
+    except Exception:
+        return {}
+    found={}
+    for sec in cp.sections():
+        if sec == 'General':
+            continue
+        name=unquote(sec).rsplit('.', 1)[0].strip()
+        if not name or cp.get(sec, 'Enabled', fallback='true').strip().lower() == 'false':
+            continue
+        argv=_qsettings_list(cp.get(sec, 'Exec', fallback='').strip())
+        if argv:
+            found.setdefault(name.casefold(), argv)     # MultipleActionsBehaviour=first
+    _GLOBAL_KEYS.update(mtime=mtime, map=found)
+    return found
+
+def _keysym_name(sym):
+    if _XKS['fn'] is None:
+        _XKS['fn']=False
+        if os.environ.get('DISPLAY'):
+            try:
+                import ctypes, ctypes.util
+                lib=ctypes.cdll.LoadLibrary(ctypes.util.find_library('X11') or 'libX11.so.6')
+                fn=lib.XKeysymToString; fn.restype=ctypes.c_char_p; fn.argtypes=[ctypes.c_ulong]
+                _XKS['fn']=fn
+            except Exception:
+                pass
+    fn=_XKS['fn']
+    if not fn or not sym:
+        return ''
+    try:
+        name=fn(int(sym))
+        return name.decode('ascii', 'ignore') if name else ''
+    except Exception:
+        return ''
+
+def key_event_name(e):
+    """The name lxqt-globalkeysd gives a key: 'Meta+E', 'Control+Alt+T',
+    'Print', 'Super_L', 'XF86AudioRaiseVolume' ('' for a modifier alone)."""
+    key=e.key()
+    if key in (Qt.Key_Super_L, Qt.Key_Super_R, Qt.Key_Meta):
+        return 'Super_R' if key == Qt.Key_Super_R else 'Super_L'
+    if key in (0, Qt.Key_unknown, Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_AltGr, Qt.Key_CapsLock, Qt.Key_NumLock):
+        return ''
+    name=_keysym_name(e.nativeVirtualKey())
+    if not name:
+        from PyQt5.QtGui import QKeySequence
+        name=QKeySequence(key).toString()
+    if not name:
+        return ''
+    mods=e.modifiers(); parts=[]
+    for flag, text in ((Qt.ShiftModifier, 'Shift'), (Qt.ControlModifier, 'Control'), (Qt.AltModifier, 'Alt'), (Qt.MetaModifier, 'Meta')):
+        if mods & flag:
+            parts.append(text)
+    return '+'.join(parts+[name])
+
+class PopupKeys(QObject):
+    """While `popup` is open, a global shortcut pressed in it runs as it
+    would without the popup, and the Super key alone opens Eduka-Desktop.
+    fast(command) may run a command inside this program (return True)."""
+    def __init__(self, popup, fast=None):
+        super().__init__(popup)
+        self.popup=popup; self.fast=fast; self.super_alone=False; self.installed=False
+
+    def start(self):
+        from PyQt5.QtWidgets import QApplication
+        app=QApplication.instance()
+        if app is not None and not self.installed:
+            app.installEventFilter(self); self.installed=True
+
+    def stop(self):
+        from PyQt5.QtWidgets import QApplication
+        app=QApplication.instance()
+        if app is not None and self.installed:
+            app.removeEventFilter(self); self.installed=False
+
+    def eventFilter(self, obj, e):
+        t=e.type()
+        if t != QEvent.KeyPress and t != QEvent.KeyRelease:
+            return False
+        try:
+            from PyQt5.QtWidgets import QApplication
+            if QApplication.activePopupWidget() is not self.popup or e.isAutoRepeat():
+                return False
+            key=e.key()
+            is_super=key in (Qt.Key_Super_L, Qt.Key_Super_R, Qt.Key_Meta)
+            if t == QEvent.KeyPress:
+                if is_super:
+                    self.super_alone=True
+                    return True
+                self.super_alone=False
+                name=key_event_name(e).casefold()
+                if not name:
+                    return False
+                if name in _WM_KEYS:
+                    self.close_popup()
+                    return True
+                command=global_shortcuts().get(name)
+                if not command:
+                    return False
+                self.run(command, close=not name.startswith(_KEEP_OPEN))
+                return True
+            if is_super:
+                alone, self.super_alone=self.super_alone, False
+                command=global_shortcuts().get(key_event_name(e).casefold()) if alone else None
+                if command:
+                    self.run(command, close=True)
+                return True
+        except RuntimeError:
+            return False
+        return False
+
+    def close_popup(self):
+        self.stop()
+        try:
+            self.popup.close()
+        except RuntimeError:
+            pass
+
+    def run(self, command, close=True):
+        from PyQt5.QtCore import QTimer
+        if close:
+            self.close_popup()
+        command=list(command); fast=self.fast
+        def go():
+            try:
+                if fast is not None and fast(command):
+                    return
+            except Exception:
+                pass
+            safe_popen(command)
+        # After the popup let the keyboard go, so the program gets it.
+        QTimer.singleShot(40 if close else 0, go)
+
+def replay_outside_press(popup, e, opener=None):
+    """A left click outside an open popup closes it and, on X11 where Qt does
+    not pass the click on, also presses the button of this program under the
+    pointer (the MENU button, a task, a tray icon), except `opener`, the
+    button that opened the popup: clicking it again only closes the popup.
+    The button is clicked at once: a quick tap (touch screen) sends its
+    release before the popup is gone, so a replayed press alone stayed down.
+    True when the press was handled here."""
+    from PyQt5.QtWidgets import QApplication, QAbstractButton
+    from PyQt5.QtGui import QGuiApplication
+    from PyQt5.QtCore import QTimer
+    if e.button() != Qt.LeftButton or popup.rect().contains(e.pos()) or QGuiApplication.platformName() != 'xcb':
+        return False
+    target=QApplication.widgetAt(e.globalPos())
+    popup.close()
+    button=target
+    while button is not None and not isinstance(button, QAbstractButton) and not button.isWindow():
+        button=button.parentWidget()
+    if not isinstance(button, QAbstractButton) or sip_deleted(button) or button is popup or popup.isAncestorOf(button):
+        return True
+    if opener is not None and not sip_deleted(opener) and (button is opener or opener.isAncestorOf(button)):
+        return True
+    if button.window().windowType() == Qt.Popup or not button.isEnabled() or not button.isVisible():
+        return True
+    QTimer.singleShot(0, lambda b=button: None if sip_deleted(b) else b.click())
+    return True
+
 def touch_scrolling_wanted():
     """Eduka-Settings → Mouse & Touch → Touch Screen: kinetic finger scrolling."""
     try:
@@ -2341,7 +2545,10 @@ def ensure_dirs():
     except Exception:
         pass
     for d in [BASE_CONFIG, PANEL_CONFIG_DIR, MENU_CONFIG_DIR, DESKTOP_CONFIG_DIR, RUNTIME_DIR, CACHE_DIR]:
-        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass     # a full disk or a broken folder: reading still works
 
 def read_json(path, default):
     ensure_dirs(); path=Path(path)
@@ -2354,9 +2561,9 @@ def read_json(path, default):
     merged=dict(default); merged.update(data); return merged
 
 def write_json(path, data):
-    path=Path(path); path.parent.mkdir(parents=True, exist_ok=True); tmp=path.with_suffix(path.suffix+'.tmp')
-    with tmp.open('w',encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-    os.replace(tmp, path)
+    # A temporary file of this process and thread (Pre-Stable): Eduka-Panel
+    # and Eduka-Desktop writing the same file at once mixed their text.
+    eduka_ipc.write_json_atomic(path, data, indent=4)
 
 def panel_config_path(): return PANEL_CONFIG_DIR/'settings.json'
 def menu_config_path(): return MENU_CONFIG_DIR/'settings.json'
@@ -2676,53 +2883,6 @@ def request_panel_restart():
         except OSError:
             return False
     return safe_popen(['eduka-panel'])
-
-def send_menu_command(action='toggle'):
-    ensure_dirs()
-    payload={'action': action, 'time': time.time(), 'id': int(time.time()*1000)}
-    try: write_json(MENU_COMMAND_PATH, payload); return True
-    except Exception: return False
-
-def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0); return True
-    except Exception:
-        return False
-
-MENU_DAEMON_BEAT = RUNTIME_DIR/'menu-daemon.beat'
-
-def _is_eduka_menu(pid):
-    try:
-        cmd=Path(f'/proc/{int(pid)}/cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'ignore')
-        state=Path(f'/proc/{int(pid)}/stat').read_text().split(')')[-1].split()[0]
-        return 'eduka-menu' in cmd and state != 'Z'
-    except Exception:
-        return False
-
-def menu_daemon_alive():
-    """True when the resident Eduka-Desktop answers. A daemon that hangs (no
-    heartbeat for 20 s) is stopped, so the next click starts a fresh one
-    instead of sending commands nobody reads until the next login."""
-    ensure_dirs()
-    try:
-        pid=int(MENU_DAEMON_PID.read_text().strip())
-    except Exception:
-        return False
-    if not _pid_alive(pid) or not _is_eduka_menu(pid):
-        return False
-    try:
-        beat_age=time.time()-MENU_DAEMON_BEAT.stat().st_mtime
-        started_age=time.time()-MENU_DAEMON_PID.stat().st_mtime
-    except Exception:
-        return True          # an older daemon without heartbeat
-    if beat_age > 20 and started_age > 30:
-        try: os.kill(pid, 9)
-        except Exception: pass
-        for f in (MENU_DAEMON_PID, MENU_DAEMON_BEAT):
-            try: f.unlink()
-            except Exception: pass
-        return False
-    return True
 
 def install_crash_log(name):
     """Errors no longer close an Eduka program: a Python error in a button or

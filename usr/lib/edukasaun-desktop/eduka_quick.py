@@ -677,7 +677,7 @@ class QuickPie(QWidget):
     def paintEvent(self, _e):
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.setRenderHint(QPainter.SmoothPixmapTransform)
         dark = is_dark_theme()
-        accent = QColor(theme_accent() or '#3fa684')
+        accent = QColor(theme_accent() or '#3b87d4')
         g = self.geo or {}
         prog = max(0.0, self.progress)
         c = self.center(); sf = self.sf
