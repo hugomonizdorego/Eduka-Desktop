@@ -20,11 +20,23 @@ if LIB not in sys.path:
 
 
 def run(args, timeout=3):
+    env = None
+    if args and args[0] == 'pactl':
+        env = dict(os.environ, LC_ALL='C.UTF-8'); env.pop('LANGUAGE', None)   # read in English
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
         return r.stdout if r.returncode == 0 else ''
     except (OSError, subprocess.SubprocessError):
         return ''
+
+
+def volume_limit():
+    """100 %, or 150 % when Eduka-Settings → Sound allows louder."""
+    try:
+        import eduka_audio
+        return eduka_audio.max_volume()
+    except Exception:
+        return 100
 
 
 def start(args):
@@ -213,14 +225,15 @@ def volume(step=0, mute=None, mic=False):
     tool = sound_tool()
     if tool == 'pactl':
         target = '@DEFAULT_SOURCE@' if mic else '@DEFAULT_SINK@'
+        kind = 'source' if mic else 'sink'
         if mute is not None:
-            run(['pactl', 'set-source-mute' if mic else 'set-sink-mute', target, 'toggle'])
+            run(['pactl', f'set-{kind}-mute', target, 'toggle'])
         else:
-            out = run(['pactl', 'get-sink-volume', target])
+            out = run(['pactl', f'get-{kind}-volume', target])
             m = re.search(r'(\d+)%', out)
             cur = int(m.group(1)) if m else 50
-            run(['pactl', 'set-sink-mute', target, '0'])
-            run(['pactl', 'set-sink-volume', target, f'{max(0, min(100, cur + step))}%'])
+            run(['pactl', f'set-{kind}-mute', target, '0'])
+            run(['pactl', f'set-{kind}-volume', target, f'{max(0, min(volume_limit(), cur + step))}%'])
     elif tool == 'wpctl':
         target = '@DEFAULT_AUDIO_SOURCE@' if mic else '@DEFAULT_AUDIO_SINK@'
         if mute is not None:

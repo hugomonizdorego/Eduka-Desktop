@@ -13,7 +13,7 @@ import os, re, json, shutil, subprocess, threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from PyQt5.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QSpinBox,
+from PyQt5.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QSpinBox, QWidget,
                              QDateTimeEdit, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
                              QPushButton, QRadioButton, QSlider, QToolButton, QVBoxLayout, QSizePolicy,
@@ -94,14 +94,18 @@ SETTINGS_SECTIONS = [
     ('Hardware', [
         ('@bluetooth', 'Bluetooth', 'bluetooth', 'bluetooth wireless devices'),
         ('@disks', 'Disks', 'drive-harddisk', 'disks drives partitions usb'),
-        ('@display', 'Display', 'preferences-desktop-display', 'display monitor screen resolution projector'),
-        ('keyboard', 'Keyboard', 'input-keyboard', 'keyboard layout shortcuts'),
+        ('display', 'Display', 'preferences-desktop-display', 'display monitor screen resolution projector scale size'),
+        ('@display', 'Screens and Resolution', 'video-display', 'monitor resolution arrange screens projector'),
+        ('keyboard', 'Keyboard', 'input-keyboard', 'keyboard layout num lock'),
+        ('shortcuts', 'Keyboard Shortcuts', 'preferences-desktop-keyboard-shortcuts', 'shortcuts hotkeys keys windows super'),
         ('mouse', 'Mouse and Touchpad', 'input-mouse', 'mouse touchpad pointer speed gestures'),
         ('touchscreen', 'Touch Screen', 'input-tablet', 'touch screen tablet on-screen keyboard'),
         ('@network', 'Network', 'preferences-system-network', 'network wifi wired vpn internet'),
         ('@power', 'Power Management', 'preferences-system-power-management', 'power battery suspend sleep'),
         ('@printers', 'Printers', 'printer', 'printers printing scanner'),
-        ('@sound', 'Sound', 'preferences-desktop-sound', 'sound volume speakers microphone'),
+        ('sound', 'Sound', 'audio-volume-high', 'sound volume speakers headphones microphone test hdmi bluetooth'),
+        ('soundfx', 'Clear Sound', 'audio-x-generic', 'easyeffects equalizer voice music noise clear sound presets'),
+        ('soundfix', 'Sound Quality & Fixes', 'preferences-desktop-sound', 'crackling no sound fix pipewire pulseaudio firmware'),
         ('@sysinfo', 'System Information', 'computer', 'system information about version memory'),
     ]),
     ('Administration', [
@@ -111,6 +115,7 @@ SETTINGS_SECTIONS = [
         ('lightdm', 'LightDM', 'system-users', 'lightdm greeter slick login'),
         ('@software', 'Software Sources', 'software-properties', 'software sources repositories apt updates'),
         ('maintenance', 'System Maintenance', 'applications-system', 'maintenance repair reset'),
+        ('memory', 'Memory', 'utilities-system-monitor', 'memory ram zram earlyoom slow freeze'),
         ('users', 'Users and Groups', 'system-users', 'users accounts administrator groups'),
     ]),
 ]
@@ -1351,6 +1356,390 @@ class ExtPages:
             effects.setChecked(not on)      # saved by the window with the Effects page
         self.show_status(_('Animations and effects are off.') if on else _('Animations and effects can be used again (Appearance → Effects).'))
 
+    # ------------------------------------------------------------ sound (0.11 Pre-Stable)
+    def page_sound(self):
+        import eduka_audio as au
+        self._au = au; self._snd = {'sinks': [], 'sources': [], 'cards': [], 'info': {}}; self._snd_busy = False
+        p = UI.Page('Sound', 'Choose the speakers or headphones and the microphone, set the volume and test each side.')
+        self.snd_state = UI.hint_label(''); p.v.addWidget(self.snd_state)
+        p.v.addWidget(self._snd_title('Speakers and headphones'))
+        self.snd_out = QComboBox(); self.snd_out.setAccessibleName(_('Output device'))
+        self.snd_out.activated.connect(lambda i: self.sound_choose('sink', self.snd_out.itemData(i)))
+        p.v.addWidget(self.snd_out)
+        self.snd_out_mute, self.snd_out_vol, self.snd_out_val = self._snd_volume_row(p.v, 'sink')
+        trow = QHBoxLayout(); trow.setSpacing(8)
+        for side, label in (('left', 'Test left'), ('both', 'Test both'), ('right', 'Test right')):
+            b = QPushButton(get_icon('audio-speakers', 'audio-volume-high'), ' ' + _(label))
+            b.clicked.connect(lambda _c=False, s=side: self.sound_test(s)); trow.addWidget(b)
+        trow.addStretch(1); p.v.addLayout(trow)
+        self.snd_out_port = QComboBox(); self.snd_out_port.setAccessibleName(_('Connector'))
+        self.snd_out_port.activated.connect(lambda i: self.sound_port('sink', self.snd_out_port.itemData(i)))
+        self.snd_out_port_row = self._snd_labeled(p.v, 'Connector', self.snd_out_port)
+        self.snd_louder = QCheckBox('Allow louder than 100% (quiet laptop speakers; the sound may distort)')
+        self.snd_louder.toggled.connect(self.sound_louder); p.v.addWidget(self.snd_louder)
+        i = p.new_card('Microphone')
+        self.snd_in = QComboBox(); self.snd_in.setAccessibleName(_('Input device'))
+        self.snd_in.activated.connect(lambda n: self.sound_choose('source', self.snd_in.itemData(n)))
+        i.addWidget(self.snd_in)
+        self.snd_in_mute, self.snd_in_vol, self.snd_in_val = self._snd_volume_row(i, 'source')
+        self.snd_in_port = QComboBox(); self.snd_in_port.setAccessibleName(_('Microphone connector'))
+        self.snd_in_port.activated.connect(lambda n: self.sound_port('source', self.snd_in_port.itemData(n)))
+        self.snd_in_port_row = self._snd_labeled(i, 'Connector', self.snd_in_port)
+        c = p.new_card('Sound card')
+        self.snd_card = QComboBox(); self.snd_card.setAccessibleName(_('Sound card'))
+        self.snd_card.activated.connect(lambda _n: self.sound_fill_profiles())
+        self.snd_profile = QComboBox(); self.snd_profile.setAccessibleName(_('Profile'))
+        self.snd_profile.activated.connect(self.sound_profile)
+        self._snd_labeled(c, 'Card', self.snd_card); self._snd_labeled(c, 'Profile', self.snd_profile)
+        c.addWidget(UI.hint_label('A profile with HDMI sends the sound to a projector or TV. For Bluetooth headphones '
+                                  '"High Fidelity Playback (A2DP)" sounds best; "Headset" is for calls with the microphone.'))
+        m = p.new_card('More')
+        row = QHBoxLayout(); row.setSpacing(8)
+        for key, label, icon in (('soundfx', 'Clear sound…', 'audio-x-generic'), ('soundfix', 'Quality and fixes…', 'preferences-desktop-sound'),
+                                 ('hearing', 'Mono sound…', 'audio-volume-high')):
+            b = QPushButton(get_icon(icon, 'preferences-desktop-sound'), ' ' + _(label))
+            b.clicked.connect(lambda _c=False, k=key: self.open_page(k)); row.addWidget(b)
+        mixer = next((t for t in ('pavucontrol-qt', 'pavucontrol') if shutil.which(t)), '')
+        if mixer:
+            b = QPushButton(get_icon('preferences-desktop-sound', 'audio-card'), ' ' + _('Volume of each program…'))
+            b.clicked.connect(lambda _c=False, t=mixer: safe_popen([t])); row.addWidget(b)
+        row.addStretch(1); m.addLayout(row)
+        self._snd_vol_timer = {}
+        self.snd_timer = QTimer(self); self.snd_timer.setInterval(3000); self.snd_timer.timeout.connect(self.sound_refresh)
+        self.snd_timer.start(); QTimer.singleShot(0, lambda: self.sound_refresh(force=True))
+        self.snd_louder.blockSignals(True); self.snd_louder.setChecked(au.read_prefs()['max_volume'] > 100); self.snd_louder.blockSignals(False)
+        self.sound_louder(self.snd_louder.isChecked(), save=False)
+        return p.finish()
+
+    def _snd_title(self, text):
+        t = QLabel(_(text)); t.setObjectName('cardTitle'); return t
+
+    def _snd_labeled(self, lay, label, widget):
+        w = QWidget(); r = QHBoxLayout(w); r.setContentsMargins(0, 0, 0, 0); r.setSpacing(10)
+        lab = QLabel(_(label)); lab.setMinimumWidth(90); r.addWidget(lab); r.addWidget(widget, 1)
+        lay.addWidget(w); return w
+
+    def _snd_volume_row(self, lay, kind):
+        row = QHBoxLayout(); row.setSpacing(10)
+        mute = QToolButton(); mute.setCheckable(True); mute.setIconSize(QSize(20, 20)); mute.setFixedSize(34, 34)
+        mute.setAccessibleName(_('Mute')); mute.setToolTip(_('Mute / unmute'))
+        vol = QSlider(Qt.Horizontal); vol.setRange(0, 100); vol.setAccessibleName(_('Volume'))
+        val = QLabel('—'); val.setFixedWidth(46); val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        mute.toggled.connect(lambda on, k=kind: self.sound_mute(k, on))
+        vol.valueChanged.connect(lambda v, k=kind, lab=val: (lab.setText(f'{v}%'), self._snd_volume_later(k, v)))
+        row.addWidget(mute); row.addWidget(vol, 1); row.addWidget(val); lay.addLayout(row)
+        return mute, vol, val
+
+    def _snd_volume_later(self, kind, value):
+        t = self._snd_vol_timer.get(kind)
+        if t is None:
+            t = QTimer(self); t.setSingleShot(True); t.setInterval(70)
+            t.timeout.connect(lambda k=kind: self.sound_apply_volume(k)); self._snd_vol_timer[kind] = t
+        t.start()
+
+    def _snd_current(self, kind):
+        combo = self.snd_out if kind == 'sink' else self.snd_in
+        return combo.currentData()
+
+    def sound_refresh(self, force=False):
+        if self._snd_busy or (not force and not self.snd_out.isVisible()):
+            return
+        self._snd_busy = True
+        def done(result, error):
+            self._snd_busy = False
+            if result and not error:
+                self.sound_fill(result)
+        run_in_background(self, self._au.snapshot, done)
+
+    def sound_fill(self, snap):
+        # The sink and source of EasyEffects are not devices: EasyEffects
+        # follows the device chosen here.
+        snap = dict(snap, sinks=[d for d in snap['sinks'] if d['kind'] != 'effects'],
+                    sources=[d for d in snap['sources'] if d['kind'] != 'effects'])
+        self._snd = snap; info = snap['info']
+        if not info.get('server'):
+            self.snd_state.setText(_('No sound system answers. Open "Quality and fixes" and press "Check my sound".'))
+        else:
+            self.snd_state.setText(_('Sound system: {name}.').replace('{name}', info.get('name', '')))
+        icons = self._au.KIND_ICONS
+        for kind, combo, devs, mute, vol, val, port_combo, port_row in (
+                ('sink', self.snd_out, snap['sinks'], self.snd_out_mute, self.snd_out_vol, self.snd_out_val, self.snd_out_port, self.snd_out_port_row),
+                ('source', self.snd_in, snap['sources'], self.snd_in_mute, self.snd_in_vol, self.snd_in_val, self.snd_in_port, self.snd_in_port_row)):
+            if combo.view().isVisible():
+                continue          # the list is open: do not change it under the pointer
+            names = [combo.itemData(n) for n in range(combo.count())]
+            if names != [d['name'] for d in devs] or any(combo.itemText(n) != devs[n]['description'] for n in range(len(devs))):
+                combo.blockSignals(True); combo.clear()
+                for d in devs:
+                    combo.addItem(get_icon(icons.get(d['kind'], 'audio-card'), 'audio-card'), d['description'], d['name'])
+                combo.blockSignals(False)
+            cur = next((d for d in devs if d['default']), devs[0] if devs else None)
+            combo.setEnabled(bool(devs))
+            if not devs:
+                combo.blockSignals(True); combo.clear(); combo.addItem(_('No device found'), ''); combo.blockSignals(False)
+            if cur:
+                combo.blockSignals(True); combo.setCurrentIndex(max(0, combo.findData(cur['name']))); combo.blockSignals(False)
+                timer = self._snd_vol_timer.get(kind)
+                if not vol.isSliderDown() and not (timer and timer.isActive()) and cur['volume'] is not None:
+                    vol.blockSignals(True); vol.setValue(min(vol.maximum(), cur['volume'])); vol.blockSignals(False)
+                    val.setText(f"{cur['volume']}%")
+                mute.blockSignals(True); mute.setChecked(cur['mute']); mute.blockSignals(False)
+                mute.setIcon(get_icon(('audio-volume-muted' if cur['mute'] else 'audio-volume-high') if kind == 'sink' else
+                                      ('microphone-sensitivity-muted' if cur['mute'] else 'audio-input-microphone'), 'audio-volume-high'))
+                ports = [pt for pt in cur['ports'] if pt['available'] or pt['name'] == cur['active_port']]
+                port_row.setVisible(len(ports) > 1)
+                port_combo.blockSignals(True); port_combo.clear()
+                for pt in ports:
+                    port_combo.addItem(pt['description'], pt['name'])
+                port_combo.setCurrentIndex(max(0, port_combo.findData(cur['active_port']))); port_combo.blockSignals(False)
+            else:
+                port_row.setVisible(False)
+                mute.setIcon(get_icon('audio-volume-muted' if kind == 'sink' else 'microphone-sensitivity-muted', 'audio-volume-muted'))
+                val.setText('—')
+            for w in (mute, vol):
+                w.setEnabled(bool(cur))
+        if not self.snd_card.view().isVisible() and not self.snd_profile.view().isVisible():
+            current = self.snd_card.currentData()
+            self.snd_card.blockSignals(True); self.snd_card.clear()
+            for c in snap['cards']:
+                self.snd_card.addItem(get_icon('audio-headset' if c['bluetooth'] else 'audio-card', 'audio-card'), c['description'], c['name'])
+            if current:
+                self.snd_card.setCurrentIndex(max(0, self.snd_card.findData(current)))
+            if not snap['cards']:
+                self.snd_card.addItem(_('No sound card found'), '')
+            self.snd_card.blockSignals(False)
+            self.sound_fill_profiles()
+
+    def sound_fill_profiles(self):
+        card = next((c for c in self._snd['cards'] if c['name'] == self.snd_card.currentData()), None)
+        self.snd_profile.blockSignals(True); self.snd_profile.clear()
+        for pr in (card or {}).get('profiles', []):
+            if pr['available'] or pr['name'] == card['active']:
+                self.snd_profile.addItem(pr['description'], pr['name'])
+        if card:
+            self.snd_profile.setCurrentIndex(max(0, self.snd_profile.findData(card['active'])))
+        self.snd_profile.setEnabled(self.snd_profile.count() > 0); self.snd_card.setEnabled(self.snd_card.count() > 0)
+        if not card:
+            self.snd_profile.addItem('—', '')
+        self.snd_card.setEnabled(bool(card)); self.snd_profile.setEnabled(bool(card) and self.snd_profile.count() > 1)
+        self.snd_profile.blockSignals(False)
+
+    def _snd_do(self, func, message=''):
+        def done(result, error):
+            if error or result is False:
+                self.show_status(_('The sound system did not take the change.'), error=True)
+            elif message:
+                self.show_status(_(message))
+            self.sound_refresh(force=True)
+        run_in_background(self, func, done)
+
+    def sound_choose(self, kind, name):
+        if name:
+            self._snd_do(lambda: self._au.set_default(kind, name), 'Saved.')
+
+    def sound_port(self, kind, port):
+        name = self._snd_current(kind)
+        if name and port:
+            self._snd_do(lambda: self._au.set_port(kind, name, port))
+
+    def sound_profile(self, index):
+        card, profile = self.snd_card.currentData(), self.snd_profile.itemData(index)
+        if card and profile:
+            self._snd_do(lambda: self._au.set_profile(card, profile), 'Saved.')
+
+    def sound_mute(self, kind, on):
+        name = self._snd_current(kind)
+        if name:
+            self._snd_do(lambda: self._au.set_mute(kind, name, on))
+
+    def sound_apply_volume(self, kind):
+        name = self._snd_current(kind)
+        vol = self.snd_out_vol if kind == 'sink' else self.snd_in_vol
+        if name:
+            value = vol.value()
+            run_in_background(self, lambda: self._au.set_volume(kind, name, value))
+
+    def sound_test(self, side):
+        name = self._snd_current('sink') or ''
+        if self._au.play_test(name, side) is None:
+            self.show_status(_('No sound player was found (paplay, pw-play or aplay).'), error=True)
+        else:
+            self.show_status({'left': _('Playing on the left side…'), 'right': _('Playing on the right side…')}.get(side, _('Playing on both sides…')))
+
+    def sound_louder(self, on, save=True):
+        for vol in (self.snd_out_vol,):
+            vol.setMaximum(150 if on else 100)
+        if save:
+            prefs = self._au.read_prefs(); prefs['max_volume'] = 150 if on else 100; self._au.save_prefs(prefs)
+            self.show_status(_('Saved.'))
+
+    # ------------------------------------------------------------ clear sound (EasyEffects)
+    def page_sound_clear(self):
+        import eduka_audio as au
+        self._au = au
+        p = UI.Page('Clear Sound', 'EasyEffects improves the sound of every program: clearer voices for lessons and videos, '
+                                   'fuller music, an even volume, and a microphone with less noise.')
+        self.ee_state = UI.hint_label(''); p.v.addWidget(self.ee_state)
+        brow = QHBoxLayout(); brow.setSpacing(8)
+        self.ee_install = QPushButton(get_icon('system-software-install', 'list-add'), ' ' + _('Install EasyEffects…'))
+        self.ee_install.clicked.connect(self.sound_install_ee)
+        self.ee_open = QPushButton(get_icon('easyeffects', 'preferences-desktop-sound'), ' ' + _('Open EasyEffects'))
+        self.ee_open.clicked.connect(lambda: safe_popen((au.easyeffects_command() or ['easyeffects'])))
+        brow.addWidget(self.ee_install); brow.addWidget(self.ee_open); brow.addStretch(1); p.v.addLayout(brow)
+        prefs = au.read_prefs()
+        self.ee_groups = {}
+        for side, title, presets in (('output_preset', 'Speakers and headphones', au.OUTPUT_PRESETS),
+                                     ('input_preset', 'Microphone', au.INPUT_PRESETS)):
+            card = p.new_card(title)
+            group = []
+            for name, label, hint in presets:
+                rb = QRadioButton(_(label)); rb.setProperty('eduka_no_live', True); rb.setChecked(prefs.get(side, '') == name)
+                rb.setToolTip(_(hint)); rb.setAccessibleDescription(_(hint))
+                rb.toggled.connect(lambda on, s=side, n=name: on and self.sound_preset(s, n))
+                card.addWidget(rb); h = UI.hint_label(hint); h.setContentsMargins(26, 0, 0, 4); card.addWidget(h)
+                group.append((name, rb))
+            self.ee_groups[side] = group
+        cr = p.new_card('About')
+        cr.addWidget(UI.hint_label('Clear sound uses a little processor time while sound plays; "Off" stops EasyEffects '
+                                   'completely. EasyEffects is made by Wellington Wallace and others (GPL-3.0). The presets '
+                                   '"Laptop speakers", "Loudness", "Headphones" and "Bass" are by JackHack96 '
+                                   '(EasyEffects-Presets, MIT License).'))
+        self.sound_clear_state()
+        return p.finish()
+
+    def sound_clear_state(self):
+        au = self._au
+        inst = au.easyeffects_installed()
+        self.ee_install.setVisible(not inst); self.ee_open.setVisible(inst)
+        for group in self.ee_groups.values():
+            for name, rb in group:
+                rb.setEnabled(inst or not name)
+        if not inst:
+            self.ee_state.setText(_('EasyEffects is not installed yet. It is a separate program: install it once, then choose a sound.'))
+        else:
+            running, ver = au.easyeffects_running(), au.easyeffects_version()
+            text = _('EasyEffects {v} is installed.').replace('{v}', ver) if ver else _('EasyEffects is installed.')
+            self.ee_state.setText(text + ' ' + (_('It is on.') if running else _('It is off.')))
+
+    def sound_preset(self, side, name):
+        au = self._au
+        prefs = au.read_prefs(); prefs[side] = name; au.save_prefs(prefs)
+        self.show_status(_('Applying…'))
+        def done(result, error):
+            ok, text = result if result and not error else (False, str(error))
+            self.show_status(_(text), error=not ok); self.sound_clear_state()
+        run_in_background(self, lambda: au.apply_presets(prefs['output_preset'], prefs['input_preset']), done)
+
+    def sound_install_ee(self):
+        self._snd_terminal(self._au.easyeffects_install_command(), self.sound_clear_state)
+
+    def _snd_terminal(self, command, after=None):
+        from eduka_common import terminal_command
+        if not command or not shutil.which('apt-get'):
+            self.show_status(_('Install it with the package manager of this system.'), error=True); return
+        try:
+            proc = subprocess.Popen(terminal_command(command), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+        except Exception as e:
+            self.show_status(_('Could not open a terminal: ') + str(e), error=True); return
+        timer = QTimer(self); timer.setInterval(1500)
+        def check():
+            if proc.poll() is None: return
+            timer.stop(); timer.deleteLater()
+            if after: after()
+        timer.timeout.connect(check); timer.start()
+
+    # ------------------------------------------------------------ quality and fixes
+    QUALITY = (('rates', 'Play music at its own rate (44.1 or 48 kHz) instead of converting it'),
+               ('no_suspend', 'Keep the sound card awake: no cut-off first second, no pop, projectors keep their sound'),
+               ('buffer', 'Bigger sound buffer: no crackling on older or busy computers (a little delay)'),
+               ('resampler', 'Best converting quality (uses more processor time)'))
+
+    def page_sound_quality(self):
+        import eduka_audio as au
+        self._au = au
+        p = UI.Page('Quality & Fixes', 'Settings that fix the most common sound problems on Linux, and a check of this computer.')
+        prefs = au.read_prefs()
+        self.snd_quality = {}
+        for key, label in self.QUALITY:
+            box = QCheckBox(_(label)); box.setProperty('eduka_no_live', True); box.setChecked(prefs['quality'].get(key, False))
+            p.v.addWidget(box); self.snd_quality[key] = box
+        qrow = QHBoxLayout(); qrow.setSpacing(8)
+        apply = QPushButton(get_icon('dialog-ok-apply', 'view-refresh'), ' ' + _('Apply and restart the sound'))
+        apply.setObjectName('primary'); apply.clicked.connect(self.sound_apply_quality)
+        qrow.addWidget(apply); qrow.addStretch(1); p.v.addLayout(qrow)
+        p.v.addWidget(UI.hint_label('These settings belong to your account (PipeWire, WirePlumber or PulseAudio). Playing '
+                                    'sound stops for a moment while the sound system restarts.'))
+        c = p.new_card('Check my sound')
+        self.snd_checks = QVBoxLayout(); self.snd_checks.setSpacing(6); c.addLayout(self.snd_checks)
+        crow = QHBoxLayout(); crow.setSpacing(8)
+        check = QPushButton(get_icon('dialog-information', 'help-about'), ' ' + _('Check my sound')); check.clicked.connect(self.sound_check)
+        restart = QPushButton(get_icon('view-refresh'), ' ' + _('Restart the sound system')); restart.clicked.connect(lambda: self.sound_fix('restart'))
+        reset = QPushButton(get_icon('edit-undo', 'view-refresh'), ' ' + _('Reset sound settings')); reset.clicked.connect(self.sound_reset)
+        for b in (check, restart, reset):
+            crow.addWidget(b)
+        crow.addStretch(1); c.addLayout(crow)
+        return p.finish()
+
+    def sound_apply_quality(self):
+        au = self._au
+        prefs = au.read_prefs()
+        for key, box in self.snd_quality.items():
+            prefs['quality'][key] = box.isChecked()
+        au.save_prefs(prefs)
+        self.show_status(_('Restarting the sound…'))
+        def work():
+            au.apply_quality(prefs['quality'])
+            return au.restart_sound()
+        def done(result, error):
+            ok, text = result if result and not error else (False, str(error))
+            self.show_status(_(text), error=not ok)
+        run_in_background(self, work, done)
+
+    def sound_reset(self):
+        au = self._au
+        for key, box in self.snd_quality.items():
+            box.setChecked(au.DEFAULT_PREFS['quality'].get(key, False))
+        prefs = au.read_prefs(); prefs['output_preset'] = ''; prefs['input_preset'] = ''; au.save_prefs(prefs)
+        for group in getattr(self, 'ee_groups', {}).values():
+            for name, rb in group:
+                rb.blockSignals(True); rb.setChecked(not name); rb.blockSignals(False)
+        run_in_background(self, lambda: au.apply_presets('', ''))
+        self.sound_apply_quality()
+
+    def sound_check(self):
+        while self.snd_checks.count():
+            item = self.snd_checks.takeAt(0)
+            if item.widget(): item.widget().hide(); item.widget().deleteLater()
+        wait = QLabel(_('Checking…')); self.snd_checks.addWidget(wait)
+        def done(result, error):
+            wait.hide(); wait.deleteLater()
+            for level, text, fix in (result or [('error', str(error), '')]):
+                row = QWidget(); r = QHBoxLayout(row); r.setContentsMargins(0, 0, 0, 0); r.setSpacing(8)
+                ic = QLabel(); ic.setPixmap(get_icon({'ok': 'emblem-ok', 'warn': 'dialog-warning', 'error': 'dialog-error'}[level],
+                                                     'dialog-information').pixmap(20, 20))
+                lab = QLabel(_(text)); lab.setWordWrap(True); lab.setTextFormat(Qt.PlainText)
+                r.addWidget(ic); r.addWidget(lab, 1)
+                if fix:
+                    label = {'restart': 'Restart', 'unmute': 'Unmute', 'volume': 'Set 60%', 'profile': 'Choose…',
+                             'install-pactl': 'Install…', 'install-firmware': 'Install…'}.get(fix.split(':')[0], 'Fix')
+                    b = QPushButton(_(label)); b.clicked.connect(lambda _c=False, f=fix: self.sound_fix(f)); r.addWidget(b)
+                self.snd_checks.addWidget(row)
+        run_in_background(self, self._au.diagnose, done)
+
+    def sound_fix(self, key):
+        au = self._au
+        if key.startswith('install-'):
+            self._snd_terminal(au.install_command(key), self.sound_check); return
+        if key == 'profile':
+            self.open_page('sound'); return
+        self.show_status(_('Working…'))
+        def done(result, error):
+            ok, text = result if result and not error else (False, str(error))
+            self.show_status(_(text or 'Done.'), error=not ok)
+            QTimer.singleShot(400, self.sound_check)
+        run_in_background(self, lambda: au.fix_problem(key), done)
+
     def page_a11y_hearing(self):
         import eduka_a11y as ea
         self._a11y = ea
@@ -1365,7 +1754,7 @@ class ExtPages:
         f.addRow('', UI.hint_label('Good with one earphone, one speaker or hearing on one side. It stays on after logging in again.'))
         row = QHBoxLayout(); row.setSpacing(8)
         snd = QPushButton(get_icon('audio-volume-high', ['preferences-desktop-sound']), ' ' + _('Sound settings…'))
-        snd.clicked.connect(lambda: ea.open_sound_settings() or self.show_status(_('Install pavucontrol-qt for the sound settings.'), error=True))
+        snd.clicked.connect(lambda: self.open_page('sound'))
         notes = QPushButton(get_icon('preferences-system-notifications'), ' ' + _('Notifications…'))
         notes.clicked.connect(lambda: self.open_page('notifications'))
         row.addWidget(snd); row.addWidget(notes); row.addStretch(1)

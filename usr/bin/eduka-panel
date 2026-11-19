@@ -267,12 +267,22 @@ class PopupFrame(QFrame):
         super().keyPressEvent(e)
 
 
+_C_LOCALE_ENV = None
+
 def _run_text(cmd, timeout=1.5):
-    """Run a status command; None when missing, failing or too slow."""
+    """Run a status command; None when missing, failing or too slow.
+    pactl and nmcli answer in English here: their words ("Mute: yes",
+    "enabled") are read, and pactl translates them (Portuguese, Indonesian)."""
+    global _C_LOCALE_ENV
     if shutil.which(cmd[0]) is None:
         return None
+    env=None
+    if cmd[0] in ('pactl', 'nmcli'):
+        if _C_LOCALE_ENV is None:
+            _C_LOCALE_ENV=dict(os.environ); _C_LOCALE_ENV['LC_ALL']='C.UTF-8'; _C_LOCALE_ENV.pop('LANGUAGE', None)
+        env=_C_LOCALE_ENV
     try:
-        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=timeout).stdout
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=timeout, env=env).stdout
     except Exception:
         return None
 
@@ -2011,6 +2021,10 @@ class ActionCenter(PopupFrame):
         self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(18,18)); self.mute.setFixedSize(34,34)
         self.mute.setAccessibleName('Mute'); self.mute.setToolTip('Mute / unmute'); self.mute.clicked.connect(self.toggle_mute)
         self.vol_slider=QSlider(Qt.Horizontal); self.vol_slider.setRange(0,100); self.vol_slider.setAccessibleName('Volume')
+        try:
+            import eduka_audio; self.vol_slider.setMaximum(eduka_audio.max_volume())
+        except Exception:
+            pass
         self.vol_value=QLabel('')
         self.sound_more=QToolButton(); self.sound_more.setObjectName('roundIcon'); self.sound_more.setFixedSize(34,34)
         self.sound_more.setIcon(QIcon(arrow_icon_path('right', self.ink))); self.sound_more.setIconSize(QSize(12,12))
@@ -2502,23 +2516,14 @@ class ActionCenter(PopupFrame):
 
     def sound_menu(self):
         m=RoundedMenu(self)
-        sinks=[]; current=None
-        for line in (_run_text(['pactl','list','short','sinks'], timeout=2) or '').splitlines():
-            parts=line.split('\t')
-            if len(parts) >= 2: sinks.append(parts[1])
-        default=(_run_text(['pactl','get-default-sink']) or '').strip()
-        names={}
-        for line in (_run_text(['pactl','list','sinks'], timeout=3) or '').splitlines():
-            line=line.strip()
-            if line.startswith('Name:'): current=line.split(':',1)[1].strip()
-            elif line.startswith('Description:') and current: names[current]=line.split(':',1)[1].strip()
-        if sinks:
+        devs=output_devices(); default=devs['default']
+        if devs['sinks']:
             header=m.addAction('Output'); header.setEnabled(False)
-            for sink in sinks:
-                act=m.addAction(names.get(sink, sink)); act.setCheckable(True); act.setChecked(sink == default)
-                act.triggered.connect(lambda _=False, s=sink: (safe_popen(['pactl','set-default-sink',s]), QTimer.singleShot(400, self.panel.update_status_icons)))
+            for sink in devs['sinks']:
+                act=m.addAction(sink['description'] or sink['name']); act.setCheckable(True); act.setChecked(sink['name'] == default)
+                act.triggered.connect(lambda _=False, s=sink['name']: (choose_output_device(s), QTimer.singleShot(400, self.panel.update_status_icons)))
             m.addSeparator()
-        m.addAction(get_icon('preferences-desktop-sound','audio-card'),'Sound Settings…', lambda: self.launch('pavucontrol-qt'))
+        m.addAction(get_icon('preferences-desktop-sound','audio-card'),'Sound Settings…', lambda: self.launch('eduka-settings --page sound'))
         m.exec_(self.sound_more.mapToGlobal(QPoint(self.sound_more.width(), 0)))
 
     def apply_volume(self):
@@ -2550,20 +2555,34 @@ def _nm_split(line):
     return [f.replace('\\:', ':').replace('\\\\', '\\') for f in fields]
 
 
+def output_devices():
+    """Outputs (name, description in the user's language) and the default one,
+    from pactl's JSON (eduka_audio); EasyEffects' own sink is no device."""
+    try:
+        import eduka_audio
+        info=eduka_audio.server_info()
+        sinks=[{'name': d['name'], 'description': d['description'], 'kind': d['kind']}
+               for d in eduka_audio.sinks(info) if d['kind'] != 'effects']
+        return {'sinks': sinks, 'default': info.get('default_sink') or ''}
+    except Exception:
+        return {'sinks': [], 'default': ''}
+
+
+def choose_output_device(name):
+    """The default output, and the sounds playing now move there too."""
+    import threading
+    def work():
+        try:
+            import eduka_audio; eduka_audio.set_default('sink', name)
+        except Exception:
+            safe_popen(['pactl', 'set-default-sink', name])
+    threading.Thread(target=work, daemon=True).start()
+
+
 class SinkWorker(QThread):
     ready=pyqtSignal(object)
     def run(self):
-        sinks=[]; current={}
-        for line in (_run_text(['pactl','list','sinks'], timeout=3) or '').splitlines():
-            line=line.strip()
-            if line.startswith('Sink #'):
-                current={}; sinks.append(current)
-            elif line.startswith('Name:') and sinks:
-                current['name']=line.split(':',1)[1].strip()
-            elif line.startswith('Description:') and sinks:
-                current['description']=line.split(':',1)[1].strip()
-        default=(_run_text(['pactl','get-default-sink']) or '').strip()
-        self.ready.emit({'sinks':[x for x in sinks if x.get('name')], 'default':default})
+        self.ready.emit(output_devices())
 
 
 # --- Removable drives -------------------------------------------------------
@@ -3232,18 +3251,45 @@ class SoundPopup(PopupFrame):
         self.mute=QToolButton(); self.mute.setObjectName('roundIcon'); self.mute.setCheckable(True); self.mute.setIconSize(QSize(20,20)); self.mute.setAccessibleName('Mute')
         self.mute.setChecked(bool(st.get('muted'))); self.mute.toggled.connect(self.toggle_mute); row.addWidget(self.mute)
         self.slider=QSlider(Qt.Horizontal); self.slider.setRange(0,100); self.slider.setAccessibleName('Volume'); row.addWidget(self.slider,1)
+        try:
+            import eduka_audio; self.slider.setMaximum(eduka_audio.max_volume())
+        except Exception:
+            pass
         self.value=QLabel(''); self.value.setFixedWidth(42); self.value.setAlignment(Qt.AlignRight|Qt.AlignVCenter); row.addWidget(self.value)
         vol=st.get('volume'); self.slider.setEnabled(vol is not None); self.slider.setValue(50 if vol is None else int(vol)); self.value.setText(f'{self.slider.value()}%' if vol is not None else '—')
         self.v.addLayout(row)
         self.subtitle=QLabel(''); self.subtitle.setObjectName('popSub'); self.v.addWidget(self.subtitle)
         self.devices=QComboBox(); self.devices.setAccessibleName('Output device'); self.devices.setVisible(False); self.devices.activated.connect(self.choose_device); self.v.addWidget(self.devices)
         line=QFrame(); line.setObjectName('popLine'); line.setFixedHeight(1); self.v.addWidget(line)
-        settings=link_row('Sound Settings', 'preferences-desktop-sound'); settings.clicked.connect(lambda: (self.close(), launch_app('pavucontrol-qt' if shutil.which('pavucontrol-qt') else 'pavucontrol'))); self.v.addWidget(settings)
+        self.clear_row=None
+        if shutil.which('easyeffects'):
+            # Clear sound (EasyEffects, Pre-Stable): on with the last chosen sound, or off.
+            import eduka_audio
+            row2=QHBoxLayout(); row2.setSpacing(8)
+            lab=QLabel(_('Clear sound')); lab.setToolTip(_('EasyEffects: clearer voices, fuller music, less microphone noise'))
+            self.clear_row=ToggleSwitch(); self.clear_row.setAccessibleName(_('Clear sound'))
+            prefs=eduka_audio.read_prefs(); self.clear_row.setChecked(bool(prefs.get('output_preset')) and eduka_audio.easyeffects_running())
+            self.clear_row.toggled.connect(self.toggle_clear_sound)
+            row2.addWidget(lab, 1); row2.addWidget(self.clear_row); self.v.addLayout(row2)
+        settings=link_row('Sound Settings', 'preferences-desktop-sound'); settings.clicked.connect(lambda: (self.close(), launch_app('eduka-settings --page sound'))); self.v.addWidget(settings)
         self._timer=QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self.apply_volume)
         self.slider.valueChanged.connect(lambda v: (self.value.setText(f'{v}%'), self.update_icons(), self._timer.start(60)))
         self.update_icons()
         worker=SinkWorker(panel); self.worker=worker
         worker.ready.connect(self.fill_devices); worker.finished.connect(worker.deleteLater); worker.start()
+
+    def toggle_clear_sound(self, on):
+        import eduka_audio, threading
+        prefs=eduka_audio.read_prefs()
+        out=(prefs.get('last_output_preset') or 'Eduka Clear Voice') if on else ''
+        if on:
+            prefs['output_preset']=out
+        else:
+            if prefs.get('output_preset'): prefs['last_output_preset']=prefs['output_preset']
+            prefs['output_preset']=''
+        eduka_audio.save_prefs(prefs)
+        inp=prefs.get('input_preset', '')
+        threading.Thread(target=lambda: eduka_audio.apply_presets(out, inp), daemon=True).start()
 
     def update_icons(self):
         muted=self.mute.isChecked(); v=self.slider.value()
@@ -3264,7 +3310,7 @@ class SoundPopup(PopupFrame):
     def choose_device(self, index):
         name=self.devices.itemData(index)
         if name:
-            safe_popen(['pactl','set-default-sink',name])
+            choose_output_device(name)
             QTimer.singleShot(400, self.panel.update_status_icons)
 
     def toggle_mute(self, on):
@@ -5380,7 +5426,11 @@ class EdukaPanel(QWidget):
         # Stay within 0-100 % so scrolling over the icon cannot distort speakers.
         current=self.last_status.get('volume')
         current=50 if current is None else int(current)
-        target=max(0, min(100, current+delta))
+        try:
+            import eduka_audio; top=eduka_audio.max_volume()
+        except Exception:
+            top=100
+        target=max(0, min(top, current+delta))
         self.last_status['volume']=target
         self.vol.setToolTip(f'Volume: {target}%')
         safe_popen(['pactl','set-sink-volume','@DEFAULT_SINK@',f'{target}%']); QTimer.singleShot(250, self.update_status_icons)

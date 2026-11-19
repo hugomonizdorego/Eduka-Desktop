@@ -698,6 +698,11 @@ class Settings(ext.ExtPages, QDialog):
                            ('notifications','Notifications','preferences-system-notifications',self.page_notifications)])]),
             ('DEVICES', [('display','Display','video-display',
                           [('display','Display','video-display',self.page_display)]),
+                         # Sound (0.11 Pre-Stable): devices, clear sound and fixes.
+                         ('sound','Sound','audio-volume-high',
+                          [('sound','Sound','audio-volume-high',self.page_sound),
+                           ('soundfx','Clear Sound','audio-x-generic',self.page_sound_clear),
+                           ('soundfix','Quality & Fixes','preferences-desktop-sound',self.page_sound_quality)]),
                          ('keyboard','Keyboard','input-keyboard',
                           [('keyboard','Keyboard','input-keyboard',self.page_keyboard),
                            ('shortcuts','Shortcuts','preferences-desktop-keyboard-shortcuts',self.page_shortcuts)]),
@@ -772,6 +777,7 @@ class Settings(ext.ExtPages, QDialog):
         QTimer.singleShot(0, self.enable_live_apply)
 
     LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'display', 'keyboard', 'shortcuts', 'memory', 'mouse', 'touchpad',
+                 'sound', 'soundfx', 'soundfix',
                  'touchscreen', 'fingerprint', 'users', 'fonts', 'datetime', 'lightdm', 'quick', 'overview', 'privacy')
 
     def sub_icon(self, key, icon):

@@ -1,0 +1,69 @@
+{
+    "output": {
+        "blocklist": [],
+        "plugins_order": [
+            "autogain#0",
+            "compressor#0",
+            "limiter#0"
+        ],
+        "autogain#0": {
+            "bypass": false,
+            "input-gain": 0.0,
+            "maximum-history": 15,
+            "output-gain": 0.0,
+            "reference": "Geometric Mean (MSI)",
+            "silence-threshold": -70.0,
+            "target": -23.0
+        },
+        "compressor#0": {
+            "attack": 10.0,
+            "boost-amount": 6.0,
+            "boost-threshold": -72.0,
+            "bypass": false,
+            "dry": -100.0,
+            "hpf-frequency": 10.0,
+            "hpf-mode": "off",
+            "input-gain": 0.0,
+            "knee": -10.0,
+            "lpf-frequency": 20000.0,
+            "lpf-mode": "off",
+            "makeup": 3.0,
+            "mode": "Downward",
+            "output-gain": 0.0,
+            "ratio": 4.0,
+            "release": 200.0,
+            "release-threshold": -100.0,
+            "sidechain": {
+                "lookahead": 0.0,
+                "mode": "RMS",
+                "preamp": 0.0,
+                "reactivity": 10.0,
+                "source": "Middle",
+                "type": "Feed-forward"
+            },
+            "stereo-split": false,
+            "threshold": -26.0,
+            "wet": 0.0
+        },
+        "limiter#0": {
+            "alr": false,
+            "alr-attack": 5.0,
+            "alr-knee": 0.0,
+            "alr-release": 50.0,
+            "attack": 5.0,
+            "bypass": false,
+            "dithering": "None",
+            "external-sidechain": false,
+            "gain-boost": false,
+            "input-gain": 0.0,
+            "lookahead": 5.0,
+            "mode": "Herm Thin",
+            "output-gain": 0.0,
+            "oversampling": "None",
+            "release": 20.0,
+            "sidechain-preamp": 0.0,
+            "stereo-link": 100.0,
+            "threshold": -2.0
+        }
+    }
+}

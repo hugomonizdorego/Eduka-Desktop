@@ -241,9 +241,20 @@ def touch(cfg):
         eduka_touch.first_login(cfg)
 
 
+def sound(cfg):
+    """Once per account (eduka_audio, 0.11 Pre-Stable): music at its own rate,
+    on a desktop computer the sound card stays awake (projectors keep the
+    first second), on a small or old computer a bigger buffer against
+    crackling. Eduka-Settings → Sound → Quality & Fixes changes it later."""
+    if '/usr/lib/edukasaun-desktop' not in sys.path:
+        sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+    import eduka_audio
+    eduka_audio.first_login_defaults()
+
+
 def main():
     cfg = config_home()
-    for step in (hide_lxqt_modules, super_key_opens_menu, quick_launcher_key, windows_shortcuts, display_scale, touch):
+    for step in (hide_lxqt_modules, super_key_opens_menu, quick_launcher_key, windows_shortcuts, display_scale, touch, sound):
         try:
             step(cfg)
         except Exception as e:                   # never stop the login
