@@ -300,6 +300,22 @@ def screenshot(kind):
         start([tool, *args.get(kind, [])])
 
 
+def record():
+    """Super+Alt+R: start or stop a screen recording (eduka_capture)."""
+    import eduka_capture
+    ok, msg = eduka_capture.toggle()
+    if not ok and msg:
+        eduka_capture.notify('Screen recording', msg, 'dialog-information')
+
+
+def force_close():
+    """Ctrl+Alt+Esc: close the active window's program at once (after a
+    question in eduka-force-close)."""
+    wid = active_window()
+    if wid:
+        start(['eduka-force-close', '--window', wid])
+
+
 def files():
     tool = first(('pcmanfm-qt', 'thunar', 'nautilus', 'caja', 'nemo', 'dolphin'))
     start([tool] if tool else ['xdg-open', str(Path.home())]) or start(['xdg-open', str(Path.home())])
@@ -420,6 +436,9 @@ ACTIONS = {
     'media-prev': lambda: media('previous'),
     'media-stop': lambda: media('stop'),
     'touchpad-toggle': touchpad_toggle,
+    'record': record,
+    'clipboard': lambda: tell_panel('clipboard'),
+    'force-close': force_close,
 }
 
 

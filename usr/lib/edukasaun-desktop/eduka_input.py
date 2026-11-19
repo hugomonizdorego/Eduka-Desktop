@@ -44,6 +44,8 @@ DEFAULTS = {
     'double_click': 400, 'wheel_lines': 3,
     'tp_enabled': True, 'tp_tap': True, 'tp_natural': True, 'tp_dwt': True, 'tp_speed': 0.0,
     'tp_scroll': 'two-finger', 'tp_icon': True,
+    # 0.11 Pre-Stable: tap and drag, drag lock; the screen of a pen tablet.
+    'tp_drag': True, 'tp_drag_lock': False, 'tablet_output': '',
     'ts_enabled': True, 'ts_output': '', 'ts_rotation': 'normal', 'ts_kinetic': True, 'osk_autostart': False,
 }
 
@@ -62,6 +64,8 @@ ONBOARD_AUTOSTART = Path.home()/'.config/autostart/eduka-onboard.desktop'
 ONBOARD_MARK = 'X-Eduka-OnScreenKeyboard=true'
 
 TOUCHPAD_NAME = re.compile(r'touch\s*pad|trackpad|glidepoint|synaptics|alps|elan\s*\d*\s*:?\s*tp|\bTP\b', re.I)
+# Pen tablets (drawing tablets) and the pens of touch screens.
+TABLET_NAME = re.compile(r'wacom|huion|xp-?pen|gaomon|ugee|veikk|\bpen\b|stylus|eraser|tablet\s+(monitor|pad)|digitizer', re.I)
 SKIP_POINTER = re.compile(r'XTEST|Virtual core|Video Bus|Power Button|Sleep Button|Lid Switch|\bkeyboard\b|consumer control|system control|wmi hotkeys', re.I)
 
 
@@ -202,16 +206,31 @@ def pointer_devices():
             continue
         name, did = m.group(1).strip(), int(m.group(2))
         props = _run(['xinput', 'list-props', str(did)]) or ''
-        screen = modes.get(did) == 'direct'
-        touch = not screen and (modes.get(did) == 'dependent' or bool(TOUCHPAD_NAME.search(name))
-                                or 'libinput Tapping Enabled' in props or 'Synaptics' in props)
-        devs.append({'id': did, 'name': name, 'touchpad': touch, 'touchscreen': screen,
+        tablet = 'libinput Tablet Tool' in props or (bool(TABLET_NAME.search(name)) and 'libinput Tapping Enabled' not in props)
+        screen = modes.get(did) == 'direct' and not tablet
+        touch = not screen and not tablet and (modes.get(did) == 'dependent' or bool(TOUCHPAD_NAME.search(name))
+                                                or 'libinput Tapping Enabled' in props or 'Synaptics' in props)
+        devs.append({'id': did, 'name': name, 'touchpad': touch, 'touchscreen': screen, 'tablet': tablet,
                      'libinput': 'libinput' in props, 'props': props})
     return devs
 
 
 def touchscreens():
     return [d for d in pointer_devices() if d.get('touchscreen')]
+
+
+def tablets():
+    return [d for d in pointer_devices() if d.get('tablet')]
+
+
+def apply_tablet(cfg, dev, outputs=None):
+    """A pen tablet draws on one screen (its shape fits it) or on all of them."""
+    outputs = connected_outputs() if outputs is None else outputs
+    want = str(cfg.get('tablet_output') or '')
+    if want and want in [n for n, _p, _b in outputs]:
+        _run(['xinput', 'map-to-output', str(dev['id']), want])
+    elif 'Coordinate Transformation Matrix' in dev.get('props', ''):
+        _set_prop(dev, 'Coordinate Transformation Matrix', '1', '0', '0', '0', '1', '0', '0', '0', '1')
 
 
 def connected_outputs():
@@ -274,9 +293,16 @@ def apply_pointers(cfg, devices=None):
                 outputs = connected_outputs()
             apply_touchscreen(cfg, d, outputs)
             continue
+        if d.get('tablet'):
+            if outputs is None:
+                outputs = connected_outputs()
+            apply_tablet(cfg, d, outputs)
+            continue
         if d['touchpad']:
             _set_prop(d, 'Device Enabled', b(cfg['tp_enabled']))
             _set_prop(d, 'libinput Tapping Enabled', b(cfg['tp_tap']))
+            _set_prop(d, 'libinput Tapping Drag Enabled', b(cfg.get('tp_drag', True)))
+            _set_prop(d, 'libinput Tapping Drag Lock Enabled', b(cfg.get('tp_drag_lock', False)))
             _set_prop(d, 'libinput Natural Scrolling Enabled', b(cfg['tp_natural']))
             _set_prop(d, 'libinput Disable While Typing Enabled', b(cfg['tp_dwt']))
             _set_prop(d, 'libinput Accel Speed', f"{max(-1.0, min(1.0, float(cfg['tp_speed']))):.2f}")

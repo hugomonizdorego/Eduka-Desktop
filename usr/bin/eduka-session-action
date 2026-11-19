@@ -62,11 +62,34 @@ class ActionButton(QToolButton):
         self.setProperty('kind', action)
 
 
+def frosted_backdrop(screen):
+    """The screen as it is now, blurred and slightly brighter: frosted glass
+    behind the leave screen (0.11 Pre-Stable). Shrinking the picture a lot
+    and enlarging it again smoothly blurs it cheaply, also on old computers
+    and without a compositor. None when the screen cannot be read (Wayland)."""
+    try:
+        if not read_desktop_config().get('frosted_leave', True) or session_type() == 'wayland':
+            return None
+        shot=screen.grabWindow(0)
+        if shot.isNull():
+            return None
+        img=shot.toImage()
+        w, h=max(1, img.width()), max(1, img.height())
+        for factor in (10, 26):
+            small=img.scaled(max(1, w//factor), max(1, h//factor), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            img=small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        return QPixmap.fromImage(img)
+    except Exception:
+        return None
+
+
 class LeaveScreen(QWidget):
     def __init__(self, action):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.lang=ui_language(); self.composited=compositor_running(force=True)
-        if self.composited:
+        # Taken before this window shows, so the desktop itself is blurred.
+        self.backdrop=frosted_backdrop(QApplication.primaryScreen())
+        if self.composited and self.backdrop is None:
             self.setAttribute(Qt.WA_TranslucentBackground)
         dark=is_dark_theme()
         # Same colors as the menus and dialog boxes of the theme.
@@ -139,6 +162,13 @@ class LeaveScreen(QWidget):
 
     def paintEvent(self, e):
         p=QPainter(self)
+        if self.backdrop is not None:
+            p.setRenderHint(QPainter.SmoothPixmapTransform)
+            p.drawPixmap(self.rect(), self.backdrop)
+            # A soft veil in the color of the theme keeps the card readable.
+            veil=QColor(0, 0, 0, 105) if is_dark_theme() else QColor(20, 40, 60, 80)
+            p.fillRect(self.rect(), veil)
+            return
         p.fillRect(self.rect(), QColor(0, 0, 0, 150) if self.composited else QColor('#1e2a27'))
 
     def mousePressEvent(self, e):

@@ -325,6 +325,21 @@ class CategoryDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         return QSize(190, self.row_h)
 
+def add_gpu_action(menu, app, before_launch=None):
+    """Right-click → Run with the dedicated graphics card (hybrid graphics,
+    0.11 Pre-Stable); only on computers with two graphics cards."""
+    try:
+        import eduka_gpu
+        if eduka_gpu.dedicated() is None:
+            return
+    except Exception:
+        return
+    def run(a=app):
+        if before_launch: before_launch()
+        QTimer.singleShot(35, lambda: launch_entry(a, dedicated_gpu=True))
+    menu.addAction(get_icon('video-display', 'preferences-desktop-display'), _('Run with the dedicated graphics card'), run)
+
+
 def add_quick_actions(menu, app):
     """Right-click → Add to / Remove from Eduka-Quick (0.11 RC3)."""
     try:
@@ -492,6 +507,7 @@ class AppButton(QToolButton):
     def ctx(self, pos):
         m = RoundedMenu(self)
         m.addAction(get_icon('system-run'), 'Open', self.launch)
+        add_gpu_action(m, self.app, lambda: self.window().hide_menu(force=True))
         if is_favorite(self.app):
             m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
         else:
@@ -599,6 +615,7 @@ class AppListItem(QFrame):
     def ctx(self, pos):
         m = RoundedMenu(self)
         m.addAction(get_icon('system-run'), 'Open', self._launch_once)
+        add_gpu_action(m, self.app, lambda: self.window().hide_menu(force=True))
         if is_favorite(self.app):
             m.addAction(get_icon('list-remove'), 'Remove from Favorites', lambda: self.window().remove_favorite(self.app))
         else:
@@ -983,7 +1000,8 @@ class EdukaMenu(QWidget):
                 'QLabel#mutedText,QLabel#mutedSmall,QLabel#infoKey{color:#5b6c7d;}'
             ) if pastel else ''
             self.setStyleSheet(self.base_qss + liquid_qss + dark_qss + low_qss + trans_qss + pastel_qss + accessibility_qss)
-        self.apply_blur_hint(liquid and not accessibility)
+        # Frosted glass (0.11 Pre-Stable): blur behind with every see-through theme.
+        self.apply_blur_hint((liquid or (bool(dcfg.get('glass_blur', False)) and composited and theme != THEME_LOW)) and not accessibility)
         # The drop shadow re-renders the whole window on every repaint; only
         # when the user asked for shadows and a compositor can show them.
         if composited and dcfg.get('enable_shadows', False) and not dcfg.get('low_resource_mode', True):

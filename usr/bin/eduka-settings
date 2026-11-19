@@ -695,7 +695,12 @@ class Settings(ext.ExtPages, QDialog):
                          ('panel','Eduka-Panel','preferences-desktop',
                           [('panel','Panel','preferences-desktop',self.page_icon_name),
                            ('clock','Clock','preferences-system-time',self.page_clock),
-                           ('notifications','Notifications','preferences-system-notifications',self.page_notifications)])]),
+                           ('notifications','Notifications','preferences-system-notifications',self.page_notifications)]),
+                         # Windows & Workspaces (0.11 Pre-Stable).
+                         ('windows','Windows & Workspaces','preferences-system-windows',
+                          [('windows','Windows','preferences-system-windows',self.page_windows),
+                           ('workspaces','Workspaces & Corners','preferences-desktop',self.page_workspaces),
+                           ('capture','Screenshots & Recording','camera-photo',self.page_capture)])]),
             ('DEVICES', [('display','Display','video-display',
                           [('display','Display','video-display',self.page_display)]),
                          # Sound (0.11 Pre-Stable): devices, clear sound and fixes.
@@ -777,7 +782,7 @@ class Settings(ext.ExtPages, QDialog):
         QTimer.singleShot(0, self.enable_live_apply)
 
     LIVE_SKIP = ('login', 'parental', 'maintenance', 'wallpaper', 'desktopicons', 'display', 'keyboard', 'shortcuts', 'memory', 'mouse', 'touchpad',
-                 'sound', 'soundfx', 'soundfix',
+                 'sound', 'soundfx', 'soundfix', 'windows', 'workspaces', 'capture',
                  'touchscreen', 'fingerprint', 'users', 'fonts', 'datetime', 'lightdm', 'quick', 'overview', 'privacy')
 
     def sub_icon(self, key, icon):
@@ -896,7 +901,8 @@ class Settings(ext.ExtPages, QDialog):
         # Ranges match what Eduka-Panel (0.50) and Eduka-Desktop (0.45) accept.
         self.panel_trans=QDoubleSpinBox(); self.panel_trans.setRange(0.50,1.0); self.panel_trans.setDecimals(2); self.panel_trans.setSingleStep(0.01); self.panel_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Panel opacity:', self.panel_trans)
         self.desktop_trans=QDoubleSpinBox(); self.desktop_trans.setRange(0.45,1.0); self.desktop_trans.setDecimals(2); self.desktop_trans.setSingleStep(0.01); self.desktop_trans.setToolTip('Lower is more transparent; 1.00 is fully opaque'); f.addRow('Desktop opacity:', self.desktop_trans)
-        self.glass_blur=QCheckBox('Blur behind Liquid Glass (needs 3D graphics; off in VirtualBox)'); f.addRow('', self.glass_blur)
+        self.glass_blur=QCheckBox('Frosted glass: blur behind Eduka-Panel, Eduka-Desktop and their popups (needs 3D graphics; off in VirtualBox)'); f.addRow('', self.glass_blur)
+        self.frosted_leave=QCheckBox('Blurred desktop behind the leave screen (works on every computer)'); f.addRow('', self.frosted_leave)
         self.multicolor=QCheckBox('Multi-color: every menu category, Action Center tile and panel button gets its own color'); f.addRow('', self.multicolor)
         self.multicolor.setChecked(bool(self.desktop.get('multicolor', False)))
         self.low=QCheckBox('Low resource mode for older computers'); f.addRow('', self.low)
@@ -1411,6 +1417,9 @@ class Settings(ext.ExtPages, QDialog):
         self.tp_tap=QCheckBox('Tap to click (one finger left, two fingers right)'); self.tp_tap.setChecked(bool(cfg['tp_tap'])); f.addRow('', self.tp_tap)
         self.tp_natural=QCheckBox('Natural scrolling (content follows the fingers)'); self.tp_natural.setChecked(bool(cfg['tp_natural'])); f.addRow('', self.tp_natural)
         self.tp_dwt=QCheckBox('Turn off while typing'); self.tp_dwt.setChecked(bool(cfg['tp_dwt'])); f.addRow('', self.tp_dwt)
+        # 0.11 Pre-Stable: tap and drag, drag lock (libinput).
+        self.tp_drag=QCheckBox('Tap and drag: tap, put the finger down again and move it to drag'); self.tp_drag.setChecked(bool(cfg.get('tp_drag', True))); f.addRow('', self.tp_drag)
+        self.tp_drag_lock=QCheckBox('Drag lock: lifting the finger does not drop what you drag (tap to drop)'); self.tp_drag_lock.setChecked(bool(cfg.get('tp_drag_lock', False))); f.addRow('', self.tp_drag_lock)
         self.tp_scroll=QComboBox()
         for key, label in ei.SCROLL_METHODS: self.tp_scroll.addItem(label, key)
         self.tp_scroll.setCurrentIndex(max(0, self.tp_scroll.findData(cfg['tp_scroll']))); f.addRow('Scrolling:', self.tp_scroll)
@@ -1418,7 +1427,10 @@ class Settings(ext.ExtPages, QDialog):
         self.tp_speed, box=self._input_slider(-100, 100, round(float(cfg['tp_speed'])*100), speed, 5); f.addRow('Pointer speed:', box)
         self.tp_icon=QCheckBox('Show the touchpad on Eduka-Panel'); self.tp_icon.setChecked(bool(cfg['tp_icon'])); f.addRow('', self.tp_icon)
         p.v.addLayout(f)
-        for cb in (self.tp_enabled, self.tp_tap, self.tp_natural, self.tp_dwt, self.tp_icon): cb.toggled.connect(self._input_changed)
+        for cb in (self.tp_enabled, self.tp_tap, self.tp_natural, self.tp_dwt, self.tp_icon, self.tp_drag, self.tp_drag_lock): cb.toggled.connect(self._input_changed)
+        self.tp_tap.toggled.connect(lambda on: (self.tp_drag.setEnabled(on), self.tp_drag_lock.setEnabled(on and self.tp_drag.isChecked())))
+        self.tp_drag.toggled.connect(lambda on: self.tp_drag_lock.setEnabled(on and self.tp_tap.isChecked()))
+        self.tp_drag.setEnabled(self.tp_tap.isChecked()); self.tp_drag_lock.setEnabled(self.tp_tap.isChecked() and self.tp_drag.isChecked())
         self.tp_scroll.currentIndexChanged.connect(self._input_changed); self.tp_speed.valueChanged.connect(self._input_changed)
         self.tp_icon.toggled.connect(lambda *_: QTimer.singleShot(400, touch_reload))
         if pads and shutil.which('xinput'):
@@ -1477,6 +1489,21 @@ class Settings(ext.ExtPages, QDialog):
         f.addRow('Touch direction:', self.ts_rotation)
         f.addRow('', hint_label('Only when the touch goes the wrong way (a screen that is built in turned).'))
         p.v.addLayout(f)
+        # 0.11 Pre-Stable: a pen tablet (drawing tablet) on one screen.
+        pens=[d for d in self.pointer_devs() if d.get('tablet')]
+        t=p.new_card('Pen tablet')
+        t.addWidget(hint_label(_('Found: {names}').replace('{names}', ', '.join(d['name'] for d in pens)) if pens else
+                               'No pen tablet is connected. The choice is kept for a drawing tablet (Wacom, Huion, XP-Pen…).'))
+        trow=QHBoxLayout(); trow.setSpacing(10); trow.addWidget(QLabel(_('Draw on')))
+        self.tablet_output=QComboBox(); self.tablet_output.addItem(_('All screens'), '')
+        for out, primary, built_in in ei.connected_outputs():
+            self.tablet_output.addItem(out + (_(' (built-in)') if built_in else _(' (main screen)') if primary else ''), out)
+        if cfg.get('tablet_output') and self.tablet_output.findData(cfg['tablet_output']) < 0:
+            self.tablet_output.addItem(cfg['tablet_output'] + _(' (not connected)'), cfg['tablet_output'])
+        self.tablet_output.setCurrentIndex(max(0, self.tablet_output.findData(cfg.get('tablet_output', ''))))
+        trow.addWidget(self.tablet_output, 1); t.addLayout(trow)
+        t.addWidget(hint_label('With a projector or a second monitor the pen stays on one screen, so circles stay round.'))
+        self.tablet_output.currentIndexChanged.connect(self._input_changed)
         c=p.new_card('Touch-friendly desktop')
         self.ts_kinetic=QCheckBox('Scroll lists and pages by dragging a finger (smooth, kinetic scrolling)'); self.ts_kinetic.setChecked(bool(cfg['ts_kinetic'])); c.addWidget(self.ts_kinetic)
         c.addWidget(hint_label('Used by Eduka-Desktop, Eduka-Panel and Eduka-Settings the next time they open. GTK programs and Firefox scroll with a finger by themselves.'))
@@ -1720,8 +1747,11 @@ class Settings(ext.ExtPages, QDialog):
                        middle_emulation=self.ms_middle.isChecked(), double_click=self.ms_dclick.value(), wheel_lines=self.ms_wheel.value())
         if hasattr(self, 'tp_enabled'):
             cfg.update(tp_enabled=self.tp_enabled.isChecked(), tp_tap=self.tp_tap.isChecked(), tp_natural=self.tp_natural.isChecked(), tp_dwt=self.tp_dwt.isChecked(),
-                       tp_scroll=self.tp_scroll.currentData(), tp_speed=self.tp_speed.value()/100.0, tp_icon=self.tp_icon.isChecked())
+                       tp_scroll=self.tp_scroll.currentData(), tp_speed=self.tp_speed.value()/100.0, tp_icon=self.tp_icon.isChecked(),
+                       tp_drag=self.tp_drag.isChecked(), tp_drag_lock=self.tp_drag_lock.isChecked())
         if hasattr(self, 'ts_enabled'):
+            if hasattr(self, 'tablet_output'):
+                cfg.update(tablet_output=self.tablet_output.currentData() or '')
             cfg.update(ts_enabled=self.ts_enabled.isChecked(), ts_output=self.ts_output.currentData() or '',
                        ts_rotation=self.ts_rotation.currentData() or 'normal', ts_kinetic=self.ts_kinetic.isChecked())
         return cfg
@@ -1746,7 +1776,7 @@ class Settings(ext.ExtPages, QDialog):
     def update_theme_info(self):
         name=self.theme.currentText()
         self.theme_info.setText(self.THEME_INFO.get(name, ''))
-        self.glass_blur.setEnabled(name in (THEME_LIQUID, THEME_TRANSPARENT))
+        self.glass_blur.setEnabled(name != THEME_LOW)
         if hasattr(self, 'multicolor'):
             # Eduka-MultiColor is always multi-colored; Eduka-Low stays flat.
             self.multicolor.setEnabled(name not in (THEME_MULTI, THEME_LOW))
@@ -2377,6 +2407,7 @@ class Settings(ext.ExtPages, QDialog):
         self.panel_trans.setValue(float(panel.get('transparency',0.54)))
         self.desktop_trans.setValue(float(desktop.get('transparency',0.51)))
         self.glass_blur.setChecked(bool(desktop.get('glass_blur', False)))
+        self.frosted_leave.setChecked(bool(desktop.get('frosted_leave', True)))
         self._low_before_liquid=bool(desktop.get('low_resource_mode',True))
         self.low.setChecked(False if theme in (THEME_LIQUID, THEME_TRANSPARENT) else self._low_before_liquid)
         self.low.setEnabled(theme not in (THEME_LIQUID, THEME_TRANSPARENT))
@@ -2466,7 +2497,7 @@ class Settings(ext.ExtPages, QDialog):
     # ------------------------------------------------------------------ save / apply
     def collect(self):
         panel={'menu_label':self.label.text().strip() or DEFAULT_MENU_LABEL,'menu_icon':self.icon.text().strip() or START_ICON,'show_menu_text':self.show_text.isChecked(),'menu_icon_size':self.icon_size.value(),'menu_icon_keep_aspect':self.keep_aspect.isChecked(),'height':self.panel_height.value(),'width_percent':self.panel_width.value(),'transparency':self.panel_trans.value(),'taskbar_style':self.taskbar_style.currentData(),'position':next((e for e, c in self.pos_cards.items() if c.isChecked()), 'Bottom'),'panel_style':next((k for k, c in self.shape_cards.items() if c.isChecked()), 'floating'),'panel_corners':next((k for k, c in self.corner_cards.items() if c.isChecked()), 'round'),'panel_clock_seconds':self.panel_clock_seconds.isChecked(),'panel_clock_blink':self.panel_clock_blink.isChecked(),'theme_style':self.theme.currentText(),'clock_style':self.clock_style.currentData(),'clock_format':self.clock_format.currentData(),'clock_seconds':self.clock_seconds.isChecked(),'clock_blink':self.clock_blink.isChecked(),'clock_color':self.led_color(),'weather':self.weather_on.isChecked(),'notify_seconds':self.notify_seconds.value(),'notify_history':self.notify_history.isChecked()}
-        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
+        desktop={'layout':self.layout_default.currentData(),'last_category':self.default_section.currentData(),'width_percent':self.width.value(),'height_percent':self.height.value(),'transparency':self.desktop_trans.value(),'low_resource_mode':self.low.isChecked(),'enable_shadows':self.shadow.isChecked(),'theme_style':self.theme.currentText(),'glass_blur':self.glass_blur.isChecked(),'frosted_leave':self.frosted_leave.isChecked(),'show_right_panel':True,'visual_accessibility':self.visual_access.isChecked(),'hearing_accessibility':self.hearing_access.isChecked(),'orca_enabled':self.orca.isChecked(),'effects_enabled':self.effects_on.isChecked(),'effect_hover':self.effect_hover.currentData(),'effect_launch':self.effect_launch.currentData(),'effect_speed':self.effect_speed.currentData(),'effect_size':self.effect_size.currentData(),'effect_random':self.effect_random.isChecked(),'tile_size':self.tile_size.currentData(),'accent_color':self.accent_value,'compositor':self.compositor.currentData(),'multicolor':self.multicolor.isChecked()}
         menu={'mode':'Eduka-Desktop','language':self.language.currentData(),'sddm_follow': self.sddm_style.currentData() == 'follow'}
         return panel, desktop, menu
 

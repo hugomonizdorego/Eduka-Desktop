@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+"""Force close a program that hangs (0.11 Pre-Stable).
+
+    eduka-force-close                 the active window (Ctrl+Alt+Esc)
+    eduka-force-close --window ID     that window (the taskbar menu)
+    eduka-force-close --pick          click the window to close
+
+It asks first; unsaved work of that program is lost.
+"""
+import os, subprocess, sys
+sys.path.insert(0, '/usr/lib/edukasaun-desktop')
+
+
+def active_window():
+    try:
+        out = subprocess.run(['xdotool', 'getactivewindow'], capture_output=True, text=True, timeout=3).stdout.strip()
+        return int(out) if out.isdigit() else 0
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+def pick_window():
+    try:
+        out = subprocess.run(['xdotool', 'selectwindow'], capture_output=True, text=True, timeout=60).stdout.strip()
+        return int(out) if out.isdigit() else 0
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+def main():
+    args = sys.argv[1:]
+    window = 0
+    if '--window' in args:
+        try:
+            value = args[args.index('--window') + 1]
+            window = int(value, 16) if value.lower().startswith('0x') else int(value)
+        except (IndexError, ValueError):
+            print('eduka-force-close: --window needs a window id', file=sys.stderr)
+            return 2
+    elif '--pick' in args:
+        window = pick_window()
+    else:
+        window = active_window()
+    if not window:
+        return 1
+    import eduka_hang
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+    from eduka_common import _, get_icon, install_translations, tooltip_qss, icon_theme_setup
+    try:
+        dpy = eduka_hang.Display(); title = dpy.title(window); pid = dpy.pid(window); dpy.close()
+    except OSError:
+        title, pid = '', 0
+    if pid == os.getpid():
+        return 1
+    app = QApplication(sys.argv[:1]); install_translations(app); app.setStyleSheet(tooltip_qss()); icon_theme_setup()
+    d = QDialog(None, Qt.Dialog | Qt.WindowStaysOnTopHint); d.setWindowTitle(_('Force close'))
+    v = QVBoxLayout(d); v.setContentsMargins(22, 18, 22, 16); v.setSpacing(10)
+    name = title or (eduka_hang.program_name(pid) if pid else '') or _('this program')
+    head = QLabel(_('Force close {name}?').replace('{name}', name)); head.setWordWrap(True); head.setTextFormat(Qt.PlainText)
+    head.setStyleSheet('font-size:15px;font-weight:800;')
+    text = QLabel(_('It closes at once, also when it does not answer. Work that is not saved is lost.'))
+    text.setWordWrap(True); text.setMinimumWidth(360)
+    v.addWidget(head); v.addWidget(text)
+    row = QHBoxLayout(); row.addStretch(1)
+    cancel = QPushButton(_('Cancel')); close = QPushButton(get_icon('process-stop', 'window-close'), ' ' + _('Force Close'))
+    close.setStyleSheet('QPushButton{background:#e5484d;color:white;border:0;border-radius:10px;padding:7px 14px;font-weight:800;}'
+                        'QPushButton:hover{background:#c93338;}')
+    row.addWidget(cancel); row.addWidget(close); v.addLayout(row)
+    cancel.setDefault(True)
+    result = {'ok': False}
+
+    def do_close():
+        result['ok'], msg = eduka_hang.force_close_window(window)
+        if not result['ok']:
+            text.setText(_(msg)); close.setEnabled(False); cancel.setText(_('Close'))
+            return
+        d.accept()
+    cancel.clicked.connect(d.reject); close.clicked.connect(do_close)
+    d.show(); d.raise_(); d.activateWindow()
+    app.exec_()
+    return 0 if result['ok'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

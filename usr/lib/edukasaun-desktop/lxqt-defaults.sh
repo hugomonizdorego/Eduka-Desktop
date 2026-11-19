@@ -92,3 +92,51 @@ eduka_ensure_wayland_compositor() {
     fi
     return 0
 }
+
+# Variables the login session itself owns: ~/.config/environment.d never
+# changes them (XDG_CONFIG_DIRS would also hide LXQt's own defaults).
+EDUKA_ENV_KEEP="XDG_CONFIG_DIRS XDG_RUNTIME_DIR XDG_SESSION_ID XDG_SESSION_TYPE XDG_SESSION_CLASS XDG_SEAT XDG_VTNR XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS HOME USER LOGNAME SHELL PWD EDUKA_DESKTOP_SESSION"
+
+# eduka_load_environment_d CONFIG_HOME
+# The environment variables of ~/.config/environment.d/*.conf (KEY=VALUE, as
+# systemd reads them for the services of the account) for every program of
+# the session too (0.11 Pre-Stable). systemd's own generator expands $VAR and
+# ${VAR}; without it the lines are read as they are.
+eduka_load_environment_d() {
+    config_home="$1"
+    dir="$config_home/environment.d"
+    [ -d "$dir" ] || return 0
+    gen=""
+    for g in /usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator \
+             /lib/systemd/user-environment-generators/30-systemd-environment-d-generator; do
+        if [ -x "$g" ]; then gen="$g"; break; fi
+    done
+    if [ -n "$gen" ]; then
+        lines=$("$gen" 2>/dev/null) || lines=""
+    else
+        lines=$(cat "$dir"/*.conf 2>/dev/null | sed -e 's/^[[:space:]]*//' -e '/^#/d' -e '/^$/d') || lines=""
+    fi
+    [ -n "$lines" ] || return 0
+    old_ifs="$IFS"
+    IFS='
+'
+    for line in $lines; do
+        key=${line%%=*}
+        value=${line#*=}
+        [ "$key" != "$line" ] || continue
+        case "$key" in
+            ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
+        esac
+        case " $EDUKA_ENV_KEEP " in
+            *" $key "*) continue ;;
+        esac
+        # Quotes around the whole value, as in systemd's files.
+        case "$value" in
+            \"*\") value=${value#\"}; value=${value%\"} ;;
+            \'*\') value=${value#\'}; value=${value%\'} ;;
+        esac
+        export "$key=$value"
+    done
+    IFS="$old_ifs"
+    return 0
+}

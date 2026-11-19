@@ -524,7 +524,9 @@ def _picom_mode():
     try:
         cfg=read_desktop_config()
         theme=normalize_theme_style(cfg.get('theme_style'))
-        blur=theme in (THEME_LIQUID, THEME_TRANSPARENT) and bool(cfg.get('glass_blur', False))
+        # Frosted glass (0.11 Pre-Stable): every theme with see-through
+        # panels, not only Liquid Glass and Eduka-Transparan.
+        blur=theme != THEME_LOW and bool(cfg.get('glass_blur', False))
     except Exception:
         theme=THEME_DEFAULT; blur=False
     choice=compositor_choice()
@@ -532,6 +534,13 @@ def _picom_mode():
         return 'none', []
     if choice == 'wm':
         return 'wm', []
+    # Compiz composites by itself; picom started first would stop it.
+    try:
+        import eduka_compiz
+        if eduka_compiz.compiz_configured() or _process_running('compiz'):
+            return 'wm', []
+    except Exception:
+        pass
     if choice == 'glx' or (blur and opengl_is_good()):
         mode='glx-blur' if blur else 'glx'
         return mode, picom_args(mode)
@@ -2433,7 +2442,7 @@ DEFAULT_PANEL = {
     "taskbar_min_button_width": 46
 }
 DEFAULT_MENU = {"mode": "Eduka-Desktop", "language": "system", "sddm_follow": True}
-DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": DEFAULT_THEME, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "effect_speed": 1.0, "effect_size": 1.0, "effect_random": False, "tile_size": 132, "accent_color": "", "compositor": "auto", "multicolor": False}
+DEFAULT_DESKTOP = {"last_category": "Edukasaun", "layout": "Grid", "width_percent": 98, "height_percent": 92, "transparency": 0.51, "enable_shadows": False, "low_resource_mode": True, "theme_style": DEFAULT_THEME, "show_right_panel": True, "smooth_animations": False, "corner_radius": 24, "visual_accessibility": False, "hearing_accessibility": False, "orca_enabled": False, "glass_blur": False, "frosted_leave": True, "effects_enabled": False, "effect_hover": "wave", "effect_launch": "bubble", "effect_speed": 1.0, "effect_size": 1.0, "effect_random": False, "tile_size": 132, "accent_color": "", "compositor": "auto", "multicolor": False}
 
 CATEGORY_ORDER = [
     ("All", "view-app-grid", []),
@@ -2514,7 +2523,7 @@ def _application_dirs():
 
 DESKTOP_DIRS = _application_dirs()
 # Bumped when the application list changes its form: old caches are rebuilt.
-APP_REGISTRY_FORMAT = 4
+APP_REGISTRY_FORMAT = 5
 HIDE_IDS = {
     'edukasaun-desktop.desktop','eduka-menu-settings.desktop','eduka-settings.desktop',
     'eduka-menu.desktop','eduka-panel.desktop','eduka-about.desktop',
@@ -3204,10 +3213,11 @@ def _webgl_fallback_app(args):
         names|={a.casefold() for a in args[1:] if '.' in a and not a.startswith('-')}
     return bool(names & WEBGL_FALLBACK_APPS)
 
-def launch_app(cmd, app_name='', terminal=False, workdir='', clean=True):
+def launch_app(cmd, app_name='', terminal=False, workdir='', clean=True, dedicated_gpu=False):
     """Start an application from its Exec line, without a shell (as the
     desktop entry specification says). `clean=False`: the field codes were
-    removed already (the application list stores cleaned Exec lines)."""
+    removed already (the application list stores cleaned Exec lines).
+    `dedicated_gpu`: on the dedicated card of a computer with two (eduka_gpu)."""
     cmd=clean_exec(cmd) if clean else (cmd or '').strip()
     if not cmd: return False
     try:
@@ -3226,6 +3236,12 @@ def launch_app(cmd, app_name='', terminal=False, workdir='', clean=True):
     if virtual_machine() or not opengl_is_good():
         env.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
     env.setdefault('WEBKIT_DISABLE_DMABUF_RENDERER', '1')
+    if dedicated_gpu:
+        try:
+            import eduka_gpu
+            env.update(eduka_gpu.offload_env())
+        except Exception:
+            pass
     if _webgl_fallback_app(args):
         env.setdefault('MESA_GL_VERSION_OVERRIDE', '3.3')
         if '--ignore-gpu-blocklist' not in args:
@@ -3239,12 +3255,20 @@ def launch_app(cmd, app_name='', terminal=False, workdir='', clean=True):
     except Exception:
         return False
 
-def launch_entry(app):
+def launch_entry(app, dedicated_gpu=False):
     """Start an application of the application list (Terminal= and Path=
-    of its .desktop file are used)."""
+    of its .desktop file are used; PrefersNonDefaultGPU= too)."""
     app=app or {}
     record_launch(app)
-    return launch_app(app.get('exec', ''), app.get('name', ''), bool(app.get('terminal')), app.get('workdir', ''), clean=False)
+    gpu=bool(dedicated_gpu)
+    if not gpu and app.get('gpu'):
+        try:
+            import eduka_gpu
+            gpu=eduka_gpu.wants_dedicated(app)
+        except Exception:
+            gpu=False
+    return launch_app(app.get('exec', ''), app.get('name', ''), bool(app.get('terminal')), app.get('workdir', ''), clean=False,
+                      dedicated_gpu=gpu)
 
 # How often programs are started from Eduka (0.11 RC3): Eduka-Quick fills its
 # free slices with the programs used most. Only desktop ids and counts are
@@ -3358,6 +3382,8 @@ def desktop_entry_state(path, keys=None, desktops=None):
         'path': path,
         'desktop_id': desktop_id,
         'startup_wm_class': de.get('StartupWMClass',''),
+        # Games that ask for the dedicated graphics card (0.11 Pre-Stable).
+        'gpu': _true(de.get('PrefersNonDefaultGPU')),
         'keywords': ';'.join(x for x in (_localized(de, 'Keywords', keys), de.get('Keywords','')) if x)
     }, True
 

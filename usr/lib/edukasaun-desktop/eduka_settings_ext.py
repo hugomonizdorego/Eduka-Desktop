@@ -76,6 +76,9 @@ SETTINGS_SECTIONS = [
         ('panel', 'Eduka-Panel', 'preferences-desktop', 'panel taskbar start button'),
         ('clock', 'Clock', 'preferences-system-time', 'clock weather action center'),
         ('notifications', 'Notifications', 'preferences-system-notifications', 'notifications messages do not disturb'),
+        ('windows', 'Windows', 'preferences-system-windows', 'focus follows mouse middle click paste clipboard history force close'),
+        ('workspaces', 'Workspaces & Corners', 'preferences-desktop', 'workspaces virtual desktops hot corners'),
+        ('capture', 'Screenshots & Recording', 'camera-photo', 'screenshot screen recording video record'),
     ]),
     ('Preferences', [
         ('accessibility', 'Accessibility', 'preferences-desktop-accessibility', 'vision contrast large text pointer'),
@@ -660,7 +663,36 @@ class ExtPages:
         out = QPushButton(get_icon('system-log-out'), ' ' + _('Log out now')); out.clicked.connect(self.logout_for_scale)
         actions.addWidget(out); sc.addLayout(actions)
         self.update_scale_state(cur['scale'], applied=True)
+        self.display_graphics_card(p)
         return p.finish()
+
+    def display_graphics_card(self, p):
+        """Graphics cards and their drivers; hybrid graphics (0.11 Pre-Stable)."""
+        try:
+            import eduka_gpu as eg
+            cards = eg.gpus()
+        except Exception:
+            return
+        g = p.new_card('Graphics')
+        if not cards:
+            g.addWidget(UI.hint_label('No graphics card was found (or this is a virtual machine without one).'))
+        for c in cards:
+            text = f"{c['vendor']}" + (f" — {_('driver')} {c['driver']}" if c['driver'] else ' — ' + _('no driver'))
+            if c['boot'] and len(cards) > 1:
+                text += ' (' + _('built in, shows the screen') + ')'
+            lab = QLabel(text); lab.setTextFormat(Qt.PlainText); g.addWidget(lab)
+        for _level, hint in eg.hints(cards):
+            g.addWidget(UI.hint_label(hint))
+        dedicated = eg.dedicated(cards)
+        if dedicated:
+            box = QCheckBox(_('Games and programs that ask for it start on the dedicated {vendor} card').replace('{vendor}', dedicated['vendor']))
+            box.setProperty('eduka_no_live', True); box.setChecked(eg.read_prefs()['auto'])
+            box.toggled.connect(lambda on: (eg.save_prefs({'auto': on}), self.show_status(_('Saved.'))))
+            g.addWidget(box)
+            g.addWidget(UI.hint_label('Any program: right-click it in Eduka-Desktop → "Run with the dedicated graphics card". '
+                                      'The built-in card saves battery for everything else.'))
+        if any(c['virtual'] for c in cards):
+            g.addWidget(UI.hint_label('This is a virtual machine: 3D graphics are drawn by the processor; the Eduka-Low-Theme is the fastest here.'))
 
     def update_scale_state(self, value, applied=False):
         running = os.environ.get('QT_SCALE_FACTOR', '1') or '1'
@@ -1355,6 +1387,214 @@ class ExtPages:
         if effects is not None:
             effects.setChecked(not on)      # saved by the window with the Effects page
         self.show_status(_('Animations and effects are off.') if on else _('Animations and effects can be used again (Appearance → Effects).'))
+
+    # ------------------------------------------------------------ windows and workspaces (0.11 Pre-Stable)
+    def _tell_panel(self, command):
+        try:
+            import eduka_ipc
+            eduka_ipc.panel_command(command)
+        except Exception:
+            pass
+
+    def page_windows(self):
+        import eduka_windows as ew
+        self._ew = ew
+        prefs = ew.read_prefs()
+        p = UI.Page('Windows', 'How windows get the keyboard, what the middle mouse button does, the clipboard '
+                               'history and programs that stop answering.')
+        p.v.addWidget(self._snd_title('Focus'))
+        self.win_focus_click = QRadioButton(_('Click a window to work in it (like Windows)'))
+        self.win_focus_mouse = QRadioButton(_('The window under the pointer gets the keyboard (focus follows the mouse)'))
+        for rb in (self.win_focus_click, self.win_focus_mouse):
+            rb.setProperty('eduka_no_live', True); p.v.addWidget(rb)
+        mode = ew.focus_mode()
+        (self.win_focus_mouse if mode == 'mouse' else self.win_focus_click).setChecked(True)
+        self.win_focus_mouse.toggled.connect(self.windows_focus_changed)
+        p.v.addWidget(UI.hint_label('With focus following the mouse a window is not raised: it stays where it is. '
+                                    'Works with xfwm4, Openbox, KWin and Compiz.'))
+        m = p.new_card('Mouse and clipboard')
+        self.win_paste = QCheckBox(_('Middle-click pastes the selected text (Linux style; GTK programs)'))
+        self.win_paste.setProperty('eduka_no_live', True); self.win_paste.setChecked(ew.middle_paste())
+        self.win_paste.toggled.connect(lambda on: (ew.set_middle_paste(on), self.show_status(_('Saved. Programs use it when they start again.'))))
+        m.addWidget(self.win_paste)
+        self.win_clip = QCheckBox(_('Clipboard history: Super+V shows what you copied (text only, never saved on the disk)'))
+        self.win_clip.setProperty('eduka_no_live', True); self.win_clip.setChecked(prefs['clipboard_history'])
+        self.win_clip.toggled.connect(lambda on: self.windows_pref('clipboard_history', on))
+        m.addWidget(self.win_clip)
+        m.addWidget(UI.hint_label('Passwords copied from a password manager are not kept. The history is empty after logging out.'))
+        f = p.new_card('Programs that do not answer')
+        self.win_hang = QCheckBox(_('Offer to force close a program that does not answer'))
+        self.win_hang.setProperty('eduka_no_live', True); self.win_hang.setChecked(prefs['force_close'])
+        self.win_hang.toggled.connect(lambda on: self.windows_pref('force_close', on))
+        f.addWidget(self.win_hang)
+        row = QHBoxLayout(); row.setSpacing(10)
+        lab = QLabel(_('Ask after')); self.win_hang_time = QComboBox()
+        for secs, text in ((60, '1 minute'), (120, '2 minutes'), (300, '5 minutes')):
+            self.win_hang_time.addItem(_(text), secs)
+        self.win_hang_time.setCurrentIndex(max(0, self.win_hang_time.findData(prefs['hang_seconds'])))
+        self.win_hang_time.activated.connect(lambda i: self.windows_pref('hang_seconds', self.win_hang_time.itemData(i)))
+        row.addWidget(lab); row.addWidget(self.win_hang_time); row.addStretch(1); f.addLayout(row)
+        f.addWidget(UI.hint_label('Ctrl+Alt+Esc closes the program of the active window at once (after a question); the '
+                                  'taskbar menu of a window has "Force Close" too.'))
+        self.windows_manager_card(p)
+        return p.finish()
+
+    def windows_manager_card(self, p):
+        """The window manager of the session; Compiz when installed (0.11 Pre-Stable)."""
+        import eduka_compiz as ecz
+        self._ecz = ecz
+        w = p.new_card('Window manager')
+        current = ecz.configured() or self._ew.window_manager()
+        self.win_wm = QComboBox(); self.win_wm.setAccessibleName(_('Window manager'))
+        for cmd, name, hint in ecz.installed():
+            self.win_wm.addItem(name + ' — ' + _(hint), cmd)
+        if self.win_wm.findData(current) < 0 and current:
+            self.win_wm.addItem(current, current)
+        self.win_wm.setCurrentIndex(max(0, self.win_wm.findData(current)))
+        self.win_wm.activated.connect(self.windows_manager_changed)
+        w.addWidget(self.win_wm)
+        self.win_wm_hint = UI.hint_label(''); w.addWidget(self.win_wm_hint)
+        row = QHBoxLayout(); row.setSpacing(8)
+        if not shutil.which('compiz'):
+            inst = QPushButton(get_icon('system-software-install', 'list-add'), ' ' + _('Install Compiz (3D effects)…'))
+            inst.clicked.connect(lambda: self._snd_terminal(ecz.install_command(), lambda: self.show_status(_('Open this page again to choose Compiz.'))))
+            row.addWidget(inst)
+        elif shutil.which('ccsm'):
+            ccsm = QPushButton(get_icon('preferences-system-windows', 'preferences-system'), ' ' + _('Compiz effects…'))
+            ccsm.clicked.connect(lambda: safe_popen(['ccsm'])); row.addWidget(ccsm)
+        row.addStretch(1); w.addLayout(row)
+        self.windows_manager_hint()
+
+    def windows_manager_hint(self):
+        ecz = self._ecz
+        cmd = self.win_wm.currentData() or ''
+        text = _('Used from the next login.')
+        if cmd == 'compiz':
+            ok, why = ecz.can_run()
+            text += ' ' + (_('Super+W shows all windows side by side; CompizConfig (ccsm) chooses the effects. If Compiz '
+                             'cannot start, xfwm4 or Openbox takes over by itself.') if ok else _(why))
+        self.win_wm_hint.setText(text)
+
+    def windows_manager_changed(self, index):
+        cmd = self.win_wm.itemData(index)
+        ok = bool(cmd) and self._ecz.set_window_manager(cmd)
+        self.windows_manager_hint()
+        self.show_status(_('Saved. Log out and in again to use it.') if ok else _('Could not save the window manager.'), error=not ok)
+
+    def windows_focus_changed(self, mouse):
+        ok = self._ew.set_focus_mode('mouse' if mouse else 'click')
+        self.show_status(_('Saved.') if ok else _('This window manager cannot be changed here.'), error=not ok)
+
+    def windows_pref(self, key, value):
+        prefs = self._ew.read_prefs(); prefs[key] = value; self._ew.save_prefs(prefs)
+        self._tell_panel('reload-windows'); self.show_status(_('Saved.'))
+
+    def page_workspaces(self):
+        import eduka_windows as ew
+        self._ew = ew
+        prefs = ew.read_prefs()
+        p = UI.Page('Workspaces & Corners', 'Several desktops for different tasks, and actions in the corners of the screen.')
+        p.v.addWidget(self._snd_title('Workspaces'))
+        row = QHBoxLayout(); row.setSpacing(10)
+        row.addWidget(QLabel(_('Number of workspaces')))
+        self.ws_count = QSpinBox(); self.ws_count.setRange(1, 8); self.ws_count.setValue(ew.workspace_count())
+        self.ws_count.setAccessibleName(_('Number of workspaces'))
+        apply = QPushButton(_('Apply')); apply.clicked.connect(lambda: (ew.set_workspace_count(self.ws_count.value()),
+                                                                         self._tell_panel('reload-windows'), self.show_status(_('Saved.'))))
+        row.addWidget(self.ws_count); row.addWidget(apply); row.addStretch(1); p.v.addLayout(row)
+        self.ws_switcher = QCheckBox(_('Show the workspaces on Eduka-Panel (1 2 3 4)'))
+        self.ws_switcher.setChecked(prefs['workspace_switcher'])
+        self.ws_tasks = QCheckBox(_('The taskbar shows the windows of the current workspace only'))
+        self.ws_tasks.setChecked(prefs['tasks_current_workspace'])
+        for box, key in ((self.ws_switcher, 'workspace_switcher'), (self.ws_tasks, 'tasks_current_workspace')):
+            box.setProperty('eduka_no_live', True); p.v.addWidget(box)
+            box.toggled.connect(lambda on, k=key: self.windows_pref(k, on))
+        p.v.addWidget(UI.hint_label('Ctrl+Super+Left/Right or Ctrl+Alt+Left/Right change the workspace; scrolling over '
+                                    'the numbers on the panel does too. Four fingers left or right on a touchpad (Touchégg).'))
+        c = p.new_card('Hot corners')
+        c.addWidget(UI.hint_label('Push the pointer into a corner of the screen. Nothing happens while a mouse button is held.'))
+        grid = QGridLayout(); grid.setHorizontalSpacing(12); grid.setVerticalSpacing(8)
+        self.ws_corners = {}
+        for i, (corner, label) in enumerate((('top-left', 'Top left'), ('top-right', 'Top right'),
+                                             ('bottom-left', 'Bottom left'), ('bottom-right', 'Bottom right'))):
+            combo = QComboBox(); combo.setAccessibleName(_(label))
+            for key, text in ew.CORNER_ACTIONS:
+                combo.addItem(_(text), key)
+            combo.setCurrentIndex(max(0, combo.findData(prefs['corners'].get(corner, ''))))
+            combo.activated.connect(lambda _i, k=corner, cb=combo: self.workspace_corner(k, cb.currentData()))
+            grid.addWidget(QLabel(_(label)), i // 2, (i % 2) * 2); grid.addWidget(combo, i // 2, (i % 2) * 2 + 1)
+            self.ws_corners[corner] = combo
+        c.addLayout(grid)
+        if os.environ.get('XDG_SESSION_TYPE') == 'wayland':
+            c.addWidget(UI.hint_label('Hot corners work in the X11 session only.'))
+        return p.finish()
+
+    def workspace_corner(self, corner, action):
+        prefs = self._ew.read_prefs(); prefs['corners'][corner] = action; self._ew.save_prefs(prefs)
+        self._tell_panel('reload-windows'); self.show_status(_('Saved.'))
+
+    def page_capture(self):
+        import eduka_capture as ec
+        self._ec = ec
+        prefs = ec.read_prefs()
+        p = UI.Page('Screenshots & Recording', 'Take pictures of the screen and record videos of it with sound, for lessons and help.')
+        p.v.addWidget(self._snd_title('Screenshots'))
+        p.v.addWidget(UI.hint_label('Print: the whole screen • Alt+Print: the active window • Super+Shift+S: a part of the '
+                                    'screen • Super+Print: saved at once in Pictures/Screenshots.'))
+        r = p.new_card('Screen recording')
+        r.addWidget(UI.hint_label('Super+Alt+R starts the recording and stops it again (or click the red REC button on '
+                                  'Eduka-Panel). Videos are saved in {folder} as MP4, which plays on every computer and phone.'
+                                  .replace('{folder}', str(ec.videos_dir()))))
+        self.cap_sound = QCheckBox(_('Record the sound of the computer'))
+        self.cap_mic = QCheckBox(_('Record the microphone too (your voice)'))
+        self.cap_pointer = QCheckBox(_('Show the mouse pointer'))
+        for box, key in ((self.cap_sound, 'sound'), (self.cap_mic, 'mic'), (self.cap_pointer, 'pointer')):
+            box.setProperty('eduka_no_live', True); box.setChecked(prefs[key]); r.addWidget(box)
+            box.toggled.connect(lambda on, k=key: self.capture_pref(k, on))
+        row = QHBoxLayout(); row.setSpacing(10)
+        row.addWidget(QLabel(_('Smoothness')))
+        self.cap_fps = QComboBox()
+        for fps, text in ((15, '15 pictures a second (old computers)'), (25, '25 pictures a second'), (30, '30 pictures a second')):
+            self.cap_fps.addItem(_(text), fps)
+        self.cap_fps.setCurrentIndex(max(0, self.cap_fps.findData(prefs['fps'])))
+        self.cap_fps.activated.connect(lambda i: self.capture_pref('fps', self.cap_fps.itemData(i)))
+        row.addWidget(self.cap_fps); row.addSpacing(12); row.addWidget(QLabel(_('Size')))
+        self.cap_quality = QComboBox()
+        for key, text in (('small', 'Small file'), ('normal', 'Normal'), ('best', 'Best picture')):
+            self.cap_quality.addItem(_(text), key)
+        self.cap_quality.setCurrentIndex(max(0, self.cap_quality.findData(prefs['quality'])))
+        self.cap_quality.activated.connect(lambda i: self.capture_pref('quality', self.cap_quality.itemData(i)))
+        row.addWidget(self.cap_quality); row.addStretch(1); r.addLayout(row)
+        brow = QHBoxLayout(); brow.setSpacing(8)
+        self.cap_start = QPushButton(get_icon('media-record', 'camera-video'), ' ' + _('Start recording'))
+        self.cap_start.clicked.connect(self.capture_toggle)
+        folder = QPushButton(get_icon('folder-videos', 'folder'), ' ' + _('Open the folder'))
+        folder.clicked.connect(lambda: (ec.videos_dir().mkdir(parents=True, exist_ok=True), safe_popen(['xdg-open', str(ec.videos_dir())])))
+        brow.addWidget(self.cap_start); brow.addWidget(folder); brow.addStretch(1); r.addLayout(brow)
+        self.cap_state = UI.hint_label(''); r.addWidget(self.cap_state)
+        self.capture_state()
+        return p.finish()
+
+    def capture_pref(self, key, value):
+        prefs = self._ec.read_prefs(); prefs[key] = value; self._ec.save_prefs(prefs); self.show_status(_('Saved.'))
+
+    def capture_state(self):
+        ec = self._ec
+        rec = ec.recording()
+        self.cap_start.setText(' ' + (_('Stop recording') if rec else _('Start recording')))
+        if not ec.tool():
+            self.cap_state.setText(_('Recording needs ffmpeg (on Wayland: wf-recorder). Install it with the package manager.'))
+            self.cap_start.setEnabled(False)
+        else:
+            self.cap_state.setText(_('Recording now: {file}').replace('{file}', rec['file']) if rec else '')
+
+    def capture_toggle(self):
+        ec = self._ec
+        def done(result, error):
+            ok, msg = result if result and not error else (False, str(error))
+            if not ok: self.show_status(_(msg), error=True)
+            self.capture_state()
+        run_in_background(self, ec.toggle, done)
 
     # ------------------------------------------------------------ sound (0.11 Pre-Stable)
     def page_sound(self):

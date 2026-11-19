@@ -28,6 +28,12 @@ if [ -x /usr/lib/edukasaun-desktop/eduka-session-prepare ]; then
     /usr/lib/edukasaun-desktop/eduka-session-prepare || :
 fi
 
+# Variables of ~/.config/environment.d (0.11 Pre-Stable).
+if [ -r /usr/lib/edukasaun-desktop/lxqt-defaults.sh ]; then
+    . /usr/lib/edukasaun-desktop/lxqt-defaults.sh
+    eduka_load_environment_d "${XDG_CONFIG_HOME:-$HOME/.config}" || :
+fi
+
 if [ "$mode" = wayland ]; then
     export XDG_SESSION_TYPE=wayland
     if command -v startlxqtwayland >/dev/null 2>&1; then

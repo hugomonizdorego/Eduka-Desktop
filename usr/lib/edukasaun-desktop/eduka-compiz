@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Hugo Moniz do Rego and the Edukasaun OS contributors
+# Compiz as the window manager of an Eduka-Desktop session (0.11 Pre-Stable).
+# Eduka-Settings → Windows → Window manager writes this file as LXQt's
+# window_manager. Compiz is installed separately. Without Compiz, a window
+# decorator or 3D graphics, or when Compiz stops at once, a light window
+# manager takes over, so the session always has window borders.
+
+fallback() {
+    echo "eduka-compiz: ${1:-Compiz cannot run}; using another window manager" >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        (sleep 8; notify-send -a Eduka-Desktop -i dialog-information "Compiz did not start" \
+            "${1:-Compiz cannot run here}. Eduka-Settings → Windows chooses another window manager.") &
+    fi
+    for wm in xfwm4 openbox kwin_x11 marco; do
+        if command -v "$wm" >/dev/null 2>&1; then
+            exec "$wm"
+        fi
+    done
+    exit 1
+}
+
+command -v compiz >/dev/null 2>&1 || fallback "Compiz is not installed"
+why=$(python3 /usr/lib/edukasaun-desktop/eduka_compiz.py check 2>&1) || fallback "$why"
+# Eduka's Compiz defaults without key clashes (once per account).
+python3 /usr/lib/edukasaun-desktop/eduka_compiz.py prepare >/dev/null 2>&1 || :
+
+tries=0
+while [ "$tries" -lt 3 ]; do
+    started=$(date +%s)
+    compiz --replace ccp
+    status=$?
+    ran=$(( $(date +%s) - started ))
+    # Stopped within half a minute: it does not work on this computer.
+    [ "$ran" -ge 30 ] || fallback "Compiz stopped right after starting (code $status)"
+    tries=$((tries + 1))
+done
+fallback "Compiz stopped three times"
