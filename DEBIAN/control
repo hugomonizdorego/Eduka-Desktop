@@ -1,34 +1,42 @@
 Package: edukasaun-desktop-menu
-Version: 0.11.0~rc3
+Version: 0.11.0~rc4
 Section: x11
 Priority: optional
 Architecture: all
 Installed-Size: 3632
 Maintainer: Edukasaun OS <dev@edukasaun.org>
 Depends: python3, python3-pyqt5, libqt5svg5, lxqt-session, dbus-bin, xdg-utils, hicolor-icon-theme, wmctrl, x11-utils, x11-xserver-utils, x11-xkb-utils, xdotool, procps, at-spi2-core, orca, speech-dispatcher-espeak-ng
-Recommends: lxqt-config, lxqt-admin, lxqt-policykit, lxqt-qtplugin, lxqt-globalkeys, pcmanfm-qt, qterminal, network-manager, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, xfwm4 | openbox, picom, bluez, blueman, rfkill, brightnessctl, pkexec, pulseaudio-utils, alsa-utils, libglib2.0-bin, xdg-user-dirs, udisks2, xinput, numlockx, power-profiles-daemon, fonts-noto-color-emoji, qml6-module-qtquick-virtualkeyboard | qml-module-qtquick-virtualkeyboard, fprintd, libpam-fprintd, onboard, accountsservice, systemd-timesyncd | time-daemon, zram-tools, earlyoom, touchegg
+Recommends: lxqt-config, lxqt-admin, lxqt-policykit, lxqt-qtplugin, lxqt-globalkeys, pcmanfm-qt, qterminal, network-manager, network-manager-gnome, pavucontrol-qt, papirus-icon-theme, xfwm4 | openbox, picom, bluez, blueman, rfkill, brightnessctl, pkexec, pulseaudio-utils, alsa-utils, libnotify-bin, libglib2.0-bin, xdg-user-dirs, udisks2, xinput, numlockx, power-profiles-daemon, fonts-noto-color-emoji, qml6-module-qtquick-virtualkeyboard | qml-module-qtquick-virtualkeyboard, fprintd, libpam-fprintd, onboard, accountsservice, systemd-timesyncd | time-daemon, zram-tools, earlyoom, touchegg
 Suggests: sddm | lightdm, slick-greeter | lightdm-gtk-greeter, magnus, mesa-utils, cups-client, system-config-printer, gufw, easyeffects, lsp-plugins-lv2, calf-plugins
 Homepage: https://github.com/hugomonizdorego/Eduka-Desktop
 Description: Edukasaun OS desktop: start menu, panel and settings on LXQt
  Eduka-Desktop is the desktop of Edukasaun OS (Debian stable with LXQt):
-  * Eduka-Desktop, the start menu with categories, search and favourites;
+  * Eduka-Desktop, the start menu with categories, favorites and a search
+    that also finds the pages of Eduka-Settings;
   * Eduka-Quick, a round, see-through quick launcher on Super+Q;
-  * Eduka-Panel with the task bar, the Action Center (calendar, weather,
-    time sync, sound, brightness, Wi-Fi, Bluetooth and drives), the
-    notifications and a warning before the memory is full;
+  * Eduka-Panel with the task bar, workspaces, the Action Center
+    (calendar, weather, time sync, sound, brightness, Wi-Fi, Bluetooth and
+    drives), the notifications, a clipboard history (Super+V), screen
+    recording with sound (Super+Alt+R), Force Close for programs that hang
+    and a warning before the memory is full;
   * the LXQt and Windows keyboard shortcuts together, without clashes,
     with window snapping and the sound and media keys (eduka-shortcut);
   * Eduka-Settings with an overview of all settings: user accounts,
     themes, fonts, date and time, the panel, the wallpaper, display scale
-    (75 to 200 %), keyboard and shortcuts, mouse, touchpad, touch screen
-    and gestures, accessibility, fingerprint login, memory, the SDDM and
-    LightDM login screens, privacy and Parental Control;
+    (75 to 200 %) and graphics cards, sound (devices, tests, clear sound
+    with EasyEffects, fixes for crackling), windows, workspaces and hot
+    corners, keyboard and shortcuts, mouse, touchpad, touch screen, pen
+    tablets and gestures, accessibility, fingerprint login, memory,
+    drivers and firmware, the SDDM and LightDM login screens, privacy and
+    Parental Control;
   * seven desktop themes that also style GTK 2/3/4 and Qt programs and
     the Openbox and xfwm4 window borders, an SDDM login screen with glass
     cards and Edukasaun themes for slick-greeter and lightdm-gtk-greeter.
  .
- It runs inside an LXQt session (startlxqt) with Openbox or xfwm4 and,
- when the computer can, the picom compositor. Eduka-Panel replaces
- lxqt-panel; LXQt provides the session, the file manager and its tools.
+ It runs inside an LXQt session (startlxqt) with xfwm4 or Openbox (or
+ Compiz, installed separately) and, when the computer can, the picom
+ compositor. In the LXQt Wayland session the settings also reach labwc
+ and KWin. Eduka-Panel replaces lxqt-panel; LXQt provides the session,
+ the file manager and its tools.
  .
- This is version 0.11 RC3 (release candidate 3).
+ This is version 0.11 Pre-Stable (the last step before 0.11 stable).

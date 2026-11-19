@@ -1,3 +1,84 @@
+edukasaun-desktop-menu (0.11.0~rc4) trixie; urgency=medium
+
+  * 0.11 Pre-Stable: the last step before 0.11 stable. Every program was
+    checked again (pyflakes, shellcheck, a smoke test of every page of
+    Eduka-Settings, Eduka-Desktop and Eduka-Panel in all seven themes).
+  * Eduka-Desktop (eduka-menu) opens with one click on MENU or one press
+    of Super also while the Action Center or another popup of
+    Eduka-Panel is open: the popups pass the Super key and the click on
+    to Eduka-Panel (they used to swallow them). Ctrl+Alt+T works in the
+    popups too. A small standard-library client (eduka_ipc) talks to the
+    running menu, so the button answers at once; a heartbeat and a ping
+    tell a busy menu from a frozen one before it is replaced. Crash fixes:
+    worker threads of removable drives live on Eduka-Panel, menu tiles are
+    removed safely, atomic writes of the settings files.
+  * Eduka-Panel stays visible above maximized windows on small screens
+    (1366 x 768): wmctrl -lG counts the title bar of xfwm4 twice, so every
+    maximized window looked as if it covered the panel, the panel hid and
+    released its strut, and the window then really covered it. The panel
+    now reads the real frame (xwininfo, _NET_FRAME_EXTENTS) and a maximized
+    window never hides it.
+  * Notifications of Eduka's programs (screen recording, screenshots, time
+    sync, Parental Control, Compiz) no longer need notify-send: eduka_ipc
+    sends them with gdbus when libnotify-bin is missing.
+  * Taskbar: a file manager window is "PCManFM-Qt File Manager" again, not
+    "Desktop"; the drop-down terminal no longer names QTerminal windows.
+  * Eduka-Desktop: a narrow layout for small screens (under 900 px), the
+    search also finds the pages of Eduka-Settings (eduka_settings_index:
+    "sound", "workspace", "mouse" ...), "Run with the dedicated graphics
+    card" in the right-click menu.
+  * Default theme Eduka-Pastel recolored to the soft blue of the Edukasaun
+    OS logo (accent #3b87d4) in the GTK, xfwm4, Openbox, SDDM and LightDM
+    themes; the colors of the categories stay.
+  * Sound (eduka_audio.py, Eduka-Settings -> Sound with three tabs):
+    speakers, headphones, HDMI and Bluetooth devices, connectors and card
+    profiles, volume up to 150 % when wanted, left/right/both tests, the
+    microphone; Clear Sound with EasyEffects (installed separately) and
+    Eduka presets (clear voice, music, even volume, clear microphone) plus
+    four presets of JackHack96/EasyEffects-Presets (MIT); Quality & Fixes
+    for PipeWire, WirePlumber 0.4/0.5 and PulseAudio (no resampling of
+    44.1/48 kHz music, no suspend pop, bigger buffer against crackling,
+    resampler quality) and a check with one-click fixes. pactl is read in
+    English (LC_ALL=C.UTF-8) so device names parse in every language.
+  * Windows & Workspaces (eduka_windows.py): virtual workspaces (switcher
+    on Eduka-Panel, taskbar of the current workspace), hot corners, focus
+    follows the mouse, middle-click paste on or off, clipboard history
+    (Super+V, memory only), window manager choice (xfwm4, Openbox, KWin,
+    Marco, Compiz).
+  * Screen recording with sound (eduka_capture.py, Super+Alt+R, red REC
+    button on the panel): ffmpeg in X11, wf-recorder in Wayland, MP4 in
+    Videos/Screen recordings.
+  * Force Close (eduka_hang.py, eduka-force-close): Eduka-Panel watches
+    the windows with _NET_WM_PING through the X RECORD extension; after two
+    minutes without an answer (adjustable) it offers to close the
+    program. Ctrl+Alt+Esc force closes the active window after a question;
+    programs of the desktop itself are protected.
+  * Compiz support (eduka_compiz.py, /usr/lib/edukasaun-desktop/
+    eduka-compiz): Compiz installed separately runs through a wrapper that
+    checks 3D graphics and a decorator, switches off clashing keys once and
+    falls back to xfwm4 or Openbox; picom stays off beside it.
+  * Touchpad tap-and-drag and drag lock; pen tablets mapped to one screen;
+    hybrid graphics (DRI_PRIME / NVIDIA PRIME offload, PrefersNonDefault
+    GPU programs); ~/.config/environment.d is read by the session
+    (session variables are protected); frosted glass (blur) behind
+    Eduka-Panel, Eduka-Desktop and the leave screen.
+  * Wayland (eduka_wayland.py): in the LXQt Wayland session the touchpad,
+    mouse, keyboard layout, focus, middle-click paste and workspace
+    settings are written to labwc's rc.xml (comments kept, a backup once,
+    SIGHUP reload) and to KWin 5/6 (kwriteconfig6/5). Hot corners are off
+    there (the panel runs through XWayland).
+  * Drivers and firmware (eduka_drivers.py, Eduka-Settings ->
+    Maintenance): Wi-Fi, network, sound, graphics and Bluetooth devices
+    without a driver, with the Debian firmware package to install.
+  * US English spelling in all of Eduka's own texts; translations for
+    Portuguese, Indonesian and Tetun of the new texts and of some older
+    ones that were still in English.
+  * Packaging: recommends alsa-utils and libnotify-bin; suggests easyeffects,
+    lsp-plugins-lv2 and calf-plugins; new eduka-force-close with a manual
+    page.
+
+ -- Edukasaun OS <dev@edukasaun.org>  Thu, 19 Nov 2026 12:00:00 +0000
+
 edukasaun-desktop-menu (0.11.0~rc3) trixie; urgency=medium
 
   * Release candidate 3 of 0.11.

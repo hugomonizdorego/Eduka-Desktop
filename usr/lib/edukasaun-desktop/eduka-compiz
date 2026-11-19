@@ -9,10 +9,10 @@
 
 fallback() {
     echo "eduka-compiz: ${1:-Compiz cannot run}; using another window manager" >&2
-    if command -v notify-send >/dev/null 2>&1; then
-        (sleep 8; notify-send -a Eduka-Desktop -i dialog-information "Compiz did not start" \
-            "${1:-Compiz cannot run here}. Eduka-Settings → Windows chooses another window manager.") &
-    fi
+    # notify-send is not always installed; eduka_ipc falls back to gdbus.
+    (sleep 8; python3 /usr/lib/edukasaun-desktop/eduka_ipc.py notify "Compiz did not start" \
+        "${1:-Compiz cannot run here}. Eduka-Settings → Windows chooses another window manager." \
+        dialog-information >/dev/null 2>&1) &
     for wm in xfwm4 openbox kwin_x11 marco; do
         if command -v "$wm" >/dev/null 2>&1; then
             exec "$wm"

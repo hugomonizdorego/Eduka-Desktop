@@ -1,3 +1,4 @@
 dist/
 __pycache__/
 *.pyc
+docs/manual/guide-*.html

@@ -23,10 +23,11 @@ def exit_now(code=0):
         pass
     os._exit(int(code or 0) if isinstance(code, int) else 0)
 
-VERSION = "0.11 RC3"
-# Debian package version: release candidate 3 of 0.11 (a "~" sorts before
-# the final 0.11.0 and after 0.11.0~rc2).
-DEB_VERSION = "0.11.0~rc3"
+VERSION = "0.11 Pre-Stable"
+# Debian package version: the Pre-Stable release of 0.11 is package
+# 0.11.0~rc4 ("~" sorts before the final 0.11.0 and after 0.11.0~rc3; a
+# "~prestable" suffix would sort before ~rc3).
+DEB_VERSION = "0.11.0~rc4"
 SETTINGS_REVISION = "0.9.6-transparency"
 # 0.11: the official Edukasaun OS logo and "MENU" on the start button.
 BRAND_REVISION = "0.11-official-logo"
@@ -3720,17 +3721,16 @@ def find_app_for_window(title, wm_class=''):
         if any(n in raw_c or raw_t.startswith(n) for n in needles):
             return dict(own)
 
-    # Explicit desktop/file-manager class mapping first.
-    if 'pcmanfm' in raw_c:
-        for app in apps:
-            blob=' '.join([app.get('name',''), app.get('desktop_id',''), app.get('exec','')]).casefold()
-            if 'pcmanfm' in blob:
-                return app
-    if 'qterminal' in raw_c:
-        for app in apps:
-            blob=' '.join([app.get('name',''), app.get('desktop_id',''), app.get('exec','')]).casefold()
-            if 'qterminal' in blob:
-                return app
+    # Explicit desktop/file-manager class mapping first. The program itself
+    # (pcmanfm-qt.desktop, qterminal.desktop) wins over its other entries,
+    # "Desktop" (pcmanfm-qt --desktop-pref) and the drop-down terminal.
+    for needle, main_id, extra in (('pcmanfm', 'pcmanfm-qt.desktop', '--desktop'), ('qterminal', 'qterminal.desktop', '--drop')):
+        if needle in raw_c:
+            found=[app for app in apps
+                   if needle in ' '.join([app.get('name',''), app.get('desktop_id',''), app.get('exec','')]).casefold()]
+            found.sort(key=lambda a: (a.get('desktop_id','') != main_id, extra in (a.get('exec','') or ''), a.get('name','')))
+            if found:
+                return found[0]
 
     best=None; best_score=0
     t_words=set(t.split()); c_words=set(c.split()); t_pad=f' {t} '; c_pad=f' {c} '

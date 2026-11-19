@@ -710,7 +710,8 @@ def diagnose(tr=lambda s: s):
             if a2dp:
                 out.append(('warn', tr('{device} uses the phone call mode (low quality).').replace('{device}', c['description']),
                             f"a2dp:{c['name']}:{a2dp['name']}"))
-    if not sources(info):
+    # EasyEffects' own input is not a microphone (the Sound page hides it too).
+    if not [s for s in sources(info) if s['kind'] != 'effects']:
         out.append(('warn', tr('No microphone was found.'), ''))
     if info['server'] == 'pulseaudio' and shutil.which('pipewire'):
         out.append(('ok', tr('PulseAudio is used; PipeWire is installed too.'), ''))

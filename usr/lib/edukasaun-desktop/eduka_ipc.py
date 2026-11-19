@@ -220,8 +220,36 @@ def panel_command(command, timeout=0.4):
         s.close()
 
 
+
+# ---------------------------------------------------------------- notifications
+def _gvariant_string(text):
+    return "'" + str(text).replace('\\', '\\\\').replace("'", "\\'") + "'"
+
+
+def notify(summary, body='', icon='dialog-information', app='Eduka-Desktop'):
+    """A desktop notification (shown by Eduka-Panel, the notification server
+    of the session). notify-send (libnotify-bin) is not always installed, so
+    gdbus (libglib2.0-bin) sends it too. False when neither can."""
+    import shutil
+    if shutil.which('notify-send'):
+        cmd = ['notify-send', '-a', app, '-i', icon, summary, body]
+    elif shutil.which('gdbus'):
+        cmd = ['gdbus', 'call', '--session', '--dest', 'org.freedesktop.Notifications',
+               '--object-path', '/org/freedesktop/Notifications', '--method', 'org.freedesktop.Notifications.Notify',
+               _gvariant_string(app), 'uint32 0', _gvariant_string(icon), _gvariant_string(summary), _gvariant_string(body),
+               '@as []', '@a{sv} {}', 'int32 -1']
+    else:
+        return False
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
 if __name__ == '__main__':
     import sys
     if len(sys.argv) > 2 and sys.argv[1] == 'panel':
         sys.exit(0 if panel_command(' '.join(sys.argv[2:])) else 1)
+    if len(sys.argv) > 2 and sys.argv[1] == 'notify':
+        sys.exit(0 if notify(*sys.argv[2:5]) else 1)
     sys.exit(0 if menu_client(sys.argv[1] if len(sys.argv) > 1 else 'toggle') else 1)

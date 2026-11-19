@@ -54,16 +54,18 @@ PAGES = {
         ['[**--page** *PAGE*]'],
         ['**eduka-settings** changes the look and behavior of Eduka-Desktop: theme, accent color, fonts, icons and '
          'cursor, wallpaper, desktop icons, effects, the menu, Eduka-Quick and the panel, clock and weather, '
-         'notifications, keyboard, mouse, touchpad and touch screen, user accounts, language, date and time, '
-         'accessibility (vision, hearing, screen reader), Parental Control, privacy, the SDDM and LightDM login '
-         'screens, fingerprints and maintenance tasks. It opens on an overview of all settings with a search box; '
+         'notifications, windows, workspaces and hot corners, screenshots and screen recording, the display and '
+         'graphics cards, sound (devices, tests, clear sound with EasyEffects, quality and fixes), keyboard, mouse, '
+         'touchpad, touch screen and pen tablets, user accounts, language, date and time, accessibility (vision, '
+         'hearing, screen reader), Parental Control, privacy, the SDDM and LightDM login screens, fingerprints, '
+         'memory, drivers and firmware, and maintenance tasks. It opens on an overview of all settings with a search box; '
          'pages about the same thing share one entry with tabs. Changes to other accounts, Parental Control, the '
          'login screens and fingerprint login ask for an administrator password (pkexec).',
          'When Eduka-Settings is already open, its window is raised and shows the requested page.'],
         [('--page PAGE', 'Open one page or tab: overview, appearance, fonts, effects, wallpaper, desktopicons, '
-          'desktop, quick, panel, clock, notifications, display, keyboard, shortcuts, mouse, touchpad, touchscreen, '
-          'users, general, datetime, accessibility, hearing, screenreader, parental, privacy, login, lightdm, '
-          'fingerprint, maintenance or memory.')],
+          'desktop, quick, panel, clock, notifications, windows, workspaces, capture, display, sound, soundfx, '
+          'soundfix, keyboard, shortcuts, mouse, touchpad, touchscreen, users, general, datetime, accessibility, '
+          'hearing, screenreader, parental, privacy, login, lightdm, fingerprint, maintenance or memory.')],
         [('~/.config/eduka-desktop/', 'settings of this account'),
          ('/etc/edukasaun-desktop/parental.json', 'Parental Control settings (system-wide)'),
          ('/etc/edukasaun-desktop/hidden-users', 'accounts hidden on the login screens'),
@@ -98,12 +100,27 @@ PAGES = {
         [('ACTION', 'One of: search, run, menu, show-desktop, minimize-all, restore-all, maximize, restore, '
           'snap-left, snap-right, monitor-left, monitor-right, desktop-prev, desktop-next, files, browser, mail, '
           'settings, accessibility, display, action-center, notifications, emoji, calculator, task-manager, leave, '
-          'lock, screenshot-region, screenshot-window, screenshot-save, screen-reader, osk, magnifier, volume-up, '
-          'volume-down, volume-mute, mic-mute, media-play, media-next, media-prev, media-stop, touchpad-toggle.'),
+          'lock, screenshot-region, screenshot-window, screenshot-save, record, clipboard, force-close, '
+          'screen-reader, osk, magnifier, volume-up, volume-down, volume-mute, mic-mute, media-play, media-next, '
+          'media-prev, media-stop, touchpad-toggle.'),
          ('--list', 'Print the actions.')],
         [('~/.config/lxqt/globalkeyshortcuts.conf', 'the shortcuts (Eduka\'s entries run eduka-shortcut)'),
          ('~/.config/eduka-desktop/desktop/shortcuts.json', 'Eduka\'s shortcuts on or off, and the ones turned off')],
         ['eduka-settings', 'eduka-panel', 'lxqt-globalkeysd', 'wmctrl', 'xdotool']),
+    'eduka-force-close': (
+        'force close a program that does not answer',
+        ['[**--window** *ID* | **--pick**]'],
+        ['**eduka-force-close** closes a program at once, also when it hangs, after asking first: work that is '
+         'not saved in that program is lost. Without options it closes the program of the active window '
+         '(Ctrl+Alt+Esc). The taskbar menu of Eduka-Panel uses **--window**.',
+         'Eduka-Panel also watches the windows (the _NET_WM_PING of the window manager, read through the X RECORD '
+         'extension) and offers Force Close for a program that has not answered for two minutes; Eduka-Settings → '
+         'Windows & Workspaces → Windows turns this on or off and sets the time. Programs that run the desktop '
+         'itself, and programs of other accounts, are never closed. X11 only.'],
+        [('--window ID', 'The window to close (decimal or hexadecimal, 0x...).'),
+         ('--pick', 'Click the window to close.')],
+        [('~/.config/eduka-desktop/desktop/windows.json', 'Force Close on or off and the time to wait')],
+        ['eduka-panel', 'eduka-settings', 'eduka-shortcut', 'xkill']),
     'eduka-menu-settings': (
         'old name of eduka-settings',
         ['[*OPTION*]...'],

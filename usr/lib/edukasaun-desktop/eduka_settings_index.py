@@ -29,7 +29,7 @@ SETTINGS_SECTIONS = [
         ('notifications', 'Notifications', 'preferences-system-notifications', 'notifications messages do not disturb'),
         ('windows', 'Windows', 'preferences-system-windows', 'focus follows mouse middle click paste clipboard history force close'),
         ('workspaces', 'Workspaces & Corners', 'preferences-desktop', 'workspaces virtual desktops hot corners'),
-        ('capture', 'Screenshots & Recording', 'camera-photo', 'screenshot screen recording video record'),
+        ('capture', 'Screenshots & Video', 'camera-photo', 'screenshot screen recording video record'),
     ]),
     ('Preferences', [
         ('accessibility', 'Accessibility', 'preferences-desktop-accessibility', 'vision contrast large text pointer'),

@@ -25,6 +25,7 @@ from catalog_0102 import NEW_0102
 from catalog_0110 import NEW_0110
 from catalog_0111 import NEW_0111
 from catalog_0112 import RC3_ROWS
+from catalog_0113 import PRESTABLE_ROWS
 from fix_tetun import TETUN_FIX, TETUN_WORDS
 
 OUT = HERE.parents[1]/'usr'/'share'/'edukasaun-desktop'/'i18n'
@@ -58,6 +59,9 @@ PT_BR_AFTER = [
     ('os telas táteis', 'as telas táteis'), ('Tela tátil ligado', 'Tela tátil ligada'),
     ('a tela integrado', 'a tela integrada'), ('Um tela rodado é seguido automaticamente', 'Uma tela girada é seguida automaticamente'),
     ('um tela montado rodado', 'uma tela montada girada'), ('logótipo', 'logotipo'), ('partilham', 'compartilham'),
+    # 0.11 Pre-Stable.
+    ('Todos os telas', 'Todas as telas'), ('todos os telas', 'todas as telas'), ('os telas', 'as telas'),
+    ('num só tela', 'numa só tela'), ('este tela', 'esta tela'), ('um tela de entrada', 'uma tela de entrada'),
 ]
 # 'ligado' is 'connected' only for networks; elsewhere it means 'on'.
 PT_BR_NET = [('desligado', 'desconectado'), ('Desligado', 'Desconectado'), ('ligado', 'conectado'),
@@ -94,7 +98,10 @@ def main():
     # 0.11 RC3: a text an older catalog has already keeps that translation.
     have = {r[0] for r in prior}
     new_0112 = [r for r in RC3_ROWS if r[0] not in have]
-    for row in prior + new_0112:
+    # 0.11 Pre-Stable: the same for its texts.
+    have |= {r[0] for r in new_0112}
+    new_0113 = [r for r in PRESTABLE_ROWS if r[0] not in have]
+    for row in prior + new_0112 + new_0113:
         en, pt, idn, tet = row
         tet = TETUN_FIX.get(en, tet)
         for a, b in TETUN_WORDS:

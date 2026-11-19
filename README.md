@@ -2,7 +2,7 @@
 
 Edukasaun Desktop Suite: Eduka-Desktop (start menu), Eduka-Panel and
 Eduka-Settings (formerly Eduka-Menu Settings) for Edukasaun OS (Debian 13 Trixie, LXQt).
-Current version: **0.11 RC3** (release candidate 3, package 0.11.0~rc3).
+Current version: **0.11 Pre-Stable** (the last step before 0.11 stable, package 0.11.0~rc4).
 
 ## Build the .deb
 
@@ -27,14 +27,14 @@ Check the result with `lintian dist/edukasaun-desktop-menu_<version>_all.deb`
 
    ```sh
    apt update
-   apt install -y ./edukasaun-desktop-menu_0.11.0~rc3_all.deb
+   apt install -y ./edukasaun-desktop-menu_0.11.0~rc4_all.deb
    ```
 
 3. Check the result and remove the copied file:
 
    ```sh
    dpkg -s edukasaun-desktop-menu | grep -E 'Status|Version'
-   rm ./edukasaun-desktop-menu_0.11.0~rc3_all.deb
+   rm ./edukasaun-desktop-menu_0.11.0~rc4_all.deb
    ```
 
 The package scripts never start a program with a window (in the chroot or
@@ -47,7 +47,18 @@ To update later, build the new version and run the same `apt install ./...deb`
 command; the old version is replaced and user settings are kept.
 
 Recommended packages, settings and configuration for the ISO are listed in
-`README_0.11-rc3.txt` (release notes of 0.11 RC3, with those of 0.11 RC2 and RC).
+`README_0.11-prestable.txt` (release notes of 0.11 Pre-Stable, with those of
+0.11 RC3, RC2 and RC).
+
+## User guide (PDF)
+
+`docs/manual/` holds the user guide of Edukasaun Desktop Suite in three
+languages, with English screenshots of a real session:
+`Edukasaun-Desktop-Guide-English.pdf`, `Edukasaun-Desktop-Guide-Tetun.pdf`
+and `Edukasaun-Desktop-Guide-Portugues.pdf`. The texts are in
+`content_en.py`, `content_tet.py` and `content_pt.py` (one structure); rebuild
+the PDFs with `python3 docs/manual/build-manual.py` (Chromium through
+Playwright, `print-pdf.js`). The guides are not part of the .deb.
 
 ## Login sessions
 
@@ -199,12 +210,53 @@ Debian copyright file `usr/share/doc/edukasaun-desktop-menu/copyright`
 | Window borders (Openbox, xfwm4) of all themes | `tools/gen-wm-themes.py` | GPL-3.0-or-later |
 | Parental Control emoji pictures | Noto Emoji by Google | Apache-2.0 |
 | World map of the globe | Natural Earth | public domain |
+| Sound presets Laptop speakers, Loudness, Headphones, Bass (EasyEffects) | EasyEffects-Presets by Matteo Iervasi (JackHack96) | MIT |
+| Eduka sound presets (clear voice, music, even volume, clear microphone) | `tools/gen-audio-presets.py` | GPL-3.0-or-later |
 
 Eduka-Desktop runs on LXQt (LGPL-2.1+), Openbox or xfwm4 (GPL-2.0+) and picom
-(MPL-2.0, MIT) as separate programs; none of their code is copied into this
+(MPL-2.0, MIT), and optionally EasyEffects (GPL-3.0) and Compiz (GPL-2.0+), as
+separate programs; none of their code is copied into this
 package, so their licenses stay as they are. PyQt5 (GPL-3.0) is the reason
 the whole program is GPL-3.0-or-later. The About window
 (`eduka-about`) lists every project with its license.
+
+## 0.11 Pre-Stable: menu opening, sound, windows, recording, Force Close, Wayland, drivers
+
+- Popups of Eduka-Panel (`PopupFrame`) grab the keyboard and pointer (X11
+  `Qt.Popup`); `PopupKeys` (eduka_common) passes Super and the global
+  shortcuts of lxqt-globalkeysd on, and `replay_outside_press()` clicks the
+  panel button under the pointer, so MENU opens with one click.
+- `eduka_ipc.py` (standard library only): runtime folder, atomic writes,
+  `menu_client()` for the fast `eduka-menu` path (no PyQt import),
+  heartbeat (`menu.beat`) and `ping` before a menu daemon is replaced,
+  `panel_command()` for `panel.sock` (new commands `close-popups`,
+  `recording on|off`, `clipboard`, `reload-windows`).
+- `eduka_settings_index.py`: `SETTINGS_SECTIONS` and `search()`, used by
+  All Settings and by the Eduka-Desktop search (`SettingsHit` tiles).
+- Sound: `eduka_audio.py` (pactl JSON with `LC_ALL=C.UTF-8`, devices, tests,
+  PipeWire/WirePlumber 0.4 (Lua)/0.5 (SPA-JSON)/PulseAudio drop-ins with a
+  "Written by Eduka-Settings" mark, EasyEffects 7/8 preset folders and CLI,
+  `diagnose(tr)`/`fix_problem()`), presets from `tools/gen-audio-presets.py`
+  in `usr/share/edukasaun-desktop/audio/easyeffects/`.
+- Windows: `eduka_windows.py` (EWMH workspaces, focus for xfwm4, Openbox,
+  KWin 5/6, Compiz and labwc, middle-click paste), `eduka_panel_extras.py`
+  (WorkspaceSwitcher, HotCorners, ClipboardHistory, RecordButton),
+  `eduka_capture.py` (ffmpeg x11grab + pulse monitor, wf-recorder),
+  `eduka_hang.py` (X RECORD of `_NET_WM_PING` pongs through libXtst,
+  `HangWatcher`, `force_close_window()`), `eduka-force-close`,
+  `eduka_compiz.py` and the wrapper `usr/lib/edukasaun-desktop/eduka-compiz`.
+- Devices: `eduka_gpu.py` (cards, `offload_env()` for DRI_PRIME / NVIDIA
+  PRIME), `eduka_drivers.py` (PCI and USB devices without a driver and
+  their firmware package), tablets and tap-and-drag in `eduka_input.py`.
+- Wayland: `eduka_wayland.py` writes labwc's `~/.config/labwc/rc.xml`
+  (ElementTree with comments, prolog kept, `rc.xml.eduka-backup` once,
+  SIGHUP to `$LABWC_PID`) and `~/.config/labwc/environment` (XKB layout),
+  and KWin's kwinrc through kwriteconfig6/5.
+- `lxqt-defaults.sh`: `eduka_load_environment_d()` reads
+  `~/.config/environment.d/*.conf` (the variables in `EDUKA_ENV_KEEP` and
+  XDG_CONFIG_DIRS are never changed).
+- Translations: `tools/i18n/catalog_0113.py` (`PRESTABLE_ROWS`).
+- `VERSION` "0.11 Pre-Stable", `DEB_VERSION` 0.11.0~rc4.
 
 ## 0.11 RC3: login design, shortcuts, devices, scale, fingerprint, memory, touch
 

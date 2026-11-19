@@ -523,16 +523,16 @@ class ExtPages:
         same share of the picture as on a normal screen)."""
         pix = QPixmap(w, h); pix.fill(Qt.transparent)
         p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QColor('#9fb3ad')); p.setBrush(QColor('#eef6f2')); p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 7, 7)
+        p.setPen(QColor('#a7b6c8')); p.setBrush(QColor('#eef3fa')); p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 7, 7)
         k = scale
         bar = 6 * k
         p.setPen(Qt.NoPen); p.setBrush(QColor('#ffffff')); p.drawRoundedRect(QRectF(4, h - 4 - bar, w - 8, bar), bar / 2, bar / 2)
         p.setBrush(QColor(accent)); p.drawEllipse(QRectF(6, h - 4 - bar + 1, bar - 2, bar - 2))
         ww, wh = 46 * k, 28 * k
         win = QRectF(8, 6, min(ww, w - 14), min(wh, h - 14 - bar))
-        p.setBrush(QColor('#ffffff')); p.setPen(QColor('#b8c9c3')); p.drawRoundedRect(win, 3 * k, 3 * k)
+        p.setBrush(QColor('#ffffff')); p.setPen(QColor('#bac8da')); p.drawRoundedRect(win, 3 * k, 3 * k)
         p.setPen(Qt.NoPen); p.setBrush(QColor(accent)); p.drawRoundedRect(QRectF(win.x(), win.y(), win.width(), 5 * k), 2, 2)
-        p.setBrush(QColor('#9fb3ad'))
+        p.setBrush(QColor('#a7b6c8'))
         y = win.y() + 8 * k
         while y + 2 * k < win.bottom() - 2:
             p.drawRoundedRect(QRectF(win.x() + 3 * k, y, win.width() * 0.6, 2 * k), 1, 1); y += 5 * k
@@ -1351,7 +1351,7 @@ class ExtPages:
         (self.win_focus_mouse if mode == 'mouse' else self.win_focus_click).setChecked(True)
         self.win_focus_mouse.toggled.connect(self.windows_focus_changed)
         p.v.addWidget(UI.hint_label('With focus following the mouse a window is not raised: it stays where it is. '
-                                    'Works with xfwm4, Openbox, KWin and Compiz.'))
+                                    'Works with xfwm4, Openbox, KWin, Compiz and labwc.'))
         m = p.new_card('Mouse and clipboard')
         self.win_paste = QCheckBox(_('Middle-click pastes the selected text (Linux style; GTK programs)'))
         self.win_paste.setProperty('eduka_no_live', True); self.win_paste.setChecked(ew.middle_paste())
@@ -1484,7 +1484,7 @@ class ExtPages:
         r = p.new_card('Screen recording')
         r.addWidget(UI.hint_label('Super+Alt+R starts the recording and stops it again (or click the red REC button on '
                                   'Eduka-Panel). Videos are saved in {folder} as MP4, which plays on every computer and phone.'
-                                  .replace('{folder}', str(ec.videos_dir()))))
+                                  .replace('{folder}', str(ec.videos_dir()).replace(str(Path.home()), '~', 1))))
         self.cap_sound = QCheckBox(_('Record the sound of the computer'))
         self.cap_mic = QCheckBox(_('Record the microphone too (your voice)'))
         self.cap_pointer = QCheckBox(_('Show the mouse pointer'))

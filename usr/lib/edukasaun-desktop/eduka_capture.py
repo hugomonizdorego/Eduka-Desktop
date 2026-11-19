@@ -168,12 +168,7 @@ def recording():
 
 
 def notify(summary, body='', icon='media-record'):
-    if shutil.which('notify-send'):
-        try:
-            subprocess.Popen(['notify-send', '-a', 'Eduka-Desktop', '-i', icon, summary, body],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError:
-            pass
+    eduka_ipc.notify(summary, body, icon)
 
 
 def start(prefs=None):

@@ -58,15 +58,13 @@ class AboutDialog(QDialog):
         details.setOpenExternalLinks(True)
         details.document().setDefaultStyleSheet(f'a{{color:{theme_accent()};text-decoration:none;}}')
         notes = [
-            _('Release candidate 3: close to the final stable version.'),
-            _('New login screen: glass cards (sign in, clock, profile, system) with one-click power buttons.'),
-            _('LightDM greeters are optional: install them from Eduka-Settings, then choose them.'),
-            _('Shortcuts of LXQt and Windows together, without clashes (Super+E, Super+D, Super+arrows…).'),
-            _('Display scale from 75 to 200 %, and Num Lock that knows a laptop from a desktop computer.'),
-            _('Fingerprint: every reader is found, the password is asked first, and a forgotten password can be replaced.'),
-            _('Memory saver, memory warnings, zram and earlyoom keep small computers smooth.'),
-            _('Touch: gestures with three and four fingers, long press for the menu, smooth scrolling.'),
-            _('Eduka-Quick: see-through, movable, from 4 to 12 slices; right-click a program to add it.'),
+            _('Pre-Stable: the last step before the stable version; every part was checked again.'),
+            _('Eduka-Desktop opens with one click or Super, also while the Action Center is open, and finds Eduka-Settings pages when you search.'),
+            _('Sound page: speakers, headphones, microphone and HDMI, tests for each side, clear sound with EasyEffects and fixes for crackling.'),
+            _('Workspaces, hot corners, focus follows the mouse, middle-click paste and a clipboard history (Super+V).'),
+            _('Screen recording with sound (Super+Alt+R), and Force Close for programs that hang for two minutes.'),
+            _('Frosted glass, tap-and-drag, pen tablets on one screen, the dedicated graphics card for games, and optional Compiz.'),
+            _('Wayland sessions with labwc or KWin get the touchpad, keyboard and window settings too; missing drivers are listed with their firmware.'),
         ]
         # Work of others that Edukasaun Desktop uses — thank you!
         credits = [
@@ -109,7 +107,7 @@ class AboutDialog(QDialog):
             f"<h3>{_('About Edukasaun Desktop Suite')}</h3>"
             f"<p><b>{_('Visible system name')}:</b> Edukasaun Desktop<br>"
             f"<b>{_('Internal launcher engine')}:</b> Eduka-Desktop<br>"
-            f"<b>{_('Release')}:</b> {_('Release candidate (RC) of the final stable version')}<br>"
+            f"<b>{_('Release')}:</b> {_('Pre-Stable: the last step before the final stable version')}<br>"
             f"<b>{_('Website')}:</b> <a href='{EDUKASAUN_WEBSITE}'>www.edukasaunos.tl</a></p>"
             "<table cellspacing='4' cellpadding='5' width='100%'>"
             + ''.join(f"<tr><td><b>{n}</b></td><td>{VERSION}</td><td>{d}</td></tr>" for n, d in rows)

@@ -277,7 +277,8 @@ def screenshot(kind):
             if cmd and subprocess.run(cmd, capture_output=True).returncode == 0:
                 try:
                     import eduka_common
-                    eduka_common.safe_popen(['notify-send', '-i', 'camera-photo', 'Screenshot saved', str(target)])
+                    import eduka_ipc
+                    eduka_ipc.notify('Screenshot saved', str(target), 'camera-photo')
                 except Exception:
                     pass
                 return

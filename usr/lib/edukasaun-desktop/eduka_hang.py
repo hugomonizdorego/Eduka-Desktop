@@ -185,6 +185,8 @@ def force_close_window(window, wait=2.5):
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 try:
                     os.kill(pid, sig)
+                    if sig == signal.SIGTERM:
+                        os.kill(pid, signal.SIGCONT)     # a stopped program gets the TERM too
                 except OSError:
                     break
                 end = time.monotonic() + wait
@@ -410,9 +412,13 @@ def ask_dialog(window, title, seconds, on_wait=None, parent=None):
     name = title or _('This program')
     head = QLabel(_('{name} is not answering').replace('{name}', name)); head.setWordWrap(True)
     head.setStyleSheet('font-size:15px;font-weight:800;'); head.setTextFormat(Qt.PlainText)
-    minutes = max(1, round(seconds / 60))
-    when = _('It has not answered for a minute.') if minutes == 1 else \
-        _('It has not answered for {n} minutes.').replace('{n}', str(minutes))
+    minutes = round(seconds / 60)
+    if seconds < 55:
+        when = _('It has not answered for {n} seconds.').replace('{n}', str(int(seconds)))
+    elif minutes <= 1:
+        when = _('It has not answered for a minute.')
+    else:
+        when = _('It has not answered for {n} minutes.').replace('{n}', str(minutes))
     text = QLabel(when + ' ' + _('You can wait for it, or force it to close: work that is not saved is lost.'))
     text.setWordWrap(True); text.setMinimumWidth(360)
     v.addWidget(head); v.addWidget(text)

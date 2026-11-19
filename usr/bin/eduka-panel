@@ -2318,7 +2318,7 @@ class ActionCenter(PopupFrame):
                 return
         except Exception:
             pass
-        safe_popen(['notify-send', '-i', 'preferences-system-time', summary, body])
+        eduka_ipc.notify(summary, body, 'preferences-system-time')
 
     def set_clock(self, key, value):
         save_panel_config({key: value})
@@ -4399,19 +4399,50 @@ class EdukaPanel(QWidget):
                 _window, desk, x, y, width, height, wmclass, _host, title=parts
                 if not self._window_is_task(wid, desk, wmclass, title):
                     return '', ''
-                x=int(x); y=int(y); width=int(width); height=int(height)
+                # 0.11 Pre-Stable: a maximized window is never a reason to hide
+                # the panel. The window manager keeps it inside the work area,
+                # above the panel's strut; hiding the panel released the strut,
+                # the window grew over the panel and the taskbar stayed away.
+                if {'_NET_WM_STATE_MAXIMIZED_VERT','_NET_WM_STATE_MAXIMIZED_HORZ'}.issubset(states):
+                    return '', ''
+                rect=self.window_frame_rect(wid) or QRect(int(x), int(y), int(width), int(height))
+                x, y, width, height=rect.x(), rect.y(), rect.width(), rect.height()
                 fills_screen=(x <= screen.x()+2 and y <= screen.y()+2 and width >= int(screen.width()*0.98) and height >= int(screen.height()*0.98))
                 if fills_screen:
                     return wid, 'borderless-fullscreen'
                 small_screen=screen.width() <= 1440 or screen.height() <= 900
-                overlaps_panel=QRect(x, y, width, height).intersects(self.geometry().adjusted(-2,-2,2,2))
-                maximized={'_NET_WM_STATE_MAXIMIZED_VERT','_NET_WM_STATE_MAXIMIZED_HORZ'}.issubset(states)
+                # Only a big window that really reaches into the panel (it
+                # sized itself over the strut) hides it on a small screen.
+                inside=rect.intersected(self.geometry())
+                overlaps_panel=(inside.width() >= 8 and inside.height() >= 8)
                 visually_maximized=width >= int(screen.width()*0.90) and height >= int(screen.height()*0.78)
-                if small_screen and overlaps_panel and (maximized or visually_maximized):
+                if small_screen and overlaps_panel and visually_maximized:
                     return wid, 'small-screen-overlap'
         except Exception:
             pass
         return '', ''
+
+    @staticmethod
+    def window_frame_rect(wid):
+        """The frame of a window on the screen (xwininfo and _NET_FRAME_EXTENTS).
+        wmctrl -lG and xdotool count the title bar twice with xfwm4, which
+        made every maximized window look as if it covered the panel."""
+        try:
+            out=subprocess.run(['xwininfo', '-id', str(wid)], capture_output=True, text=True, timeout=1).stdout
+            g=dict(re.findall(r'(Absolute upper-left [XY]|Width|Height):\s+(-?\d+)', out))
+            x, y=int(g['Absolute upper-left X']), int(g['Absolute upper-left Y'])
+            w, h=int(g['Width']), int(g['Height'])
+        except Exception:
+            return None
+        try:
+            ext=subprocess.run(['xprop', '-id', str(wid), '_NET_FRAME_EXTENTS'], capture_output=True, text=True, timeout=1).stdout
+            m=re.search(r'=\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)', ext)
+            if m:
+                left, right, top, bottom=map(int, m.groups())
+                x-=left; y-=top; w+=left+right; h+=top+bottom
+        except Exception:
+            pass
+        return QRect(x, y, w, h)
 
     def active_fullscreen_window(self):
         wid, reason=self.active_panel_blocker()
@@ -4877,7 +4908,7 @@ class EdukaPanel(QWidget):
                 return
         except Exception:
             pass
-        safe_popen(['notify-send', '-i', 'preferences-system-parental-controls', summary, body])
+        eduka_ipc.notify(summary, body, 'preferences-system-parental-controls')
 
     def check_parental(self):
         from eduka_parental import read_state, ParentalLockScreen, minutes_text
